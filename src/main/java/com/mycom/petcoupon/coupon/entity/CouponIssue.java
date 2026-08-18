@@ -17,13 +17,22 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity 
 @Getter 
-@Table(name = "coupon_issue")
+@Table(
+	name = "coupon_issue",
+	uniqueConstraints = {
+		@UniqueConstraint(
+				name = "uk_issue_coupon_user",
+	            columnNames = {"coupon_id", "user_id"}
+	    )
+	}
+)
 @NoArgsConstructor(access = AccessLevel.PROTECTED) 
 public class CouponIssue extends BaseEntity {
 	

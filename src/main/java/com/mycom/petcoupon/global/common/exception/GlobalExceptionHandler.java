@@ -4,6 +4,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -59,6 +61,28 @@ public class GlobalExceptionHandler {
                 .body(errorResponse);
     }
 
+    // 잘못된 JSON 요청
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<CustomResponse<Void>> handleInvalidJson(HttpMessageNotReadableException ex) {
+
+        BaseErrorCode errorCode = CommonErrorCode.INVALID_JSON;
+
+        return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
+    }
+    
+    // 지원하지 않는 HTTP 메서드
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<CustomResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+
+    	BaseErrorCode errorCode = CommonErrorCode.METHOD_NOT_ALLOWED;
+    	
+    	return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
+    }
+    
     // 처리하지 않은 모든 예외 처리 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<CustomResponse<Void>> handleAllException(Exception ex) {

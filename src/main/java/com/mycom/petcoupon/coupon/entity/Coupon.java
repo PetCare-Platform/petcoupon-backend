@@ -62,6 +62,7 @@ public class Coupon extends BaseEntity {
     @Column(name = "valid_days", nullable = false) 
     private int validDays = 7;
     
+    // 현재 정책: 사용자 1명당 쿠폰 1장만 발급 가능
     @Column(name = "limit_per_member", nullable = false) 
     private int limitPerMember = 1;
     
