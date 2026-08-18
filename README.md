@@ -15,9 +15,10 @@
 
 ## 실행 방법
 
-MySQL · Redis · Kafka가 로컬에 기동되어 있어야 한다.
+의존 서비스(MySQL · Redis · Kafka)를 띄운 뒤 애플리케이션을 실행한다.
 
 ```bash
+docker compose up -d
 ./gradlew bootRun
 ```
 
