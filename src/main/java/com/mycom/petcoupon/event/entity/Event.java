@@ -52,13 +52,20 @@ public class Event extends BaseEntity {
     @Enumerated(EnumType.STRING) 
     @Column(nullable = false, length = 20) 
     private EventStatus status = EventStatus.SCHEDULED;
-    
-    @Builder
-    public Event(AppUser createdBy, String name, String description, LocalDateTime openAt, LocalDateTime closeAt) {
-        this.createdBy=createdBy; 
-        this.name=name; 
-        this.description=description; 
-        this.openAt=openAt; 
-        this.closeAt=closeAt;
-    }
+
+	@Builder
+	public Event(
+			AppUser createdBy,
+			String name,
+			String description,
+			LocalDateTime openAt,
+			LocalDateTime closeAt
+	) {
+		this.createdBy = createdBy;
+		this.name = name;
+		this.description = description;
+		this.openAt = openAt;
+		this.closeAt = closeAt;
+		this.status = EventStatus.SCHEDULED;
+	}
 }
