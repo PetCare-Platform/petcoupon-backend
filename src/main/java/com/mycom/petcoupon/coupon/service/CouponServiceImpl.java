@@ -42,7 +42,7 @@ public class CouponServiceImpl implements CouponService {
 		CouponStock couponStock = couponConverter.toCouponStock(savedCoupon, request);
 		CouponStock savedCouponStock = couponStockRepository.save(couponStock);
 
-		return couponConverter.toResponse(savedCoupon, savedCouponStock);
+		return couponConverter.toCreateResponse(savedCoupon, savedCouponStock);
 	}
 
 	private void validateEventStatus(Event event) {

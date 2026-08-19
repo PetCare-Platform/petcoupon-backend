@@ -5,6 +5,9 @@ import java.time.LocalDateTime;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 
+import lombok.Builder;
+
+@Builder
 public record CouponCreateResponse(
 		Long couponId,
 		Long eventId,

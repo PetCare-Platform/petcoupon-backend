@@ -32,20 +32,20 @@ public class CouponConverter {
 				.build();
 	}
 
-	public CouponCreateResponse toResponse(Coupon coupon, CouponStock couponStock) {
-		return new CouponCreateResponse(
-				coupon.getCouponId(),
-				coupon.getEvent().getEventId(),
-				coupon.getName(),
-				coupon.getDiscountType(),
-				coupon.getDiscountValue(),
-				coupon.getMinOrderAmount(),
-				coupon.getMaxDiscountAmount(),
-				coupon.getIssueStartAt(),
-				coupon.getIssueEndAt(),
-				coupon.getValidDays(),
-				couponStock.getTotalQuantity(),
-				coupon.getStatus()
-		);
+	public CouponCreateResponse toCreateResponse(Coupon coupon, CouponStock couponStock) {
+		return CouponCreateResponse.builder()
+				.couponId(coupon.getCouponId())
+				.eventId(coupon.getEvent().getEventId())
+				.name(coupon.getName())
+				.discountType(coupon.getDiscountType())
+				.discountValue(coupon.getDiscountValue())
+				.minOrderAmount(coupon.getMinOrderAmount())
+				.maxDiscountAmount(coupon.getMaxDiscountAmount())
+				.issueStartAt(coupon.getIssueStartAt())
+				.issueEndAt(coupon.getIssueEndAt())
+				.validDays(coupon.getValidDays())
+				.totalQuantity(couponStock.getTotalQuantity())
+				.status(coupon.getStatus())
+				.build();
 	}
 }
