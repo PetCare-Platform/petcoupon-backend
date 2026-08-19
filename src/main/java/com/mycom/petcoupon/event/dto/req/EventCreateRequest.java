@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.event.dto;
+package com.mycom.petcoupon.event.dto.req;
 
 import java.time.LocalDateTime;
 

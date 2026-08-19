@@ -3,11 +3,12 @@ package com.mycom.petcoupon.event.service;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.mycom.petcoupon.event.dto.EventCreateRequest;
-import com.mycom.petcoupon.event.dto.EventCreateResponse;
+import com.mycom.petcoupon.event.converter.EventConverter;
+import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
+import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.entity.Event;
-import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
+import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
@@ -21,26 +22,22 @@ import lombok.RequiredArgsConstructor;
 public class EventService {
 	private final EventRepository eventRepository;
 	private final EntityManager entityManager;
+	private final EventConverter eventConverter;
 
 	@Transactional
 	public EventCreateResponse createEvent(EventCreateRequest request) {
 		validatePeriod(request);
 
 		AppUser createdBy = findActiveAdmin();
-		Event event = Event.builder()
-				.createdBy(createdBy)
-				.name(request.name())
-				.description(request.description())
-				.openAt(request.openAt())
-				.closeAt(request.closeAt())
-				.build();
+		Event event = eventConverter.toEntity(request, createdBy);
+		Event savedEvent = eventRepository.save(event);
 
-		return EventCreateResponse.from(eventRepository.save(event));
+		return eventConverter.toResponse(savedEvent);
 	}
 
 	private void validatePeriod(EventCreateRequest request) {
 		if (!request.closeAt().isAfter(request.openAt())) {
-			throw new GeneralException(EventErrorCode.INVALID_EVENT_PERIOD);
+			throw new GeneralException(CommonErrorCode.BAD_REQUEST);
 		}
 	}
 
@@ -60,7 +57,7 @@ public class EventService {
 			.setMaxResults(1)
 			.getResultStream()
 			.findFirst()
-			.orElseThrow(() -> new GeneralException(EventErrorCode.ADMIN_USER_NOT_FOUND));
+			.orElseThrow(() -> new GeneralException(CommonErrorCode.INTERNAL_SERVER_ERROR));
 	}
 
 }
