@@ -8,6 +8,7 @@ import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.repository.EventRepository;
+import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.user.entity.AppUser;
@@ -21,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class EventServiceImpl implements EventService {
 	private final EventRepository eventRepository;
+	private final EventStatusHistoryRepository eventStatusHistoryRepository;
 	private final AppUserRepository appUserRepository;
 	private final EventConverter eventConverter;
 
@@ -32,8 +34,13 @@ public class EventServiceImpl implements EventService {
 		AppUser createdBy = findActiveAdmin();
 		Event event = eventConverter.toEntity(request, createdBy);
 		Event savedEvent = eventRepository.save(event);
+		eventStatusHistoryRepository.insertInitialHistory(
+				savedEvent.getEventId(),
+				createdBy.getUserId(),
+				"이벤트 생성"
+		);
 
-		return eventConverter.toResponse(savedEvent);
+		return eventConverter.toCreateResponse(savedEvent);
 	}
 
 	private void validatePeriod(EventCreateRequest request) {

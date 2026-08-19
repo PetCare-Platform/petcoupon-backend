@@ -20,14 +20,14 @@ public class EventConverter {
 				.build();
 	}
 
-	public EventCreateResponse toResponse(Event event) {
-		return new EventCreateResponse(
-				event.getEventId(),
-				event.getName(),
-				event.getDescription(),
-				event.getOpenAt(),
-				event.getCloseAt(),
-				event.getStatus()
-		);
+	public EventCreateResponse toCreateResponse(Event event) {
+		return EventCreateResponse.builder()
+				.eventId(event.getEventId())
+				.name(event.getName())
+				.description(event.getDescription())
+				.openAt(event.getOpenAt())
+				.closeAt(event.getCloseAt())
+				.status(event.getStatus())
+				.build();
 	}
 }
