@@ -4,7 +4,10 @@ import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
+import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
+import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.event.entity.enums.EventStatus;
 import com.mycom.petcoupon.user.entity.AppUser;
 
 @Component
@@ -29,5 +32,20 @@ public class EventConverter {
 				.closeAt(event.getCloseAt())
 				.status(event.getStatus())
 				.build();
+	}
+
+	public EventDetailResponse toDetailResponse(Event event) {
+		return new EventDetailResponse(
+				event.getEventId(),
+				event.getName(),
+				event.getDescription(),
+				event.getOpenAt(),
+				event.getCloseAt(),
+				event.getStatus()
+		);
+	}
+
+	public EventStatusResponse toStatusResponse(Long eventId, EventStatus status) {
+		return new EventStatusResponse(eventId, status);
 	}
 }
