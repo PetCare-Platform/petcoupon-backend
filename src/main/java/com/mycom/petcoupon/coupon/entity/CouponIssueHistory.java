@@ -27,9 +27,7 @@ import lombok.NoArgsConstructor;
 
 @Entity
 @Getter 
-@Table(
-	name = "coupon_issue_history"
-)
+@Table( name = "coupon_issue_history" )
 @EntityListeners(AuditingEntityListener.class)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)  
 public class CouponIssueHistory {
