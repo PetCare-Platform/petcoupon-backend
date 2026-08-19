@@ -6,7 +6,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
-import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -48,11 +48,11 @@ public class CouponIssueHistory {
 	
 	@Enumerated(EnumType.STRING) 
 	@Column(name = "from_status", nullable = false) 
-	private IssueStatus fromStatus;
+	private IssueHistoryStatus fromStatus;
 
 	@Enumerated(EnumType.STRING) 
 	@Column(name = "to_status", nullable = false) 
-	private IssueStatus toStatus;
+	private IssueHistoryStatus toStatus;
 
 	@Enumerated(EnumType.STRING) 
 	@Column(name = "actor_type", nullable = false) 

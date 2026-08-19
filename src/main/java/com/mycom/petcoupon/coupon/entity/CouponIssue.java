@@ -30,6 +30,10 @@ import lombok.NoArgsConstructor;
 		@UniqueConstraint(
 				name = "uk_issue_coupon_user",
 	            columnNames = {"coupon_id", "user_id"}
+	    ),
+		@UniqueConstraint(
+	            name = "uk_issue_sequence",
+	            columnNames = {"coupon_id", "sequence_no"}
 	    )
 	}
 )
