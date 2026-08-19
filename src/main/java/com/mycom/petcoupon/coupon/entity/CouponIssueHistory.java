@@ -20,22 +20,13 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
 @Getter 
-@Table(
-	name = "coupon_issue_history",
-	uniqueConstraints = {
-		@UniqueConstraint(
-			name = "uk_history_transition",
-			columnNames = {"coupon_issue_id", "from_status", "to_status"}
-	    )
-	}
-)
+@Table(name = "coupon_issue_history")
 @EntityListeners(AuditingEntityListener.class)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)  
 public class CouponIssueHistory {
