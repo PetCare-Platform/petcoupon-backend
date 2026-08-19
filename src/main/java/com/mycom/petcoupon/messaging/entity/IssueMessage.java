@@ -20,13 +20,26 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
 @Getter 
-@Table(name = "issue_message")
+@Table(
+	name = "issue_message",
+	uniqueConstraints = {
+		@UniqueConstraint(
+			name = "uk_message_key_topic",
+			columnNames = {"topic", "message_key"}
+	    ),
+		@UniqueConstraint(
+			name = "uk_message_sequence",
+			columnNames = {"coupon_id", "sequence_no"}
+	    )
+	}
+)
 @EntityListeners(AuditingEntityListener.class)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)  
 public class IssueMessage {

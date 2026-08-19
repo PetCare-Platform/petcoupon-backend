@@ -6,7 +6,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import com.mycom.petcoupon.event.entity.enums.ActorType;
-import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.entity.enums.EventHistoryStatus;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -20,13 +20,22 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity 
 @Getter 
-@Table(name = "event_status_history")
+@Table(
+	name = "event_status_history",
+	uniqueConstraints = {
+		@UniqueConstraint(
+			name = "uk_event_history_transition",
+			columnNames = {"event_id", "from_status", "to_status"}
+	    )
+	}
+)
 @EntityListeners(AuditingEntityListener.class)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class EventStatusHistory {
@@ -42,11 +51,11 @@ public class EventStatusHistory {
     
     @Enumerated(EnumType.STRING) 
     @Column(name = "from_status", nullable = false, length = 20) 
-    private EventStatus fromStatus;
+    private EventHistoryStatus fromStatus;
     
     @Enumerated(EnumType.STRING) 
     @Column(name = "to_status", nullable = false, length = 20) 
-    private EventStatus toStatus;
+    private EventHistoryStatus toStatus;
     
     @Enumerated(EnumType.STRING)
     @Column(name = "actor_type", nullable = false, length = 20) 

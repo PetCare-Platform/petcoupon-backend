@@ -20,13 +20,22 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity 
 @Getter
-@Table(name = "reconciliation_report")
+@Table(
+	name = "reconciliation_report",
+	uniqueConstraints = {
+		@UniqueConstraint(
+			name = "uk_report_snapshot",
+			columnNames = {"coupon_id", "as_of_at"}
+	    )
+	}
+)
 @NoArgsConstructor(access = AccessLevel.PROTECTED) 
 public class ReconciliationReport {
 	
