@@ -22,6 +22,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -70,4 +71,21 @@ public class EventStatusHistory {
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false) 
     private LocalDateTime createdAt;
+
+	@Builder
+	private EventStatusHistory(
+			Event event,
+			EventHistoryStatus fromStatus,
+			EventHistoryStatus toStatus,
+			ActorType actorType,
+			Long actorId,
+			String reason
+	) {
+		this.event = event;
+		this.fromStatus = fromStatus;
+		this.toStatus = toStatus;
+		this.actorType = actorType;
+		this.actorId = actorId;
+		this.reason = reason;
+	}
 }
