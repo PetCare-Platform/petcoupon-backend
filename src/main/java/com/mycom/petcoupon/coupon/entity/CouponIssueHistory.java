@@ -28,13 +28,7 @@ import lombok.NoArgsConstructor;
 @Entity
 @Getter 
 @Table(
-	name = "coupon_issue_history",
-	uniqueConstraints = {
-		@UniqueConstraint(
-			name = "uk_history_transition",
-			columnNames = {"coupon_issue_id", "from_status", "to_status"}
-	    )
-	}
+	name = "coupon_issue_history"
 )
 @EntityListeners(AuditingEntityListener.class)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)  
