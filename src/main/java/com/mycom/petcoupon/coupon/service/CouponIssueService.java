@@ -4,7 +4,7 @@ import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 
-import com.mycom.petcoupon.coupon.converter.CouponConverter;
+import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -26,7 +26,7 @@ public class CouponIssueService {
 
     private final RedisCouponStockService redisCouponStockService;
 
-    private final CouponConverter couponConverter;
+    private final CouponIssueConverter couponConverter;
 
     public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request) {
         // TODO(2단계): 클라이언트가 보낸 Idempotency-Key로 대체 예정.

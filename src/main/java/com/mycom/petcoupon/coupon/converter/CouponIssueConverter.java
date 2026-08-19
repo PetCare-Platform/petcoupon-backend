@@ -10,7 +10,7 @@ import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
  * 나중에 CouponIssue 엔티티가 생기면 toCreateResponse(CouponIssue)로 바꾸면 됨.
  */
 @Component
-public class CouponConverter {
+public class CouponIssueConverter {
     public CouponIssueCreateResponse toCreateResponse(Long couponId, Long userId) {
         return new CouponIssueCreateResponse(couponId, userId);
     }
