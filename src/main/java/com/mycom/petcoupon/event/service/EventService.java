@@ -6,8 +6,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.mycom.petcoupon.event.dto.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.EventCreateResponse;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
@@ -40,7 +40,7 @@ public class EventService {
 
 	private void validatePeriod(EventCreateRequest request) {
 		if (!request.closeAt().isAfter(request.openAt())) {
-			throw new GeneralException(CommonErrorCode.INVALID_EVENT_PERIOD);
+			throw new GeneralException(EventErrorCode.INVALID_EVENT_PERIOD);
 		}
 	}
 
@@ -60,7 +60,7 @@ public class EventService {
 			.setMaxResults(1)
 			.getResultStream()
 			.findFirst()
-			.orElseThrow(() -> new GeneralException(CommonErrorCode.ADMIN_USER_NOT_FOUND));
+			.orElseThrow(() -> new GeneralException(EventErrorCode.ADMIN_USER_NOT_FOUND));
 	}
 
 }
