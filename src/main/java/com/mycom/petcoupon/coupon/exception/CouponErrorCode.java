@@ -17,7 +17,12 @@ import lombok.Getter;
 public enum CouponErrorCode implements BaseErrorCode {
 	
 	INVALID_ISSUE_REQUEST(HttpStatus.BAD_REQUEST, "COUPON400-0", "쿠폰 신청 요청값이 올바르지 않습니다."),
-	
+	INVALID_EVENT_STATUS(HttpStatus.BAD_REQUEST, "COUPON400-1", "쿠폰을 생성할 수 없는 이벤트 상태입니다."),
+	INVALID_ISSUE_PERIOD(HttpStatus.BAD_REQUEST, "COUPON400-2", "쿠폰 발급 종료 시각은 시작 시각보다 이후여야 합니다."),
+	ISSUE_PERIOD_OUT_OF_EVENT_PERIOD(HttpStatus.BAD_REQUEST, "COUPON400-3", "쿠폰 발급 기간은 이벤트 기간 내에 있어야 합니다."),
+	INVALID_RATE_DISCOUNT_POLICY(HttpStatus.BAD_REQUEST, "COUPON400-4", "정률 할인 정책이 올바르지 않습니다."),
+	INVALID_FIXED_AMOUNT_DISCOUNT_POLICY(HttpStatus.BAD_REQUEST, "COUPON400-5", "정액 할인에는 최대 할인 금액을 설정할 수 없습니다."),
+
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON409-0", "쿠폰 재고가 모두 소진되었습니다."),
     DUPLICATE_USER(HttpStatus.CONFLICT, "COUPON409-1", "이미 발급받은 쿠폰입니다."),
     DUPLICATE_REQUEST(HttpStatus.CONFLICT, "COUPON409-2", "이미 처리된 요청입니다."),
