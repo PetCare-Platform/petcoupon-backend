@@ -12,12 +12,13 @@ import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 
 public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> {
 
-	@Modifying
+	@Modifying(clearAutomatically = true)
     @Query("""
             UPDATE CouponIssue c
                SET c.status = :toStatus, c.usedAt = :usedAt
              WHERE c.couponIssueId = :couponIssueId
                AND c.status = :fromStatus
+               AND c.expiresAt > :usedAt
             """)
     int updateStatusIfMatches(
             @Param("couponIssueId") Long couponIssueId,
