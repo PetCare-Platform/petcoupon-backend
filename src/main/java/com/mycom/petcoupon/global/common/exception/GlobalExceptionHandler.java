@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -70,6 +71,19 @@ public class GlobalExceptionHandler {
         BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
 
         log.warn("[ConstraintViolation] {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
+    }
+
+    // 필수 요청 헤더 누락 (예: 쿠폰 신청 API의 Idempotency-Key, 이슈 #16) — 없으면 400으로 응답
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<CustomResponse<Void>> handleMissingHeader(MissingRequestHeaderException ex) {
+
+        BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
+
+        log.warn("[MissingHeader] {}", ex.getMessage());
 
         return ResponseEntity
                 .status(errorCode.getStatus())
