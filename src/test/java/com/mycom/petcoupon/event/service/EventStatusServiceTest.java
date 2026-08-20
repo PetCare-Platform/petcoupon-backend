@@ -16,9 +16,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.exception.code.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
@@ -63,7 +63,7 @@ class EventStatusServiceTest {
 				() -> eventService.getEventStatus(eventId)
 		);
 
-		assertSame(CommonErrorCode.NOT_FOUND, exception.getErrorCode());
+		assertSame(EventErrorCode.EVENT_NOT_FOUND, exception.getErrorCode());
 		verifyNoInteractions(eventConverter);
 	}
 }

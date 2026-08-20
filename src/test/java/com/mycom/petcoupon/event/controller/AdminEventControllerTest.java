@@ -20,8 +20,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.exception.code.EventErrorCode;
 import com.mycom.petcoupon.event.service.EventService;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 
@@ -106,7 +106,7 @@ class AdminEventControllerTest {
 				LocalDateTime.of(2026, 8, 20, 8, 59)
 		);
 		when(eventService.createEvent(request))
-				.thenThrow(new GeneralException(CommonErrorCode.BAD_REQUEST));
+				.thenThrow(new GeneralException(EventErrorCode.INVALID_EVENT_PERIOD));
 
 		mockMvc.perform(post("/admin/events")
 					.contentType(MediaType.APPLICATION_JSON)
@@ -120,7 +120,7 @@ class AdminEventControllerTest {
 							"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COMMON400-0"))
+				.andExpect(jsonPath("$.code").value("EVENT400-0"))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 
