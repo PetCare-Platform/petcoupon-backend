@@ -21,9 +21,9 @@ import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
-import com.mycom.petcoupon.coupon.exception.code.CouponErrorCode;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.service.CouponService;
-import com.mycom.petcoupon.event.exception.code.EventErrorCode;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 
@@ -154,7 +154,7 @@ class AdminCouponControllerTest {
 					.content(validRequestJson()))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COUPON400-3"))
+				.andExpect(jsonPath("$.code").value("COUPON400-4"))
 				.andExpect(jsonPath("$.message").value("정률 할인 정책이 올바르지 않습니다."))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}

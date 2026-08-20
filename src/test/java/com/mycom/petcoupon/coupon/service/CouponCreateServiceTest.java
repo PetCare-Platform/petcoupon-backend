@@ -22,12 +22,12 @@ import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
-import com.mycom.petcoupon.coupon.exception.code.CouponErrorCode;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
-import com.mycom.petcoupon.event.exception.code.EventErrorCode;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
