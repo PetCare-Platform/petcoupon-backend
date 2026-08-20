@@ -46,6 +46,9 @@ public class EventConverter {
 	}
 
 	public EventStatusResponse toStatusResponse(Long eventId, EventStatus status) {
-		return new EventStatusResponse(eventId, status);
+		return EventStatusResponse.builder()
+				.eventId(eventId)
+				.status(status)
+				.build();
 	}
 }
