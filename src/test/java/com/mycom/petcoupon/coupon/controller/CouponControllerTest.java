@@ -164,7 +164,7 @@ class CouponControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":1}"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("COUPON409-3"));
+                .andExpect(jsonPath("$.code").value("COUPON409-5"));
     }
 
     @Test
