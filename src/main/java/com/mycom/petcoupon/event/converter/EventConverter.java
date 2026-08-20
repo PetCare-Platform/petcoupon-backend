@@ -35,14 +35,14 @@ public class EventConverter {
 	}
 
 	public EventDetailResponse toDetailResponse(Event event) {
-		return new EventDetailResponse(
-				event.getEventId(),
-				event.getName(),
-				event.getDescription(),
-				event.getOpenAt(),
-				event.getCloseAt(),
-				event.getStatus()
-		);
+		return EventDetailResponse.builder()
+				.eventId(event.getEventId())
+				.name(event.getName())
+				.description(event.getDescription())
+				.openAt(event.getOpenAt())
+				.closeAt(event.getCloseAt())
+				.status(event.getStatus())
+				.build();
 	}
 
 	public EventStatusResponse toStatusResponse(Long eventId, EventStatus status) {
