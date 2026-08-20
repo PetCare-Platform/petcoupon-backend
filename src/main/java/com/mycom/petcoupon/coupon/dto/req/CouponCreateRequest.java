@@ -9,7 +9,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
+import lombok.Builder;
 
+@Builder
 public record CouponCreateRequest(
 		@NotBlank(message = "쿠폰 이름은 필수입니다.")
 		@Size(max = 100, message = "쿠폰 이름은 100자 이하여야 합니다.")

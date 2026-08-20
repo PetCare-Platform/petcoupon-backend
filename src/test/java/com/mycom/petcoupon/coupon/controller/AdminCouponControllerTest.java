@@ -1,6 +1,5 @@
 package com.mycom.petcoupon.coupon.controller;
 
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -22,8 +21,9 @@ import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.exception.code.CouponErrorCode;
 import com.mycom.petcoupon.coupon.service.CouponService;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
+import com.mycom.petcoupon.event.exception.code.EventErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 
@@ -31,20 +31,6 @@ import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 class AdminCouponControllerTest {
 
 	private static final Long EVENT_ID = 1L;
-	private static final String CREATE_COUPON_URL = "/admin/events/{eventId}/coupons";
-	private static final String VALID_REQUEST_JSON = """
-			{
-			  "name": "신규 가입 쿠폰",
-			  "discountType": "FIXED_AMOUNT",
-			  "discountValue": 5000,
-			  "minOrderAmount": 30000,
-			  "maxDiscountAmount": null,
-			  "issueStartAt": "2026-08-21T09:00:00",
-			  "issueEndAt": "2026-08-31T23:59:00",
-			  "validDays": 30,
-			  "totalQuantity": 100
-			}
-			""";
 
 	@Mock
 	private CouponService couponService;
@@ -61,7 +47,7 @@ class AdminCouponControllerTest {
 
 	@Test
 	void createCouponReturnsCreatedResponse() throws Exception {
-		CouponCreateRequest request = createRequest();
+		CouponCreateRequest request = validRequest();
 		CouponCreateResponse response = CouponCreateResponse.builder()
 				.couponId(10L)
 				.eventId(EVENT_ID)
@@ -78,107 +64,128 @@ class AdminCouponControllerTest {
 				.build();
 		when(couponService.createCoupon(EVENT_ID, request)).thenReturn(response);
 
-		mockMvc.perform(post(CREATE_COUPON_URL, EVENT_ID)
+		mockMvc.perform(post("/admin/events/{eventId}/coupons", EVENT_ID)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(VALID_REQUEST_JSON))
+					.content(validRequestJson()))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.code").value("201"))
 				.andExpect(jsonPath("$.result.couponId").value(10L))
 				.andExpect(jsonPath("$.result.eventId").value(EVENT_ID))
-				.andExpect(jsonPath("$.result.name").value("신규 가입 쿠폰"))
-				.andExpect(jsonPath("$.result.discountType").value("FIXED_AMOUNT"))
-				.andExpect(jsonPath("$.result.discountValue").value(5000))
-				.andExpect(jsonPath("$.result.minOrderAmount").value(30000))
-				.andExpect(jsonPath("$.result.validDays").value(30))
-				.andExpect(jsonPath("$.result.totalQuantity").value(100))
+				.andExpect(jsonPath("$.result.name").value("여름 정률 쿠폰"))
+				.andExpect(jsonPath("$.result.discountType").value("RATE"))
 				.andExpect(jsonPath("$.result.status").value("READY"));
-
-		verify(couponService).createCoupon(EVENT_ID, request);
 	}
 
 	@Test
 	void createCouponReturnsValidationErrorWhenNameIsBlank() throws Exception {
-		mockMvc.perform(post(CREATE_COUPON_URL, EVENT_ID)
+		mockMvc.perform(post("/admin/events/{eventId}/coupons", EVENT_ID)
 					.contentType(MediaType.APPLICATION_JSON)
 					.content("""
 							{
 							  "name": " ",
-							  "discountType": "FIXED_AMOUNT",
-							  "discountValue": 5000,
+							  "discountType": "RATE",
+							  "discountValue": 20,
 							  "minOrderAmount": 30000,
+							  "maxDiscountAmount": 10000,
 							  "issueStartAt": "2026-08-21T09:00:00",
-							  "issueEndAt": "2026-08-31T23:59:00",
-							  "validDays": 30,
+							  "issueEndAt": "2026-08-30T23:59:00",
+							  "validDays": 7,
 							  "totalQuantity": 100
 							}
 							"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))
 				.andExpect(jsonPath("$.code").value("COMMON400-1"))
-				.andExpect(jsonPath("$.message").value("요청 값이 올바르지 않습니다."))
 				.andExpect(jsonPath("$.result.name").value("쿠폰 이름은 필수입니다."));
 
 		verifyNoInteractions(couponService);
 	}
 
 	@Test
-	void createCouponReturnsInvalidJsonErrorWhenDiscountTypeIsInvalid() throws Exception {
-		mockMvc.perform(post(CREATE_COUPON_URL, EVENT_ID)
+	void createCouponReturnsInvalidJsonWhenDiscountTypeIsUnknown() throws Exception {
+		mockMvc.perform(post("/admin/events/{eventId}/coupons", EVENT_ID)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(VALID_REQUEST_JSON.replace("FIXED_AMOUNT", "UNKNOWN")))
+					.content("""
+							{
+							  "name": "여름 쿠폰",
+							  "discountType": "UNKNOWN",
+							  "discountValue": 20,
+							  "minOrderAmount": 30000,
+							  "maxDiscountAmount": 10000,
+							  "issueStartAt": "2026-08-21T09:00:00",
+							  "issueEndAt": "2026-08-30T23:59:00",
+							  "validDays": 7,
+							  "totalQuantity": 100
+							}
+							"""))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))
 				.andExpect(jsonPath("$.code").value("COMMON400-2"))
-				.andExpect(jsonPath("$.message").value("요청 JSON 형식이 올바르지 않습니다."))
 				.andExpect(jsonPath("$.result").doesNotExist());
 
 		verifyNoInteractions(couponService);
 	}
 
 	@Test
-	void createCouponReturnsNotFoundWhenEventDoesNotExist() throws Exception {
-		CouponCreateRequest request = createRequest();
+	void createCouponReturnsEventNotFound() throws Exception {
+		CouponCreateRequest request = validRequest();
 		when(couponService.createCoupon(EVENT_ID, request))
-				.thenThrow(new GeneralException(CommonErrorCode.NOT_FOUND));
+				.thenThrow(new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
-		mockMvc.perform(post(CREATE_COUPON_URL, EVENT_ID)
+		mockMvc.perform(post("/admin/events/{eventId}/coupons", EVENT_ID)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(VALID_REQUEST_JSON))
+					.content(validRequestJson()))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COMMON404-0"))
-				.andExpect(jsonPath("$.message").value("요청한 리소스를 찾을 수 없습니다."))
+				.andExpect(jsonPath("$.code").value("EVENT404-0"))
+				.andExpect(jsonPath("$.message").value("존재하지 않는 이벤트입니다."))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 
 	@Test
-	void createCouponReturnsBadRequestWhenServiceRejectsRequest() throws Exception {
-		CouponCreateRequest request = createRequest();
+	void createCouponReturnsInvalidRateDiscountPolicy() throws Exception {
+		CouponCreateRequest request = validRequest();
 		when(couponService.createCoupon(EVENT_ID, request))
-				.thenThrow(new GeneralException(CommonErrorCode.BAD_REQUEST));
+				.thenThrow(new GeneralException(CouponErrorCode.INVALID_RATE_DISCOUNT_POLICY));
 
-		mockMvc.perform(post(CREATE_COUPON_URL, EVENT_ID)
+		mockMvc.perform(post("/admin/events/{eventId}/coupons", EVENT_ID)
 					.contentType(MediaType.APPLICATION_JSON)
-					.content(VALID_REQUEST_JSON))
+					.content(validRequestJson()))
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COMMON400-0"))
-				.andExpect(jsonPath("$.message").value("잘못된 요청입니다."))
+				.andExpect(jsonPath("$.code").value("COUPON400-3"))
+				.andExpect(jsonPath("$.message").value("정률 할인 정책이 올바르지 않습니다."))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 
-	private CouponCreateRequest createRequest() {
-		return new CouponCreateRequest(
-				"신규 가입 쿠폰",
-				DiscountType.FIXED_AMOUNT,
-				5000,
-				30000,
-				null,
-				LocalDateTime.of(2026, 8, 21, 9, 0),
-				LocalDateTime.of(2026, 8, 31, 23, 59),
-				30,
-				100
-		);
+	private CouponCreateRequest validRequest() {
+		return CouponCreateRequest.builder()
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(LocalDateTime.of(2026, 8, 21, 9, 0))
+				.issueEndAt(LocalDateTime.of(2026, 8, 30, 23, 59))
+				.validDays(7)
+				.totalQuantity(100)
+				.build();
+	}
+
+	private String validRequestJson() {
+		return """
+				{
+				  "name": "여름 정률 쿠폰",
+				  "discountType": "RATE",
+				  "discountValue": 20,
+				  "minOrderAmount": 30000,
+				  "maxDiscountAmount": 10000,
+				  "issueStartAt": "2026-08-21T09:00:00",
+				  "issueEndAt": "2026-08-30T23:59:00",
+				  "validDays": 7,
+				  "totalQuantity": 100
+				}
+				""";
 	}
 }

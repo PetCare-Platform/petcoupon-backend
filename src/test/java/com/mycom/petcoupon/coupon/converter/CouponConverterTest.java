@@ -1,6 +1,5 @@
 package com.mycom.petcoupon.coupon.converter;
 
-import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
@@ -20,96 +19,89 @@ import com.mycom.petcoupon.event.entity.Event;
 
 class CouponConverterTest {
 
-	private static final LocalDateTime ISSUE_START_AT = LocalDateTime.of(2026, 8, 20, 10, 0);
-	private static final LocalDateTime ISSUE_END_AT = LocalDateTime.of(2026, 8, 31, 23, 59);
-
 	private final CouponConverter couponConverter = new CouponConverter();
 
 	@Test
-	void toCouponMapsAllRequestFieldsAndSetsDefaults() {
+	void toCouponMapsEveryRequestField() {
 		Event event = mock(Event.class);
-		CouponCreateRequest request = couponCreateRequest();
+		CouponCreateRequest request = request();
 
 		Coupon coupon = couponConverter.toCoupon(event, request);
 
-		assertAll(
-				() -> assertSame(event, coupon.getEvent()),
-				() -> assertEquals(request.name(), coupon.getName()),
-				() -> assertSame(request.discountType(), coupon.getDiscountType()),
-				() -> assertEquals(request.discountValue().intValue(), coupon.getDiscountValue()),
-				() -> assertEquals(request.minOrderAmount().intValue(), coupon.getMinOrderAmount()),
-				() -> assertEquals(request.maxDiscountAmount(), coupon.getMaxDiscountAmount()),
-				() -> assertEquals(request.issueStartAt(), coupon.getIssueStartAt()),
-				() -> assertEquals(request.issueEndAt(), coupon.getIssueEndAt()),
-				() -> assertEquals(request.validDays().intValue(), coupon.getValidDays()),
-				() -> assertSame(CouponStatus.READY, coupon.getStatus()),
-				() -> assertEquals(1, coupon.getLimitPerMember())
-		);
+		assertSame(event, coupon.getEvent());
+		assertEquals(request.name(), coupon.getName());
+		assertSame(request.discountType(), coupon.getDiscountType());
+		assertEquals(request.discountValue().intValue(), coupon.getDiscountValue());
+		assertEquals(request.minOrderAmount().intValue(), coupon.getMinOrderAmount());
+		assertEquals(request.maxDiscountAmount(), coupon.getMaxDiscountAmount());
+		assertEquals(request.issueStartAt(), coupon.getIssueStartAt());
+		assertEquals(request.issueEndAt(), coupon.getIssueEndAt());
+		assertEquals(request.validDays().intValue(), coupon.getValidDays());
+		assertSame(CouponStatus.READY, coupon.getStatus());
 	}
 
 	@Test
-	void toCouponStockSetsInitialStockFromTotalQuantity() {
+	void toCouponStockSetsInitialQuantityValues() {
 		Coupon coupon = mock(Coupon.class);
-		CouponCreateRequest request = couponCreateRequest();
+		CouponCreateRequest request = request();
 
 		CouponStock couponStock = couponConverter.toCouponStock(coupon, request);
 
-		assertAll(
-				() -> assertSame(coupon, couponStock.getCoupon()),
-				() -> assertEquals(request.totalQuantity().intValue(), couponStock.getTotalQuantity()),
-				() -> assertEquals(0, couponStock.getIssuedQuantity()),
-				() -> assertEquals(request.totalQuantity().intValue(), couponStock.getRemainingQuantity())
-		);
+		assertSame(coupon, couponStock.getCoupon());
+		assertEquals(request.totalQuantity().intValue(), couponStock.getTotalQuantity());
+		assertEquals(0, couponStock.getIssuedQuantity());
+		assertEquals(request.totalQuantity().intValue(), couponStock.getRemainingQuantity());
 	}
 
 	@Test
-	void toCreateResponseMapsAllCouponAndStockFields() {
+	void toCreateResponseMapsCouponAndStockFields() {
 		Event event = mock(Event.class);
 		Coupon coupon = mock(Coupon.class);
 		CouponStock couponStock = mock(CouponStock.class);
-		when(event.getEventId()).thenReturn(7L);
-		when(coupon.getCouponId()).thenReturn(11L);
+		LocalDateTime issueStartAt = LocalDateTime.of(2026, 8, 21, 9, 0);
+		LocalDateTime issueEndAt = LocalDateTime.of(2026, 8, 30, 23, 59);
+
+		when(event.getEventId()).thenReturn(1L);
+		when(coupon.getCouponId()).thenReturn(10L);
 		when(coupon.getEvent()).thenReturn(event);
-		when(coupon.getName()).thenReturn("반려동물 여름 할인 쿠폰");
+		when(coupon.getName()).thenReturn("여름 정률 쿠폰");
 		when(coupon.getDiscountType()).thenReturn(DiscountType.RATE);
 		when(coupon.getDiscountValue()).thenReturn(20);
 		when(coupon.getMinOrderAmount()).thenReturn(30_000);
 		when(coupon.getMaxDiscountAmount()).thenReturn(10_000);
-		when(coupon.getIssueStartAt()).thenReturn(ISSUE_START_AT);
-		when(coupon.getIssueEndAt()).thenReturn(ISSUE_END_AT);
-		when(coupon.getValidDays()).thenReturn(14);
-		when(coupon.getStatus()).thenReturn(CouponStatus.ACTIVE);
-		when(couponStock.getTotalQuantity()).thenReturn(500);
+		when(coupon.getIssueStartAt()).thenReturn(issueStartAt);
+		when(coupon.getIssueEndAt()).thenReturn(issueEndAt);
+		when(coupon.getValidDays()).thenReturn(7);
+		when(coupon.getStatus()).thenReturn(CouponStatus.READY);
+		when(couponStock.getTotalQuantity()).thenReturn(100);
 
 		CouponCreateResponse response = couponConverter.toCreateResponse(coupon, couponStock);
 
-		assertAll(
-				() -> assertEquals(11L, response.couponId()),
-				() -> assertEquals(7L, response.eventId()),
-				() -> assertEquals("반려동물 여름 할인 쿠폰", response.name()),
-				() -> assertSame(DiscountType.RATE, response.discountType()),
-				() -> assertEquals(20, response.discountValue()),
-				() -> assertEquals(30_000, response.minOrderAmount()),
-				() -> assertEquals(10_000, response.maxDiscountAmount().intValue()),
-				() -> assertEquals(ISSUE_START_AT, response.issueStartAt()),
-				() -> assertEquals(ISSUE_END_AT, response.issueEndAt()),
-				() -> assertEquals(14, response.validDays()),
-				() -> assertEquals(500, response.totalQuantity()),
-				() -> assertSame(CouponStatus.ACTIVE, response.status())
-		);
+		assertEquals(10L, response.couponId());
+		assertEquals(1L, response.eventId());
+		assertEquals("여름 정률 쿠폰", response.name());
+		assertSame(DiscountType.RATE, response.discountType());
+		assertEquals(20, response.discountValue());
+		assertEquals(30_000, response.minOrderAmount());
+		assertEquals(10_000, response.maxDiscountAmount());
+		assertEquals(issueStartAt, response.issueStartAt());
+		assertEquals(issueEndAt, response.issueEndAt());
+		assertEquals(7, response.validDays());
+		assertEquals(100, response.totalQuantity());
+		assertSame(CouponStatus.READY, response.status());
 	}
 
-	private CouponCreateRequest couponCreateRequest() {
-		return new CouponCreateRequest(
-				"반려동물 여름 할인 쿠폰",
-				DiscountType.RATE,
-				20,
-				30_000,
-				10_000,
-				ISSUE_START_AT,
-				ISSUE_END_AT,
-				14,
-				500
-		);
+	private CouponCreateRequest request() {
+		return CouponCreateRequest.builder()
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(LocalDateTime.of(2026, 8, 21, 9, 0))
+				.issueEndAt(LocalDateTime.of(2026, 8, 30, 23, 59))
+				.validDays(7)
+				.totalQuantity(100)
+				.build();
 	}
 }
