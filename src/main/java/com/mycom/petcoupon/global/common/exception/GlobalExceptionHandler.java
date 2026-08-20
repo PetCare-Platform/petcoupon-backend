@@ -10,6 +10,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import jakarta.validation.ConstraintViolationException;
+
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.global.common.code.BaseErrorCode;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
@@ -59,6 +61,19 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(errorCode.getStatus())
                 .body(errorResponse);
+    }
+
+    // @PathVariable / @RequestParam 검증 예외 처리 (컨트롤러 클래스에 @Validated 필요)
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<CustomResponse<Void>> handleConstraintViolation(ConstraintViolationException ex) {
+
+        BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
+
+        log.warn("[ConstraintViolation] {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
     }
 
     // 잘못된 JSON 요청
