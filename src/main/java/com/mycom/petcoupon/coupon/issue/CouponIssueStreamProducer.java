@@ -29,8 +29,8 @@ public class CouponIssueStreamProducer {
 	public RecordId publish(Long couponId, Long userId, String requestId) {
 		
 		/*
-		 * Controller와 Service에서 이미 1차 검증을 수행하지만, Producer가 다른 곳에서 직접 호출될 가능성을 대비해
-		 * Redis Stream 저장 전 필수 값을 한 번 더 검증함 
+		 * 현재는 Producer가 독립적으로 호출될 수 있으므로 Redis Stream 저장 전 필수 값을 한 번 더 검증함 
+		 * 추후 CouponIssueService와 연결된 이후에도 Service에서 1차 검증 후 Producer에서 2차 방어 검증을 수행
 		 */
 		validate(couponId, userId, requestId);
 		
