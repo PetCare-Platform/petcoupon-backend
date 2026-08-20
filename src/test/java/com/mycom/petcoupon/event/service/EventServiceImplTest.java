@@ -26,6 +26,7 @@ import com.mycom.petcoupon.event.entity.EventStatusHistory;
 import com.mycom.petcoupon.event.entity.enums.ActorType;
 import com.mycom.petcoupon.event.entity.enums.EventHistoryStatus;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
@@ -93,7 +94,7 @@ class EventServiceImplTest {
 	}
 
 	@Test
-	void createEventThrowsBadRequestWhenCloseAtEqualsOpenAt() {
+	void createEventThrowsInvalidEventPeriodWhenCloseAtEqualsOpenAt() {
 		LocalDateTime openAt = LocalDateTime.of(2026, 8, 20, 9, 0);
 		EventCreateRequest request = new EventCreateRequest(
 				"반려동물 여름 이벤트",
@@ -107,7 +108,7 @@ class EventServiceImplTest {
 				() -> eventService.createEvent(request)
 		);
 
-		assertSame(CommonErrorCode.BAD_REQUEST, exception.getErrorCode());
+		assertSame(EventErrorCode.INVALID_EVENT_PERIOD, exception.getErrorCode());
 		verifyNoInteractions(
 				eventRepository,
 				eventStatusHistoryRepository,
@@ -117,7 +118,7 @@ class EventServiceImplTest {
 	}
 
 	@Test
-	void createEventThrowsBadRequestWhenCloseAtIsBeforeOpenAt() {
+	void createEventThrowsInvalidEventPeriodWhenCloseAtIsBeforeOpenAt() {
 		EventCreateRequest request = new EventCreateRequest(
 				"반려동물 여름 이벤트",
 				"선착순 쿠폰 이벤트",
@@ -130,7 +131,7 @@ class EventServiceImplTest {
 				() -> eventService.createEvent(request)
 		);
 
-		assertSame(CommonErrorCode.BAD_REQUEST, exception.getErrorCode());
+		assertSame(EventErrorCode.INVALID_EVENT_PERIOD, exception.getErrorCode());
 		verifyNoInteractions(
 				eventRepository,
 				eventStatusHistoryRepository,
