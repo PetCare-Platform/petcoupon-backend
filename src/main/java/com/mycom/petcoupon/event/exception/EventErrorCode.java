@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.event.exception.code;
+package com.mycom.petcoupon.event.exception;
 
 import org.springframework.http.HttpStatus;
 

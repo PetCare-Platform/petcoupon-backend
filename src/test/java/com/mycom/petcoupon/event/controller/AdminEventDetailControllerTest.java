@@ -17,7 +17,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
-import com.mycom.petcoupon.event.exception.code.EventErrorCode;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.service.EventService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;

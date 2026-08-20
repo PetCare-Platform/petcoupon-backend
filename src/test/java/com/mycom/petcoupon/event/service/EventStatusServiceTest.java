@@ -16,7 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
-import com.mycom.petcoupon.event.exception.code.EventErrorCode;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;

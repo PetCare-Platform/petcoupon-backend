@@ -26,7 +26,7 @@ import com.mycom.petcoupon.event.entity.EventStatusHistory;
 import com.mycom.petcoupon.event.entity.enums.ActorType;
 import com.mycom.petcoupon.event.entity.enums.EventHistoryStatus;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
-import com.mycom.petcoupon.event.exception.code.EventErrorCode;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
