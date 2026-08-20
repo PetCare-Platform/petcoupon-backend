@@ -27,6 +27,7 @@ import com.mycom.petcoupon.coupon.service.CouponIssueService;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 import com.mycom.petcoupon.idempotency.service.IdempotencyDecision;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -44,6 +45,7 @@ class CouponControllerTest {
     private CouponIssueService couponIssueService;
     private IdempotencyKeyService idempotencyKeyService;
     private CouponRepository couponRepository;
+    private AppUserRepository appUserRepository;
     private MockMvc mockMvc;
 
     @Configuration
@@ -65,6 +67,11 @@ class CouponControllerTest {
         }
 
         @Bean
+        AppUserRepository appUserRepository() {
+            return mock(AppUserRepository.class);
+        }
+
+        @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper();
         }
@@ -74,8 +81,9 @@ class CouponControllerTest {
                 CouponIssueService service,
                 IdempotencyKeyService idempotencyKeyService,
                 CouponRepository couponRepository,
+                AppUserRepository appUserRepository,
                 ObjectMapper objectMapper) {
-            return new CouponController(service, idempotencyKeyService, couponRepository, objectMapper);
+            return new CouponController(service, idempotencyKeyService, couponRepository, appUserRepository, objectMapper);
         }
 
         @Bean
@@ -106,9 +114,11 @@ class CouponControllerTest {
         couponIssueService = webCtx.getBean(CouponIssueService.class);
         idempotencyKeyService = webCtx.getBean(IdempotencyKeyService.class);
         couponRepository = webCtx.getBean(CouponRepository.class);
+        appUserRepository = webCtx.getBean(AppUserRepository.class);
         mockMvc = MockMvcBuilders.webAppContextSetup(webCtx).build();
 
         when(couponRepository.existsById(any())).thenReturn(true);
+        when(appUserRepository.existsById(any())).thenReturn(true);
         when(idempotencyKeyService.begin(any(), any(), any())).thenReturn(IdempotencyDecision.proceed(1L));
     }
 
@@ -151,6 +161,20 @@ class CouponControllerTest {
                         .content("{\"userId\":1}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COUPON404-0"));
+
+        org.mockito.Mockito.verifyNoInteractions(idempotencyKeyService);
+    }
+
+    @Test
+    void 존재하지_않는_userId면_멱등성_레코드_생성_전에_404를_반환한다() throws Exception {
+        when(appUserRepository.existsById(1L)).thenReturn(false);
+
+        mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
+                        .header(IDEMPOTENCY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("COMMON404-0"));
 
         org.mockito.Mockito.verifyNoInteractions(idempotencyKeyService);
     }

@@ -16,9 +16,11 @@ import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.service.CouponIssueService;
 import com.mycom.petcoupon.global.common.CustomResponse;
+import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.idempotency.service.IdempotencyDecision;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -41,6 +43,7 @@ public class CouponController {
     private final CouponIssueService couponIssueService;
     private final IdempotencyKeyService idempotencyKeyService;
     private final CouponRepository couponRepository;
+    private final AppUserRepository appUserRepository;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/coupons/{couponId}/issues")
@@ -55,6 +58,13 @@ public class CouponController {
         if (!couponRepository.existsById(couponId)) {
             return ResponseEntity.status(CouponErrorCode.COUPON_NOT_FOUND.getStatus())
                     .body(CouponErrorCode.COUPON_NOT_FOUND.getErrorResponse());
+        }
+
+        // 0-b단계: userId 존재 확인도 같은 이유로 미리 한다. IdempotencyKey가 user_id도 FK로 물고 있어서,
+        // 없는 userId로 요청하면 idempotency_key INSERT가 FK 위반(500)으로 터진다 — 그 전에 404로 막는다.
+        if (!appUserRepository.existsById(request.userId())) {
+            return ResponseEntity.status(CommonErrorCode.NOT_FOUND.getStatus())
+                    .body(CommonErrorCode.NOT_FOUND.getErrorResponse());
         }
 
         // 1단계: 멱등성 판단. 이 한 번의 호출로 "새 시도/재현/처리중/키재사용" 네 갈래가 갈린다.
@@ -87,16 +97,19 @@ public class CouponController {
             CouponIssueCreateResponse response = couponIssueService.issue(couponId, request);
             CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(response);
             // 성공 응답을 통째로 저장 — 다음에 같은 키가 오면 이 JSON을 그대로 재현한다
+            
             idempotencyKeyService.succeed(recordId, HttpStatus.OK.value(), writeJson(success));
             return ResponseEntity.ok(success);
         } catch (GeneralException ex) {
             // 재고소진/중복 등 "정상적으로 끝까지 처리된 실패" — 이 실패 응답도 성공과 동일하게 저장해서 재현한다
+            
             CustomResponse<Void> failure = CustomResponse.onFailure(ex.getErrorCode());
             idempotencyKeyService.fail(recordId, ex.getErrorCode().getStatus().value(), writeJson(failure));
             throw ex; // 이번 요청 자체의 응답 형태는 GlobalExceptionHandler가 그대로 만들어줌 (여기서 새로 안 만듦)
         } catch (RuntimeException ex) {
             // Redis 등 인프라 예외 — 만들어줄 응답이 없으므로 body 없이 FAILED 처리만 하고,
             // 다음 재시도 때 begin()이 이걸 "응답 없는 FAILED"로 인식해 재처리를 허용하게 한다.
+            
             idempotencyKeyService.failWithoutBody(recordId);
             throw ex;
         }

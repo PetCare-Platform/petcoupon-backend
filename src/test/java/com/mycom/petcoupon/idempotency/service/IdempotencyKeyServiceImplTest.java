@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.idempotency.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -10,21 +12,19 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
-import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.idempotency.entity.IdempotencyKey;
 import com.mycom.petcoupon.idempotency.entity.enums.IdempotencyStatus;
 import com.mycom.petcoupon.idempotency.repository.IdempotencyKeyRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
-import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 @ExtendWith(MockitoExtension.class)
-class IdempotencyKeyServiceTest {
+class IdempotencyKeyServiceImplTest {
 
     private static final Long USER_ID = 1L;
     private static final Long COUPON_ID = 100L;
@@ -34,38 +34,50 @@ class IdempotencyKeyServiceTest {
     private IdempotencyKeyRepository idempotencyKeyRepository;
 
     @Mock
-    private AppUserRepository appUserRepository;
-
-    @Mock
-    private CouponRepository couponRepository;
+    private IdempotencyKeyCreator idempotencyKeyCreator;
 
     @InjectMocks
-    private IdempotencyKeyService idempotencyKeyService;
+    private IdempotencyKeyServiceImpl idempotencyKeyService;
 
     @Test
-    void 신규_키면_새로_생성하고_PROCEED를_반환한다() {
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.empty());
-        when(appUserRepository.getReferenceById(anyLong())).thenReturn(mock(AppUser.class));
-        when(couponRepository.getReferenceById(anyLong())).thenReturn(mock(Coupon.class));
-
-        ArgumentCaptor<IdempotencyKey> captor = ArgumentCaptor.forClass(IdempotencyKey.class);
-        when(idempotencyKeyRepository.save(captor.capture())).thenAnswer(invocation -> {
-            IdempotencyKey saved = invocation.getArgument(0);
-            setId(saved, 10L);
-            return saved;
-        });
+    void 신규_키면_INSERT를_바로_시도하고_PROCEED를_반환한다() {
+        IdempotencyKey created = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
+        setId(created, 10L);
+        when(idempotencyKeyCreator.create(eq(USER_ID), eq(COUPON_ID), eq(KEY), any(), any())).thenReturn(created);
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
         assertThat(decision.type()).isEqualTo(IdempotencyDecision.Type.PROCEED);
         assertThat(decision.recordId()).isEqualTo(10L);
-        assertThat(captor.getValue().getStatus()).isEqualTo(IdempotencyStatus.IN_PROGRESS);
+    }
+
+    @Test
+    void 동시_요청으로_유니크_제약_위반이_나면_재조회해서_기존_레코드_기준으로_판단한다() {
+        when(idempotencyKeyCreator.create(eq(USER_ID), eq(COUPON_ID), eq(KEY), any(), any()))
+                .thenThrow(new DataIntegrityViolationException("uk_idem_user_key violated"));
+
+        IdempotencyKey wonByOtherRequest = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(wonByOtherRequest));
+
+        IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
+
+        // 내가 INSERT 경쟁에서 졌으니, 먼저 이긴 요청의 상태(IN_PROGRESS·안 만료)를 그대로 따른다
+        assertThat(decision.type()).isEqualTo(IdempotencyDecision.Type.CONFLICT);
+    }
+
+    @Test
+    void 유니크_제약_위반인데_재조회해도_없으면_원래_예외를_그대로_던진다() {
+        DataIntegrityViolationException original = new DataIntegrityViolationException("uk_idem_user_key violated");
+        when(idempotencyKeyCreator.create(eq(USER_ID), eq(COUPON_ID), eq(KEY), any(), any())).thenThrow(original);
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY))
+                .isSameAs(original);
     }
 
     @Test
     void 처리중이고_만료_안됐으면_CONFLICT를_반환한다() {
-        IdempotencyKey record = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null));
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
@@ -76,7 +88,7 @@ class IdempotencyKeyServiceTest {
     void 처리중이고_만료됐으면_재사용하고_PROCEED를_반환한다() {
         IdempotencyKey record = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().minusSeconds(1), null, null);
         setId(record, 20L);
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(record);
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
@@ -88,8 +100,7 @@ class IdempotencyKeyServiceTest {
 
     @Test
     void 완료된_SUCCEEDED_키면_저장된_응답을_그대로_REPLAY한다() {
-        IdempotencyKey record = existing(IdempotencyStatus.SUCCEEDED, LocalDateTime.now().plusSeconds(30), 200, "{\"isSuccess\":true}");
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(existing(IdempotencyStatus.SUCCEEDED, LocalDateTime.now().plusSeconds(30), 200, "{\"isSuccess\":true}"));
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
@@ -100,8 +111,7 @@ class IdempotencyKeyServiceTest {
 
     @Test
     void 응답이_저장된_FAILED_키면_그대로_REPLAY한다() {
-        IdempotencyKey record = existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), 409, "{\"isSuccess\":false}");
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), 409, "{\"isSuccess\":false}"));
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
@@ -113,7 +123,7 @@ class IdempotencyKeyServiceTest {
     void 응답없는_FAILED_키면_Redis_예외로_끊긴_시도로_보고_재처리를_허용한다() {
         IdempotencyKey record = existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), null, null);
         setId(record, 30L);
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(record);
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
@@ -125,12 +135,19 @@ class IdempotencyKeyServiceTest {
     @Test
     void 같은_키인데_요청내용이_다르면_KEY_REUSED를_반환한다() {
         // couponId가 200L인 요청으로 만든 키 — 아래에서 COUPON_ID(100L)로 재요청하면 해시가 달라짐
-        IdempotencyKey record = existingForCoupon(200L, IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30));
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
+        givenRaceLostTo(existingForCoupon(200L, IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30)));
 
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
         assertThat(decision.type()).isEqualTo(IdempotencyDecision.Type.KEY_REUSED);
+    }
+
+    // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로
+    // (신규 키가 아닌 이상) 유니크 제약 위반 → 재조회 경로를 통해서만 이 상태에 도달한다.
+    private void givenRaceLostTo(IdempotencyKey record) {
+        when(idempotencyKeyCreator.create(eq(USER_ID), eq(COUPON_ID), eq(KEY), any(), any()))
+                .thenThrow(new DataIntegrityViolationException("uk_idem_user_key violated"));
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(record));
     }
 
     private static IdempotencyKey existing(IdempotencyStatus status, LocalDateTime expiresAt, Integer responseStatus, String responseBody) {
