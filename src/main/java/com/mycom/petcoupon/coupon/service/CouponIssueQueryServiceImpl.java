@@ -9,8 +9,8 @@ import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
@@ -27,7 +27,7 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
     public CouponIssueStatusResponse getStatus(Long couponIssueId) {
 
         CouponIssue couponIssue = couponIssueRepository.findById(couponIssueId)
-                .orElseThrow(() -> new GeneralException(CommonErrorCode.NOT_FOUND));
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_ISSUE_NOT_FOUND));
 
         boolean isUsable = couponIssue.getStatus() == IssueStatus.ISSUED
                 && couponIssue.getExpiresAt().isAfter(LocalDateTime.now());
