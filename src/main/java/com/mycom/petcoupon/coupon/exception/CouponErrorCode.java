@@ -15,6 +15,9 @@ import lombok.Getter;
 @Getter
 @AllArgsConstructor
 public enum CouponErrorCode implements BaseErrorCode {
+	
+	INVALID_ISSUE_REQUEST(HttpStatus.BAD_REQUEST, "COUPON400-0", "쿠폰 신청 요청값이 올바르지 않습니다."),
+	
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON409-0", "쿠폰 재고가 모두 소진되었습니다."),
     DUPLICATE_USER(HttpStatus.CONFLICT, "COUPON409-1", "이미 발급받은 쿠폰입니다."),
     DUPLICATE_REQUEST(HttpStatus.CONFLICT, "COUPON409-2", "이미 처리된 요청입니다."),
@@ -22,7 +25,10 @@ public enum CouponErrorCode implements BaseErrorCode {
     // COUPON409-3은 PR #28(박신형, INVALID_ISSUE_STATUS)이 먼저 씀 — 겹쳐서 409-5/6으로 옮김
     REQUEST_IN_PROGRESS(HttpStatus.CONFLICT, "COUPON409-5", "요청이 처리 중입니다. 잠시 후 다시 시도해주세요."),
     IDEMPOTENCY_KEY_REUSED(HttpStatus.CONFLICT, "COUPON409-6", "이미 사용된 Idempotency-Key입니다. 다른 요청에는 새 키를 사용해주세요."),
-    COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-0", "존재하지 않는 쿠폰입니다.");
+
+    COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-0", "존재하지 않는 쿠폰입니다."),
+
+    ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다.");
 
     private final HttpStatus status;
     private final String code;
