@@ -11,7 +11,12 @@ import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
  */
 @Component
 public class CouponIssueConverter {
+
     public CouponIssueCreateResponse toCreateResponse(Long couponId, Long userId) {
-        return new CouponIssueCreateResponse(couponId, userId);
+        return CouponIssueCreateResponse.builder()
+                .couponId(couponId)
+                .userId(userId)
+                .build();   
+       
     }
 }
