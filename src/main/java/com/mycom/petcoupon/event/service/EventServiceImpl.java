@@ -13,6 +13,7 @@ import com.mycom.petcoupon.event.entity.EventStatusHistory;
 import com.mycom.petcoupon.event.entity.enums.ActorType;
 import com.mycom.petcoupon.event.entity.enums.EventHistoryStatus;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.exception.code.EventErrorCode;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
@@ -57,7 +58,7 @@ public class EventServiceImpl implements EventService {
 	@Transactional(readOnly = true)
 	public EventDetailResponse getEventDetail(Long eventId) {
 		Event event = eventRepository.findById(eventId)
-				.orElseThrow(() -> new GeneralException(CommonErrorCode.NOT_FOUND));
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
 		return eventConverter.toDetailResponse(event);
 	}
@@ -66,14 +67,14 @@ public class EventServiceImpl implements EventService {
 	@Transactional(readOnly = true)
 	public EventStatusResponse getEventStatus(Long eventId) {
 		EventStatus status = eventRepository.findStatusByEventId(eventId)
-				.orElseThrow(() -> new GeneralException(CommonErrorCode.NOT_FOUND));
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
 		return eventConverter.toStatusResponse(eventId, status);
 	}
 
 	private void validatePeriod(EventCreateRequest request) {
 		if (!request.closeAt().isAfter(request.openAt())) {
-			throw new GeneralException(CommonErrorCode.BAD_REQUEST);
+			throw new GeneralException(EventErrorCode.INVALID_EVENT_PERIOD);
 		}
 	}
 
