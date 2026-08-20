@@ -27,7 +27,7 @@ public class CouponIssueServiceImpl implements CouponIssueService {
 
     private final CouponRepository couponRepository;
     private final RedisCouponStockService redisCouponStockService;
-    
+    private final CouponIssueConverter couponIssueConverter;
 
     @Override
     public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request) {
@@ -46,7 +46,7 @@ public class CouponIssueServiceImpl implements CouponIssueService {
         if (result != CouponIssueResult.SUCCESS) {
             throw new GeneralException(toErrorCode(result));
         }
-        return CouponIssueConverter.toCreateResponse(couponId, request.userId());
+        return couponIssueConverter.toCreateResponse(couponId, request.userId());
     }
 
     // Redis 판정 결과 -> 쿠폰 도메인 에러코드 매핑
