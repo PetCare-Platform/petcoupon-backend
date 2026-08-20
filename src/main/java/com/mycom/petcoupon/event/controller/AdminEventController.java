@@ -36,14 +36,14 @@ public class AdminEventController {
 	}
 
 	@GetMapping("/{eventId}")
-	public CustomResponse<EventDetailResponse> getEventDetail(@PathVariable Long eventId) {
+	public CustomResponse<EventDetailResponse> getEventDetail(@PathVariable("eventId") Long eventId) {
 		EventDetailResponse response = eventService.getEventDetail(eventId);
 
 		return CustomResponse.onSuccess(response);
 	}
 
 	@GetMapping("/{eventId}/status")
-	public CustomResponse<EventStatusResponse> getEventStatus(@PathVariable Long eventId) {
+	public CustomResponse<EventStatusResponse> getEventStatus(@PathVariable("eventId") Long eventId) {
 		EventStatusResponse response = eventService.getEventStatus(eventId);
 
 		return CustomResponse.onSuccess(response);

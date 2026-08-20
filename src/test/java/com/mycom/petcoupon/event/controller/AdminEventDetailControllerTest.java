@@ -17,8 +17,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
+import com.mycom.petcoupon.event.exception.EventErrorCode;
 import com.mycom.petcoupon.event.service.EventService;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 
@@ -67,12 +67,12 @@ class AdminEventDetailControllerTest {
 	void getEventDetailReturnsNotFoundWhenEventDoesNotExist() throws Exception {
 		Long eventId = 99L;
 		when(eventService.getEventDetail(eventId))
-				.thenThrow(new GeneralException(CommonErrorCode.NOT_FOUND));
+				.thenThrow(new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
 		mockMvc.perform(get("/admin/events/{eventId}", eventId))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COMMON404-0"))
+				.andExpect(jsonPath("$.code").value("EVENT404-0"))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 }

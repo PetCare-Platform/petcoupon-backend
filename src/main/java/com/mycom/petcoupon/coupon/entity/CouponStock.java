@@ -15,6 +15,7 @@ import jakarta.persistence.MapsId;
 import jakarta.persistence.OneToOne;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -46,4 +47,12 @@ public class CouponStock {
     @LastModifiedDate
     @Column(name = "updated_at", nullable = false) 
     private LocalDateTime updatedAt;
+
+	@Builder
+	public CouponStock(Coupon coupon, int totalQuantity) {
+		this.coupon = coupon;
+		this.totalQuantity = totalQuantity;
+		this.issuedQuantity = 0;
+		this.remainingQuantity = totalQuantity;
+	}
 }

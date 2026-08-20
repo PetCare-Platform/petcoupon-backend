@@ -19,6 +19,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -69,4 +70,27 @@ public class Coupon extends BaseEntity {
     @Enumerated(EnumType.STRING) 
     @Column(nullable = false, length = 20) 
     private CouponStatus status = CouponStatus.READY;
+
+	@Builder
+	public Coupon(
+			Event event,
+			String name,
+			DiscountType discountType,
+			int discountValue,
+			int minOrderAmount,
+			Integer maxDiscountAmount,
+			LocalDateTime issueStartAt,
+			LocalDateTime issueEndAt,
+			int validDays
+	) {
+		this.event = event;
+		this.name = name;
+		this.discountType = discountType;
+		this.discountValue = discountValue;
+		this.minOrderAmount = minOrderAmount;
+		this.maxDiscountAmount = maxDiscountAmount;
+		this.issueStartAt = issueStartAt;
+		this.issueEndAt = issueEndAt;
+		this.validDays = validDays;
+	}
 }
