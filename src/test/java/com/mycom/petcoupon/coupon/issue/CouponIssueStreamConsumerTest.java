@@ -15,6 +15,9 @@ import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
+
 @ExtendWith(MockitoExtension.class)
 public class CouponIssueStreamConsumerTest {
 	

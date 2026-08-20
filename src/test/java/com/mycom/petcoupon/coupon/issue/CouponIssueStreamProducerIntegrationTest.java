@@ -17,6 +17,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
+
 @SpringBootTest
 public class CouponIssueStreamProducerIntegrationTest {
 	

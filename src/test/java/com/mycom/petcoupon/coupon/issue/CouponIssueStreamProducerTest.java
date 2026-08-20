@@ -19,6 +19,7 @@ import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 @ExtendWith(MockitoExtension.class)

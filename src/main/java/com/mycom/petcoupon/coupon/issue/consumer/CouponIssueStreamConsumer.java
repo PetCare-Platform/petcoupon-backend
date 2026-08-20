@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.coupon.issue;
+package com.mycom.petcoupon.coupon.issue.consumer;
 
 import java.util.Map;
 
@@ -6,6 +6,9 @@ import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
+
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueMessage;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

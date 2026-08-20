@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.coupon.issue;
+package com.mycom.petcoupon.coupon.issue.config;
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -10,6 +10,8 @@ import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
+
+import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 
 import lombok.RequiredArgsConstructor;
 

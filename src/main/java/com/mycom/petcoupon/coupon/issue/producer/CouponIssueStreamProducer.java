@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.coupon.issue;
+package com.mycom.petcoupon.coupon.issue.producer;
 
 import java.util.Map;
 

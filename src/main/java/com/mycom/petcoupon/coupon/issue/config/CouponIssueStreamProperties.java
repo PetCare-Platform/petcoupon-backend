@@ -1,4 +1,4 @@
-package com.mycom.petcoupon.coupon.issue;
+package com.mycom.petcoupon.coupon.issue.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
