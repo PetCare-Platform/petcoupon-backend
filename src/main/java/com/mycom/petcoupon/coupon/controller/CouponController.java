@@ -29,8 +29,7 @@ public class CouponController {
 
     @PostMapping("/coupons/{couponId}/issues")
     public CustomResponse<CouponIssueCreateResponse> issue(
-        @PathVariable("couponId") @Positive Long 
-        couponId,
+        @PathVariable("couponId") @Positive Long couponId,
         @Valid @RequestBody CouponIssueCreateRequest request) {
             // 성공 케이스만 여기서 처리. 재고소진/중복은 service에서 예외로 던져짐
             CouponIssueCreateResponse response = couponIssueService.issue(couponId, request);
