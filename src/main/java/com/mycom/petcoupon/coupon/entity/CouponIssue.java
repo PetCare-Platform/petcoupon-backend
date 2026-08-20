@@ -19,6 +19,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -75,4 +76,18 @@ public class CouponIssue extends BaseEntity {
 	@Column(name = "expires_at", nullable = false) 
 	private LocalDateTime expiresAt; 
 	
+	@Builder
+	private CouponIssue(Coupon coupon, AppUser user, long sequenceNo, String couponCode,
+			String requestId, IssueStatus status, LocalDateTime usedAt, LocalDateTime canceledAt,
+			LocalDateTime expiresAt) {
+		this.coupon = coupon;
+		this.user = user;
+		this.sequenceNo = sequenceNo;
+		this.couponCode = couponCode;
+		this.requestId = requestId;
+		this.status = status == null ? IssueStatus.ISSUED : status;
+		this.usedAt = usedAt;
+		this.canceledAt = canceledAt;
+		this.expiresAt = expiresAt;
+	}
 }
