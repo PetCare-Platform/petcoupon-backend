@@ -38,9 +38,11 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
 		// 외래키 제약 때문에 순서가 중요하다.
-		// coupon_issue 를 참조하는 것(이력, 멱등키)을 먼저 지워야 coupon_issue 를 지울 수 있다.
+		// coupon_issue 를 참조하는 세 테이블(이력, 멱등키, 알림 로그)을 먼저 지워야
+		// coupon_issue 를 지울 수 있다.
 		long deletedHistories = deleteHistories(couponId);
 		long deletedIdempotencyKeys = deleteIdempotencyKeys(couponId);
+		long deletedNotifications = deleteNotificationLogs(couponId);
 		long deletedIssues = deleteIssues(couponId);
 
 		// issue_message 는 coupon 만 참조하므로 순서와 무관하지만,
@@ -58,6 +60,7 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.couponId(couponId)
 				.deletedHistories(deletedHistories)
 				.deletedIdempotencyKeys(deletedIdempotencyKeys)
+				.deletedNotifications(deletedNotifications)
 				.deletedIssues(deletedIssues)
 				.deletedMessages(deletedMessages)
 				.totalQuantity(totalQuantity)
@@ -75,6 +78,21 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	private long deleteIdempotencyKeys(Long couponId) {
 		return entityManager.createQuery(
 						"DELETE FROM IdempotencyKey k WHERE k.coupon.couponId = :couponId")
+				.setParameter("couponId", couponId)
+				.executeUpdate();
+	}
+
+	/**
+	 * 알림 로그는 coupon_id 를 직접 들고 있지 않으므로 coupon_issue 를 거쳐 찾는다.
+	 * 현재는 알림 발송 기능이 없어 항상 0건이지만, 기능이 붙으면 이 삭제가 없을 때
+	 * coupon_issue 삭제가 외래키 위반으로 실패한다.
+	 */
+	private long deleteNotificationLogs(Long couponId) {
+		return entityManager.createQuery("""
+						DELETE FROM NotificationLog n
+						 WHERE n.couponIssue.couponIssueId IN (
+						       SELECT c.couponIssueId FROM CouponIssue c WHERE c.coupon.couponId = :couponId)
+						""")
 				.setParameter("couponId", couponId)
 				.executeUpdate();
 	}

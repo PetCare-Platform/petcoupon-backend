@@ -10,6 +10,7 @@ public record CouponResetResponse(
 		Long couponId,
 		long deletedHistories,
 		long deletedIdempotencyKeys,
+		long deletedNotifications,
 		long deletedIssues,
 		long deletedMessages,
 		int totalQuantity,

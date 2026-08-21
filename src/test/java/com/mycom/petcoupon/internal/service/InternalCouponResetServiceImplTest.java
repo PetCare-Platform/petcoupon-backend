@@ -120,6 +120,32 @@ class InternalCouponResetServiceImplTest {
 	}
 
 	@Test
+	@DisplayName("알림 로그가 있어도 외래키 위반 없이 삭제된다")
+	void resetDeletesNotificationLogsBeforeIssues() {
+		발급데이터를_만든다(1);
+		Long couponIssueId = 첫_발급_id();
+
+		// NotificationLog 는 빌더가 없어 네이티브 INSERT 로 만든다.
+		// 알림 발송 기능이 붙었을 때 리셋이 외래키 위반으로 실패하지 않는지 확인하는 것이 목적이다.
+		entityManager.createNativeQuery("""
+						INSERT INTO notification_log
+						       (coupon_issue_id, user_id, channel, recipient_masked, status, created_at)
+						VALUES (:couponIssueId, :userId, 'SMS', '010-****-1234', 'SENT', NOW(6))
+						""")
+				.setParameter("couponIssueId", couponIssueId)
+				.setParameter("userId", user.getUserId())
+				.executeUpdate();
+
+		CouponResetResponse response =
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+
+		assertEquals(1, response.deletedNotifications());
+		assertEquals(1, response.deletedIssues());
+		assertEquals(0L, 남은개수(
+				"SELECT COUNT(n) FROM NotificationLog n WHERE n.couponIssue.coupon.couponId = :couponId"));
+	}
+
+	@Test
 	@DisplayName("totalQuantity 를 주면 총재고까지 바꾼다")
 	void resetChangesTotalQuantityWhenGiven() {
 		CouponResetResponse response =
@@ -143,6 +169,7 @@ class InternalCouponResetServiceImplTest {
 		assertEquals(0, response.deletedIssues());
 		assertEquals(0, response.deletedHistories());
 		assertEquals(0, response.deletedIdempotencyKeys());
+		assertEquals(0, response.deletedNotifications());
 		assertEquals(0, response.deletedMessages());
 	}
 
@@ -196,6 +223,13 @@ class InternalCouponResetServiceImplTest {
 					.build());
 		}
 		entityManager.flush();
+	}
+
+	private Long 첫_발급_id() {
+		return entityManager.createQuery(
+						"SELECT MIN(c.couponIssueId) FROM CouponIssue c WHERE c.coupon.couponId = :couponId", Long.class)
+				.setParameter("couponId", coupon.getCouponId())
+				.getSingleResult();
 	}
 
 	private long 남은개수(String jpql) {
