@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>사용자 정보 | PetCoupon</title>
+  <meta name="description" content="PetCoupon 사용자 프로필과 최근 활동을 확인합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="user" data-page="user" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="user-page-title">
+      <div class="container hero-grid">
+        <div><p class="eyebrow">USER / PROFILE</p><h1 id="user-page-title">사용자 정보를<br>한눈에.</h1><p class="hero-copy">계정 상태와 연락처, 보유 쿠폰 활동을 확인하세요.</p></div>
+        <form class="compact-form" data-demo-form data-demo-message="사용자 #1 정보를 불러왔습니다.">
+          <div class="field-group"><label for="user-id">사용자 번호</label><input id="user-id" name="userId" type="number" value="1" min="1" required></div>
+          <button class="button button--primary" type="submit">사용자 조회</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="profile-title">
+      <div class="container">
+        <article class="color-block color-block--mint profile-block">
+          <div class="profile-heading"><div class="initial-mark" aria-hidden="true">김</div><div><p class="eyebrow">ACTIVE MEMBER</p><h2 id="profile-title">김하늘 님</h2><p>반려생활을 꼼꼼하게 기록하는 PetCoupon 회원</p></div><span class="status status--open">정상</span></div>
+          <dl class="profile-facts">
+            <div><dt>이메일</dt><dd>haneul.kim@example.com</dd></div>
+            <div><dt>휴대전화</dt><dd>010-27**-84**</dd></div>
+            <div><dt>가입일</dt><dd>2026년 3월 12일</dd></div>
+            <div><dt>사용자 번호</dt><dd>#1</dd></div>
+          </dl>
+          <a class="button button--primary" href="my-coupons.html">보유 쿠폰 보기</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="activity-summary-title">
+      <div class="container">
+        <div class="section-head"><div><p class="eyebrow">COUPON ACTIVITY</p><h2 id="activity-summary-title">쿠폰 활동 요약</h2></div></div>
+        <dl class="metric-grid metric-grid--three">
+          <div class="metric hairline-card"><dt>사용 가능</dt><dd>2장<small>이번 주 만료 1장</small></dd></div>
+          <div class="metric hairline-card"><dt>사용 완료</dt><dd>1장<small>최근 사용 7월 22일</small></dd></div>
+          <div class="metric hairline-card"><dt>누적 절약</dt><dd>24,800원<small>올해 기준</small></dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="recent-activity-title">
+      <div class="container">
+        <div class="section-head"><div><p class="eyebrow">RECENT HISTORY</p><h2 id="recent-activity-title">최근 활동</h2></div></div>
+        <div class="table-shell desktop-table">
+          <table>
+            <caption>김하늘 사용자의 최근 쿠폰 활동</caption>
+            <thead><tr><th scope="col">일시</th><th scope="col">활동</th><th scope="col">쿠폰</th><th scope="col">상태</th></tr></thead>
+            <tbody><tr><td>2026.08.21 09:14</td><td>쿠폰 발급</td><td>여름 정률 쿠폰</td><td><span class="status status--open">사용 가능</span></td></tr><tr><td>2026.07.22 17:40</td><td>쿠폰 사용</td><td>웰컴 케어 쿠폰</td><td><span class="status status--used">사용 완료</span></td></tr></tbody>
+          </table>
+        </div>
+        <div class="mobile-cards" aria-label="최근 쿠폰 활동 모바일 목록">
+          <article class="hairline-card"><div class="card-topline"><time datetime="2026-08-21T09:14">8월 21일 09:14</time><span class="status status--open">사용 가능</span></div><h3>여름 정률 쿠폰</h3><p>쿠폰 발급</p></article>
+          <article class="hairline-card"><div class="card-topline"><time datetime="2026-07-22T17:40">7월 22일 17:40</time><span class="status status--used">사용 완료</span></div><h3>웰컴 케어 쿠폰</h3><p>쿠폰 사용</p></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

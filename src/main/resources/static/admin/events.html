@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>이벤트 관리 | PetCoupon</title>
+  <meta name="description" content="PetCoupon 이벤트의 일정과 상태를 조회하고 관리합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="admin" data-page="events" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="admin-events-title">
+      <div class="container hero-grid"><div><p class="eyebrow">ADMIN / EVENTS</p><h1 id="admin-events-title">이벤트 목록</h1><p class="hero-copy">공개 일정과 상태, 연결된 쿠폰을 확인하고 필요한 항목을 관리하세요.</p></div><div class="hero-actions"><a class="button button--primary" href="event-form.html">새 이벤트</a><a class="button button--secondary" href="admin.html">관리자 홈</a></div></div>
+    </section>
+
+    <section class="section" aria-labelledby="event-status-note-title">
+      <div class="container"><article class="color-block color-block--cream story-split"><div><p class="eyebrow">NEXT OPEN</p><h2 id="event-status-note-title">건강검진 데이가<br>3일 뒤 시작됩니다.</h2></div><div class="story-copy"><p>연결 쿠폰의 발급 시작 시각과 총수량을 마지막으로 점검해 주세요.</p><a class="button button--primary" href="event-form.html?id=2">이벤트 검토</a></div></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="event-record-title">
+      <div class="container" data-filter-group>
+        <div class="section-head"><div><p class="eyebrow">EVENT RECORDS</p><h2 id="event-record-title">등록 이벤트</h2><p><span data-result-count aria-live="polite">5개</span>의 이벤트</p></div><div class="filter-bar" role="group" aria-label="관리 이벤트 상태 필터"><button class="filter-pill is-active" type="button" data-filter-value="all" aria-pressed="true" aria-controls="admin-event-records admin-event-cards">전체</button><button class="filter-pill" type="button" data-filter-value="open" aria-pressed="false" aria-controls="admin-event-records admin-event-cards">진행 중</button><button class="filter-pill" type="button" data-filter-value="scheduled" aria-pressed="false" aria-controls="admin-event-records admin-event-cards">예정</button><button class="filter-pill" type="button" data-filter-value="closed" aria-pressed="false" aria-controls="admin-event-records admin-event-cards">종료</button></div></div>
+
+        <div id="admin-event-records" class="table-shell desktop-table">
+          <table><caption>관리 이벤트 목록</caption><thead><tr><th scope="col">이벤트</th><th scope="col">기간</th><th scope="col">상태</th><th scope="col">쿠폰</th><th scope="col">관리</th></tr></thead><tbody>
+            <tr data-filter-item data-status="open" data-record-id="event-1"><td><strong>반려동물 여름 케어 위크</strong><small>EVENT 01</small></td><td>8.20 — 8.30</td><td><span class="status status--open">진행 중</span></td><td>2개</td><td><div class="table-actions"><a class="table-link" href="event-form.html?id=1">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="반려동물 여름 케어 위크 삭제 확인을 열었습니다." aria-label="반려동물 여름 케어 위크 삭제">삭제</button></div></td></tr>
+            <tr data-filter-item data-status="scheduled" data-record-id="event-2"><td><strong>건강검진 데이</strong><small>EVENT 02</small></td><td>8.24 — 9.07</td><td><span class="status status--scheduled">예정</span></td><td>1개</td><td><div class="table-actions"><a class="table-link" href="event-form.html?id=2">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="건강검진 데이 삭제 확인을 열었습니다." aria-label="건강검진 데이 삭제">삭제</button></div></td></tr>
+            <tr data-filter-item data-status="open" data-record-id="event-3"><td><strong>함께 걷는 계절</strong><small>EVENT 03</small></td><td>8.15 — 8.25</td><td><span class="status status--open">진행 중</span></td><td>1개</td><td><div class="table-actions"><a class="table-link" href="event-form.html?id=3">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="함께 걷는 계절 삭제 확인을 열었습니다." aria-label="함께 걷는 계절 삭제">삭제</button></div></td></tr>
+            <tr data-filter-item data-status="scheduled" data-record-id="event-4"><td><strong>가을 입맛 찾기</strong><small>EVENT 04</small></td><td>9.01 — 9.14</td><td><span class="status status--scheduled">예정</span></td><td>2개</td><td><div class="table-actions"><a class="table-link" href="event-form.html?id=4">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="가을 입맛 찾기 삭제 확인을 열었습니다." aria-label="가을 입맛 찾기 삭제">삭제</button></div></td></tr>
+            <tr data-filter-item data-status="closed" data-record-id="event-5"><td><strong>웰컴 펫데이</strong><small>EVENT 05</small></td><td>7.01 — 7.31</td><td><span class="status status--closed">종료</span></td><td>2개</td><td><div class="table-actions"><a class="table-link" href="event-form.html?id=5">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="웰컴 펫데이 삭제 확인을 열었습니다." aria-label="웰컴 펫데이 삭제">삭제</button></div></td></tr>
+          </tbody></table>
+        </div>
+
+        <div id="admin-event-cards" class="mobile-cards" aria-label="관리 이벤트 모바일 목록">
+          <article class="hairline-card" data-filter-item data-status="open" data-record-id="event-1"><div class="card-topline"><span class="caption">EVENT 01</span><span class="status status--open">진행 중</span></div><h3>반려동물 여름 케어 위크</h3><p>8.20 — 8.30 · 쿠폰 2개</p><div class="card-actions"><a href="event-form.html?id=1">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="반려동물 여름 케어 위크 삭제 확인을 열었습니다." aria-label="반려동물 여름 케어 위크 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="scheduled" data-record-id="event-2"><div class="card-topline"><span class="caption">EVENT 02</span><span class="status status--scheduled">예정</span></div><h3>건강검진 데이</h3><p>8.24 — 9.07 · 쿠폰 1개</p><div class="card-actions"><a href="event-form.html?id=2">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="건강검진 데이 삭제 확인을 열었습니다." aria-label="건강검진 데이 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="open" data-record-id="event-3"><div class="card-topline"><span class="caption">EVENT 03</span><span class="status status--open">진행 중</span></div><h3>함께 걷는 계절</h3><p>8.15 — 8.25 · 쿠폰 1개</p><div class="card-actions"><a href="event-form.html?id=3">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="함께 걷는 계절 삭제 확인을 열었습니다." aria-label="함께 걷는 계절 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="scheduled" data-record-id="event-4"><div class="card-topline"><span class="caption">EVENT 04</span><span class="status status--scheduled">예정</span></div><h3>가을 입맛 찾기</h3><p>9.01 — 9.14 · 쿠폰 2개</p><div class="card-actions"><a href="event-form.html?id=4">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="가을 입맛 찾기 삭제 확인을 열었습니다." aria-label="가을 입맛 찾기 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="closed" data-record-id="event-5"><div class="card-topline"><span class="caption">EVENT 05</span><span class="status status--closed">종료</span></div><h3>웰컴 펫데이</h3><p>7.01 — 7.31 · 쿠폰 2개</p><div class="card-actions"><a href="event-form.html?id=5">수정</a><button type="button" data-demo-action="delete-event" data-demo-message="웰컴 펫데이 삭제 확인을 열었습니다." aria-label="웰컴 펫데이 삭제">삭제</button></div></article>
+        </div>
+        <div class="empty-state" data-filter-empty role="status" hidden><h3>해당 상태의 이벤트가 없습니다.</h3><p>다른 상태를 선택해 주세요.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>시스템 모니터링 | PetCoupon</title>
+  <meta name="description" content="PetCoupon 서비스와 데이터 파이프라인의 운영 현황을 확인합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="internal" data-page="monitoring" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="monitoring-title">
+      <div class="container hero-grid"><div><p class="eyebrow">INTERNAL / MONITORING</p><h1 id="monitoring-title">시스템 현황</h1><p class="hero-copy">쿠폰 발급 흐름의 가용성, 처리량과 지연을 한 화면에서 점검하세요.</p></div><div class="hero-actions"><button class="button button--primary" type="button" data-demo-action="refresh-monitoring" data-demo-message="시스템 현황을 최신 시각으로 갱신했습니다.">현황 새로고침</button><a class="button button--secondary" href="failures.html">실패 목록</a></div></div>
+    </section>
+
+    <section class="section" aria-labelledby="system-overview-title">
+      <div class="container">
+        <article class="color-block color-block--lime">
+          <div class="section-head section-head--compact"><div><p class="eyebrow">LIVE PULSE</p><h2 id="system-overview-title">전체 흐름은 안정적입니다.</h2></div><div class="live-indicator"><span aria-hidden="true"></span> 마지막 확인 11:42:08</div></div>
+          <dl class="metric-grid metric-grid--four"><div class="metric"><dt>API 성공률</dt><dd>99.98%<small>최근 15분</small></dd></div><div class="metric"><dt>분당 발급</dt><dd>186<small>평균 172건</small></dd></div><div class="metric"><dt>처리 지연</dt><dd>184ms<small>목표 250ms 이하</small></dd></div><div class="metric"><dt>실패 대기</dt><dd>3<small>긴급 항목 없음</small></dd></div></dl>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="component-health-title">
+      <div class="container">
+        <div class="section-head"><div><p class="eyebrow">COMPONENT HEALTH</p><h2 id="component-health-title">구성요소 상태</h2></div><span class="caption">SEOUL / UTC+09:00</span></div>
+        <div class="table-shell desktop-table"><table><caption>시스템 구성요소 상태</caption><thead><tr><th scope="col">구성요소</th><th scope="col">역할</th><th scope="col">상태</th><th scope="col">응답</th><th scope="col">최근 확인</th></tr></thead><tbody><tr><td><strong>Application</strong></td><td>HTTP 요청 처리</td><td><span class="status status--open">정상</span></td><td>42ms</td><td>11:42:08</td></tr><tr><td><strong>MySQL</strong></td><td>원장과 운영 데이터</td><td><span class="status status--open">정상</span></td><td>8ms</td><td>11:42:07</td></tr><tr><td><strong>Redis</strong></td><td>재고와 중복 제어</td><td><span class="status status--open">정상</span></td><td>3ms</td><td>11:42:07</td></tr><tr><td><strong>Kafka</strong></td><td>발급 메시지 전달</td><td><span class="status status--warning">관찰</span></td><td>92ms</td><td>11:42:06</td></tr></tbody></table></div>
+        <div class="mobile-cards" aria-label="시스템 구성요소 모바일 목록"><article class="hairline-card"><div class="card-topline"><strong>Application</strong><span class="status status--open">정상</span></div><p>HTTP 요청 처리 · 응답 42ms</p><small>11:42:08 확인</small></article><article class="hairline-card"><div class="card-topline"><strong>MySQL</strong><span class="status status--open">정상</span></div><p>원장과 운영 데이터 · 응답 8ms</p><small>11:42:07 확인</small></article><article class="hairline-card"><div class="card-topline"><strong>Redis</strong><span class="status status--open">정상</span></div><p>재고와 중복 제어 · 응답 3ms</p><small>11:42:07 확인</small></article><article class="hairline-card"><div class="card-topline"><strong>Kafka</strong><span class="status status--warning">관찰</span></div><p>발급 메시지 전달 · 응답 92ms</p><small>11:42:06 확인</small></article></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="throughput-title">
+      <div class="container editorial-row">
+        <div><p class="eyebrow">ISSUE THROUGHPUT</p><h2 id="throughput-title">최근 발급 처리량</h2><p>한 시간 동안의 분당 발급 요청과 실패 비율입니다.</p></div>
+        <figure class="chart-card"><div class="bar-chart" role="img" aria-label="최근 한 시간 분당 발급량. 최저 128건, 최고 216건, 현재 186건"><span style="--bar:58%"></span><span style="--bar:64%"></span><span style="--bar:72%"></span><span style="--bar:86%"></span><span style="--bar:74%"></span><span style="--bar:93%"></span><span style="--bar:81%"></span></div><figcaption>10:45 — 11:45 · 실패율 0.04%</figcaption></figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="internal-links-title">
+      <div class="container"><div class="section-head"><h2 id="internal-links-title">운영 상세로 이동</h2></div><nav class="card-grid card-grid--three" aria-label="내부 운영 화면"><a class="hairline-card shortcut-card" href="issues.html"><span class="caption">ISSUE FLOW</span><strong>발급 처리 흐름</strong><span>요청 단계 추적 →</span></a><a class="hairline-card shortcut-card" href="failures.html"><span class="caption">FAILURES</span><strong>실패 처리</strong><span>Retry와 DLQ →</span></a><a class="hairline-card shortcut-card" href="verification.html"><span class="caption">VERIFY</span><strong>정합성 검증</strong><span>원장 차이 확인 →</span></a></nav></div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

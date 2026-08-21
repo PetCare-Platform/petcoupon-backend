@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>발급 처리 흐름 | PetCoupon</title>
+  <meta name="description" content="쿠폰 발급 요청의 검증, 재고, 저장과 알림 단계를 추적합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="internal" data-page="issues" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="issues-title">
+      <div class="container hero-grid"><div><p class="eyebrow">INTERNAL / ISSUE FLOW</p><h1 id="issues-title">발급 처리 흐름</h1><p class="hero-copy">하나의 요청이 받은 순간부터 저장과 알림까지 이동한 경로를 살펴보세요.</p></div><form class="compact-form" data-demo-form data-demo-message="REQ-20260821-8F3A21 처리 흐름을 조회했습니다."><div class="field-group"><label for="issue-query">요청 식별자</label><input id="issue-query" name="query" type="search" value="REQ-20260821-8F3A21" required></div><button class="button button--primary" type="submit">흐름 조회</button></form></div>
+    </section>
+
+    <section class="section" aria-labelledby="issue-summary-title">
+      <div class="container"><article class="color-block color-block--lilac"><div class="section-head section-head--compact"><div><p class="eyebrow">REQUEST FOUND</p><h2 id="issue-summary-title">REQ-20260821-8F3A21</h2><p>2026.08.21 09:14:22 · 사용자 #1 · 쿠폰 #10</p></div><div><span class="status status--open">처리 완료</span><strong class="duration">184ms</strong></div></div><dl class="metric-grid metric-grid--four"><div class="metric"><dt>멱등성</dt><dd>통과<small>중복 없음</small></dd></div><div class="metric"><dt>재고 순번</dt><dd>216<small>잔여 284장</small></dd></div><div class="metric"><dt>발급 번호</dt><dd>1042<small>상태 ISSUED</small></dd></div><div class="metric"><dt>알림</dt><dd>SENT<small>Push 전송</small></dd></div></dl></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="pipeline-title">
+      <div class="container">
+        <div class="section-head"><div><p class="eyebrow">PROCESS PIPELINE</p><h2 id="pipeline-title">처리 단계</h2></div><button class="button button--secondary" type="button" data-demo-action="copy-request-id" data-demo-message="요청 식별자를 복사했습니다.">Request ID 복사</button></div>
+        <ol class="pipeline">
+          <li class="is-complete"><span class="pipeline-index">01</span><div><h3>요청 수신</h3><p>요청 해시 생성 · 12ms</p></div><time datetime="2026-08-21T09:14:22.184">09:14:22.184</time></li>
+          <li class="is-complete"><span class="pipeline-index">02</span><div><h3>멱등성 검증</h3><p>새 요청 확인 · 18ms</p></div><span class="status status--open">SUCCEEDED</span></li>
+          <li class="is-complete"><span class="pipeline-index">03</span><div><h3>재고 선점</h3><p>잔여 285 → 284 · 31ms</p></div><span class="caption">SEQUENCE 216</span></li>
+          <li class="is-complete"><span class="pipeline-index">04</span><div><h3>발급 저장</h3><p>CouponIssue #1042 · 89ms</p></div><span class="status status--open">ISSUED</span></li>
+          <li class="is-complete"><span class="pipeline-index">05</span><div><h3>알림 전송</h3><p>Push 채널 · 34ms</p></div><span class="status status--open">SENT</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="issue-record-title">
+      <div class="container">
+        <div class="section-head"><div><p class="eyebrow">RECORD DETAILS</p><h2 id="issue-record-title">처리 원장</h2></div><a class="text-link" href="failures.html">실패 처리 보기</a></div>
+        <div class="card-grid card-grid--two">
+          <article class="hairline-card"><div class="card-topline"><h3>IdempotencyKey</h3><span class="status status--open">SUCCEEDED</span></div><dl class="detail-list"><div><dt>key</dt><dd>issue:10:1:8f3a21</dd></div><div><dt>request hash</dt><dd>sha256:c7a9…4d21</dd></div><div><dt>expires at</dt><dd>09:14:52.184</dd></div></dl></article>
+          <article class="hairline-card"><div class="card-topline"><h3>IssueMessage</h3><span class="status status--open">CONSUMED</span></div><dl class="detail-list"><div><dt>message ID</dt><dd>#88412</dd></div><div><dt>topic</dt><dd>coupon.issue.v1</dd></div><div><dt>retry count</dt><dd>0</dd></div></dl></article>
+          <article class="hairline-card"><div class="card-topline"><h3>CouponIssue</h3><span class="status status--open">ISSUED</span></div><dl class="detail-list"><div><dt>issue ID</dt><dd>#1042</dd></div><div><dt>coupon code</dt><dd>PET-7K3M-82QD</dd></div><div><dt>expires at</dt><dd>2026.08.28 23:59</dd></div></dl></article>
+          <article class="hairline-card"><div class="card-topline"><h3>NotificationLog</h3><span class="status status--open">SENT</span></div><dl class="detail-list"><div><dt>channel</dt><dd>PUSH</dd></div><div><dt>recipient</dt><dd>user:1</dd></div><div><dt>sent at</dt><dd>09:14:22.368</dd></div></dl></article>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

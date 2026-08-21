@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>정합성 검증 | PetCoupon</title>
+  <meta name="description" content="쿠폰 재고와 발급 원장, 메시지 처리 결과의 정합성을 검증합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="internal" data-page="verification" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="verification-title">
+      <div class="container hero-grid"><div><p class="eyebrow">INTERNAL / VERIFICATION</p><h1 id="verification-title">정합성 검증</h1><p class="hero-copy">재고, 발급 원장과 메시지 처리 결과가 같은 사실을 가리키는지 확인하세요.</p></div><form class="compact-form compact-form--wide" data-demo-form data-demo-message="선택한 범위의 정합성 검증을 완료했습니다."><div class="field-group"><label for="verification-scope">검증 범위</label><select id="verification-scope" name="scope"><option value="all">전체 원장</option><option value="stock">쿠폰 재고</option><option value="issue">발급 원장</option><option value="message">메시지 처리</option></select></div><div class="field-group"><label for="verification-date">기준일</label><input id="verification-date" name="date" type="date" value="2026-08-21"></div><button class="button button--primary" type="submit">검증 실행</button></form></div>
+    </section>
+
+    <section class="section" aria-labelledby="verification-summary-title">
+      <div class="container"><article class="color-block color-block--mint"><div class="section-head section-head--compact"><div><p class="eyebrow">LATEST RUN</p><h2 id="verification-summary-title">대부분의 원장이 일치합니다.</h2><p>마지막 검증 2026.08.21 11:30 · 전체 범위</p></div><span class="status status--warning">2건 확인 필요</span></div><dl class="metric-grid metric-grid--four"><div class="metric"><dt>검사 대상</dt><dd>1,248<small>쿠폰·발급·메시지</small></dd></div><div class="metric"><dt>일치</dt><dd>1,246<small>99.84%</small></dd></div><div class="metric"><dt>불일치</dt><dd>2<small>재고 1 · 메시지 1</small></dd></div><div class="metric"><dt>검증 시간</dt><dd>2.8s<small>직전 대비 −0.4s</small></dd></div></dl></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="verification-record-title">
+      <div class="container" data-filter-group>
+        <div class="section-head"><div><p class="eyebrow">VERIFICATION RECORDS</p><h2 id="verification-record-title">검증 결과</h2><p><span data-result-count aria-live="polite">4개</span>의 대표 항목</p></div><div class="filter-bar" role="group" aria-label="정합성 검증 결과 필터"><button class="filter-pill is-active" type="button" data-filter-value="all" aria-pressed="true" aria-controls="verification-records verification-cards">전체</button><button class="filter-pill" type="button" data-filter-value="matched" aria-pressed="false" aria-controls="verification-records verification-cards">일치</button><button class="filter-pill" type="button" data-filter-value="mismatch" aria-pressed="false" aria-controls="verification-records verification-cards">불일치</button></div></div>
+
+        <div id="verification-records" class="table-shell desktop-table"><table><caption>정합성 검증 결과</caption><thead><tr><th scope="col">검증 항목</th><th scope="col">기대 값</th><th scope="col">실제 값</th><th scope="col">결과</th><th scope="col">확인</th></tr></thead><tbody>
+          <tr data-filter-item data-status="matched" data-record-id="verify-stock-10"><td><strong>쿠폰 #10 재고</strong><small>Redis ↔ 발급 원장</small></td><td>284</td><td>284</td><td><span class="status status--open">일치</span></td><td><button type="button" data-demo-action="inspect-verification" data-demo-message="쿠폰 #10 재고 검증 상세를 열었습니다." aria-label="쿠폰 10 재고 검증 상세 확인">상세</button></td></tr>
+          <tr data-filter-item data-status="matched" data-record-id="verify-issue-1042"><td><strong>발급 #1042 상태</strong><small>CouponIssue ↔ History</small></td><td>ISSUED</td><td>ISSUED</td><td><span class="status status--open">일치</span></td><td><button type="button" data-demo-action="inspect-verification" data-demo-message="발급 #1042 상태 검증 상세를 열었습니다." aria-label="발급 1042 상태 검증 상세 확인">상세</button></td></tr>
+          <tr data-filter-item data-status="mismatch" data-record-id="verify-stock-11"><td><strong>쿠폰 #11 재고</strong><small>Redis ↔ 발급 원장</small></td><td>128</td><td>127</td><td><span class="status status--danger">불일치</span></td><td><button type="button" data-demo-action="recheck-verification" data-demo-message="쿠폰 #11 재고 재검증을 예약했습니다." aria-label="쿠폰 11 재고 다시 검증">재검증</button></td></tr>
+          <tr data-filter-item data-status="mismatch" data-record-id="verify-message-88419"><td><strong>메시지 #88419</strong><small>IssueMessage ↔ CouponIssue</small></td><td>CONSUMED</td><td>FAILED</td><td><span class="status status--danger">불일치</span></td><td><button type="button" data-demo-action="recheck-verification" data-demo-message="메시지 #88419 재검증을 예약했습니다." aria-label="메시지 88419 다시 검증">재검증</button></td></tr>
+        </tbody></table></div>
+
+        <div id="verification-cards" class="mobile-cards" aria-label="정합성 검증 결과 모바일 목록">
+          <article class="hairline-card" data-filter-item data-status="matched" data-record-id="verify-stock-10"><div class="card-topline"><span class="caption">COUPON 10 / STOCK</span><span class="status status--open">일치</span></div><h3>기대 284 · 실제 284</h3><p>Redis ↔ 발급 원장</p><button type="button" data-demo-action="inspect-verification" data-demo-message="쿠폰 #10 재고 검증 상세를 열었습니다." aria-label="쿠폰 10 재고 검증 상세 확인">상세</button></article>
+          <article class="hairline-card" data-filter-item data-status="matched" data-record-id="verify-issue-1042"><div class="card-topline"><span class="caption">ISSUE 1042 / STATUS</span><span class="status status--open">일치</span></div><h3>기대 ISSUED · 실제 ISSUED</h3><p>CouponIssue ↔ History</p><button type="button" data-demo-action="inspect-verification" data-demo-message="발급 #1042 상태 검증 상세를 열었습니다." aria-label="발급 1042 상태 검증 상세 확인">상세</button></article>
+          <article class="hairline-card" data-filter-item data-status="mismatch" data-record-id="verify-stock-11"><div class="card-topline"><span class="caption">COUPON 11 / STOCK</span><span class="status status--danger">불일치</span></div><h3>기대 128 · 실제 127</h3><p>Redis ↔ 발급 원장</p><button type="button" data-demo-action="recheck-verification" data-demo-message="쿠폰 #11 재고 재검증을 예약했습니다." aria-label="쿠폰 11 재고 다시 검증">재검증</button></article>
+          <article class="hairline-card" data-filter-item data-status="mismatch" data-record-id="verify-message-88419"><div class="card-topline"><span class="caption">MESSAGE 88419</span><span class="status status--danger">불일치</span></div><h3>기대 CONSUMED · 실제 FAILED</h3><p>IssueMessage ↔ CouponIssue</p><button type="button" data-demo-action="recheck-verification" data-demo-message="메시지 #88419 재검증을 예약했습니다." aria-label="메시지 88419 다시 검증">재검증</button></article>
+        </div>
+        <div class="empty-state" data-filter-empty role="status" hidden><h3>선택한 결과가 없습니다.</h3><p>다른 결과 상태를 선택해 주세요.</p></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="verification-guide-title">
+      <div class="container editorial-row"><div><p class="eyebrow">FOLLOW-UP</p><h2 id="verification-guide-title">불일치 처리 순서</h2></div><ol class="numbered-list"><li><strong>원본 확인</strong><span>각 원장의 생성 시각과 마지막 변경 이력을 확인합니다.</span></li><li><strong>재검증</strong><span>일시적인 지연인지 같은 범위로 다시 비교합니다.</span></li><li><strong>운영 조치</strong><span>차이가 유지되면 실패 흐름과 담당자 기록을 연결합니다.</span></li></ol></div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>쿠폰 관리 | PetCoupon</title>
+  <meta name="description" content="PetCoupon 쿠폰의 혜택, 발급 기간과 재고를 관리합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="admin" data-page="coupons" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="admin-coupons-title">
+      <div class="container hero-grid"><div><p class="eyebrow">ADMIN / COUPONS</p><h1 id="admin-coupons-title">쿠폰 목록</h1><p class="hero-copy">할인 조건과 발급 기간, 남은 재고를 빠르게 확인하세요.</p></div><div class="hero-actions"><a class="button button--primary" href="coupon-form.html">새 쿠폰</a><a class="button button--secondary" href="admin.html">관리자 홈</a></div></div>
+    </section>
+
+    <section class="section" aria-labelledby="coupon-stock-note-title">
+      <div class="container"><article class="color-block color-block--coral story-split"><div><p class="eyebrow">STOCK SIGNAL</p><h2 id="coupon-stock-note-title">산책용품 할인 쿠폰,<br>재고 128장.</h2></div><div class="story-copy"><p>발급 종료까지 나흘 남았습니다. 소진 속도와 이벤트 노출 상태를 함께 확인해 주세요.</p><a class="button button--primary" href="coupon-form.html?id=11">쿠폰 검토</a></div></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="coupon-record-title">
+      <div class="container" data-filter-group>
+        <div class="section-head"><div><p class="eyebrow">COUPON RECORDS</p><h2 id="coupon-record-title">등록 쿠폰</h2><p><span data-result-count aria-live="polite">5개</span>의 쿠폰</p></div><div class="filter-bar" role="group" aria-label="관리 쿠폰 상태 필터"><button class="filter-pill is-active" type="button" data-filter-value="all" aria-pressed="true" aria-controls="admin-coupon-records admin-coupon-cards">전체</button><button class="filter-pill" type="button" data-filter-value="issuing" aria-pressed="false" aria-controls="admin-coupon-records admin-coupon-cards">발급 중</button><button class="filter-pill" type="button" data-filter-value="ready" aria-pressed="false" aria-controls="admin-coupon-records admin-coupon-cards">발급 예정</button><button class="filter-pill" type="button" data-filter-value="ended" aria-pressed="false" aria-controls="admin-coupon-records admin-coupon-cards">종료</button></div></div>
+
+        <div id="admin-coupon-records" class="table-shell desktop-table"><table><caption>관리 쿠폰 목록</caption><thead><tr><th scope="col">쿠폰</th><th scope="col">이벤트</th><th scope="col">혜택</th><th scope="col">재고</th><th scope="col">상태</th><th scope="col">관리</th></tr></thead><tbody>
+          <tr data-filter-item data-status="issuing" data-record-id="coupon-10"><td><strong>여름 정률 쿠폰</strong><small>COUPON 10</small></td><td>여름 케어 위크</td><td>20% · 최대 1만원</td><td>284 / 500</td><td><span class="status status--open">발급 중</span></td><td><div class="table-actions"><a class="table-link" href="coupon-form.html?id=10">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="여름 정률 쿠폰 삭제 확인을 열었습니다." aria-label="여름 정률 쿠폰 삭제">삭제</button></div></td></tr>
+          <tr data-filter-item data-status="issuing" data-record-id="coupon-11"><td><strong>산책용품 할인 쿠폰</strong><small>COUPON 11</small></td><td>함께 걷는 계절</td><td>7,000원</td><td>128 / 1,000</td><td><span class="status status--open">발급 중</span></td><td><div class="table-actions"><a class="table-link" href="coupon-form.html?id=11">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="산책용품 할인 쿠폰 삭제 확인을 열었습니다." aria-label="산책용품 할인 쿠폰 삭제">삭제</button></div></td></tr>
+          <tr data-filter-item data-status="ready" data-record-id="coupon-12"><td><strong>건강검진 할인 쿠폰</strong><small>COUPON 12</small></td><td>건강검진 데이</td><td>15% · 최대 1만5천원</td><td>300 / 300</td><td><span class="status status--scheduled">발급 예정</span></td><td><div class="table-actions"><a class="table-link" href="coupon-form.html?id=12">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="건강검진 할인 쿠폰 삭제 확인을 열었습니다." aria-label="건강검진 할인 쿠폰 삭제">삭제</button></div></td></tr>
+          <tr data-filter-item data-status="ready" data-record-id="coupon-13"><td><strong>가을 사료 할인 쿠폰</strong><small>COUPON 13</small></td><td>가을 입맛 찾기</td><td>10%</td><td>400 / 400</td><td><span class="status status--scheduled">발급 예정</span></td><td><div class="table-actions"><a class="table-link" href="coupon-form.html?id=13">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="가을 사료 할인 쿠폰 삭제 확인을 열었습니다." aria-label="가을 사료 할인 쿠폰 삭제">삭제</button></div></td></tr>
+          <tr data-filter-item data-status="ended" data-record-id="coupon-9"><td><strong>첫 구매 쿠폰</strong><small>COUPON 09</small></td><td>웰컴 펫데이</td><td>5,000원</td><td>0 / 500</td><td><span class="status status--closed">종료</span></td><td><div class="table-actions"><a class="table-link" href="coupon-form.html?id=9">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="첫 구매 쿠폰 삭제 확인을 열었습니다." aria-label="첫 구매 쿠폰 삭제">삭제</button></div></td></tr>
+        </tbody></table></div>
+
+        <div id="admin-coupon-cards" class="mobile-cards" aria-label="관리 쿠폰 모바일 목록">
+          <article class="hairline-card" data-filter-item data-status="issuing" data-record-id="coupon-10"><div class="card-topline"><span class="caption">COUPON 10</span><span class="status status--open">발급 중</span></div><h3>여름 정률 쿠폰</h3><p>여름 케어 위크 · 20% · 재고 284/500</p><div class="card-actions"><a href="coupon-form.html?id=10">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="여름 정률 쿠폰 삭제 확인을 열었습니다." aria-label="여름 정률 쿠폰 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="issuing" data-record-id="coupon-11"><div class="card-topline"><span class="caption">COUPON 11</span><span class="status status--open">발급 중</span></div><h3>산책용품 할인 쿠폰</h3><p>함께 걷는 계절 · 7,000원 · 재고 128/1,000</p><div class="card-actions"><a href="coupon-form.html?id=11">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="산책용품 할인 쿠폰 삭제 확인을 열었습니다." aria-label="산책용품 할인 쿠폰 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="ready" data-record-id="coupon-12"><div class="card-topline"><span class="caption">COUPON 12</span><span class="status status--scheduled">발급 예정</span></div><h3>건강검진 할인 쿠폰</h3><p>건강검진 데이 · 15% · 재고 300/300</p><div class="card-actions"><a href="coupon-form.html?id=12">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="건강검진 할인 쿠폰 삭제 확인을 열었습니다." aria-label="건강검진 할인 쿠폰 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="ready" data-record-id="coupon-13"><div class="card-topline"><span class="caption">COUPON 13</span><span class="status status--scheduled">발급 예정</span></div><h3>가을 사료 할인 쿠폰</h3><p>가을 입맛 찾기 · 10% · 재고 400/400</p><div class="card-actions"><a href="coupon-form.html?id=13">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="가을 사료 할인 쿠폰 삭제 확인을 열었습니다." aria-label="가을 사료 할인 쿠폰 삭제">삭제</button></div></article>
+          <article class="hairline-card" data-filter-item data-status="ended" data-record-id="coupon-9"><div class="card-topline"><span class="caption">COUPON 09</span><span class="status status--closed">종료</span></div><h3>첫 구매 쿠폰</h3><p>웰컴 펫데이 · 5,000원 · 재고 0/500</p><div class="card-actions"><a href="coupon-form.html?id=9">수정</a><button type="button" data-demo-action="delete-coupon" data-demo-message="첫 구매 쿠폰 삭제 확인을 열었습니다." aria-label="첫 구매 쿠폰 삭제">삭제</button></div></article>
+        </div>
+        <div class="empty-state" data-filter-empty role="status" hidden><h3>해당 상태의 쿠폰이 없습니다.</h3><p>다른 상태를 선택해 주세요.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

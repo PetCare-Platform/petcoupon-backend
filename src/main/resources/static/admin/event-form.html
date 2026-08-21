@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>이벤트 만들기 | PetCoupon</title>
+  <meta name="description" content="PetCoupon 이벤트의 기본 정보와 공개 기간을 등록합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="admin" data-page="event-form" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="event-form-page-title">
+      <div class="container"><a class="back-link" href="events.html"><span aria-hidden="true">←</span> 이벤트 목록</a><p class="eyebrow">ADMIN / NEW EVENT</p><h1 id="event-form-page-title">이벤트 만들기</h1><p class="hero-copy">고객에게 보여줄 이름과 설명, 정확한 공개 일정을 입력하세요.</p></div>
+    </section>
+
+    <section class="section" aria-labelledby="event-form-note-title">
+      <div class="container"><article class="color-block color-block--lime story-split"><div><p class="eyebrow">EDITOR'S CHECKLIST</p><h2 id="event-form-note-title">좋은 이벤트는<br>일정부터 명확해요.</h2></div><div class="story-copy"><ul class="bullet-list"><li>고객이 혜택을 바로 이해하는 이름을 사용하세요.</li><li>오픈과 종료 시각 사이에 충분한 참여 기간을 두세요.</li><li>저장 후 연결 쿠폰을 별도로 등록하세요.</li></ul></div></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="event-fields-title">
+      <div class="container container--form">
+        <div class="section-head"><div><p class="eyebrow">EVENT DETAILS</p><h2 id="event-fields-title">이벤트 정보</h2></div><span class="required-note"><span aria-hidden="true">*</span> 필수 입력</span></div>
+        <form class="form-panel" data-demo-form data-demo-message="이벤트 입력 내용을 저장했습니다.">
+          <fieldset><legend>기본 정보</legend><div class="form-grid">
+            <div class="field-group field-group--full"><label for="event-name">이벤트 이름 <span aria-hidden="true">*</span></label><input id="event-name" name="name" type="text" value="가을 입맛 찾기" maxlength="100" aria-describedby="event-name-help" required><small id="event-name-help">목록과 상세 화면에 함께 표시됩니다.</small></div>
+            <div class="field-group field-group--full"><label for="event-description">이벤트 설명 <span aria-hidden="true">*</span></label><textarea id="event-description" name="description" rows="5" maxlength="500" aria-describedby="event-description-help" required>환절기 반려동물의 입맛을 위한 사료와 영양 간식 할인 이벤트입니다.</textarea><small id="event-description-help">혜택과 참여 방법을 간결하게 설명해 주세요.</small></div>
+          </div></fieldset>
+          <fieldset><legend>공개 일정</legend><div class="form-grid">
+            <div class="field-group"><label for="event-open-at">오픈 시각 <span aria-hidden="true">*</span></label><input id="event-open-at" name="openAt" type="datetime-local" value="2026-09-01T09:00" required></div>
+            <div class="field-group"><label for="event-close-at">종료 시각 <span aria-hidden="true">*</span></label><input id="event-close-at" name="closeAt" type="datetime-local" value="2026-09-14T23:59" required></div>
+          </div></fieldset>
+          <aside class="form-note"><strong>저장 후 상태</strong><p>새 이벤트는 예정 상태로 저장되며, 연결할 쿠폰은 쿠폰 등록 화면에서 추가할 수 있습니다.</p></aside>
+          <div class="form-actions"><button class="button button--primary" type="submit">이벤트 저장</button><a class="button button--secondary" href="events.html">취소</a></div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+

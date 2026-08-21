@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내 쿠폰 | PetCoupon</title>
+  <meta name="description" content="사용 가능한 쿠폰과 지난 쿠폰을 상태별로 확인합니다.">
+  <link rel="stylesheet" href="../css/common.css">
+  <script src="../js/common.js" defer></script>
+</head>
+<body data-area="user" data-page="my-coupons" data-root="../">
+  <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+  <div data-site-header></div>
+
+  <main id="main-content" class="page-shell" tabindex="-1">
+    <section class="page-hero" aria-labelledby="coupon-list-page-title">
+      <div class="container hero-grid">
+        <div><p class="eyebrow">USER / MY COUPONS</p><h1 id="coupon-list-page-title">내 쿠폰을<br>한곳에.</h1><p class="hero-copy">김하늘 님이 받은 혜택의 상태와 사용 기한을 확인하세요.</p></div>
+        <div class="hero-stat"><span class="caption">AVAILABLE NOW</span><strong>2</strong><p>지금 사용할 수 있는 쿠폰</p></div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="coupon-note-title">
+      <div class="container"><article class="color-block color-block--cream story-split"><div><p class="eyebrow">EXPIRING SOON</p><h2 id="coupon-note-title">산책용품 할인 쿠폰이<br>곧 만료돼요.</h2></div><div class="story-copy"><p>8월 25일 15:22까지 사용할 수 있어요. 가까운 제휴 매장에서 산책 준비물을 챙겨보세요.</p><a class="button button--primary" href="coupon-detail.html?id=1038">쿠폰 확인하기</a></div></article></div>
+    </section>
+
+    <section class="section" aria-labelledby="my-coupon-list-title">
+      <div class="container" data-filter-group>
+        <div class="section-head">
+          <div><p class="eyebrow">COUPON WALLET</p><h2 id="my-coupon-list-title">보유 쿠폰</h2><p><span data-result-count aria-live="polite">4개</span>의 쿠폰이 있어요.</p></div>
+          <div class="filter-bar" role="group" aria-label="보유 쿠폰 상태 필터">
+            <button class="filter-pill is-active" type="button" data-filter-value="all" aria-pressed="true" aria-controls="my-coupon-grid">전체</button>
+            <button class="filter-pill" type="button" data-filter-value="usable" aria-pressed="false" aria-controls="my-coupon-grid">사용 가능</button>
+            <button class="filter-pill" type="button" data-filter-value="used" aria-pressed="false" aria-controls="my-coupon-grid">사용 완료</button>
+            <button class="filter-pill" type="button" data-filter-value="expired" aria-pressed="false" aria-controls="my-coupon-grid">만료</button>
+          </div>
+        </div>
+
+        <div id="my-coupon-grid" class="card-grid card-grid--two">
+          <article class="hairline-card coupon-card" data-filter-item data-status="usable" data-record-id="issue-1042">
+            <div class="card-topline"><span class="status status--open">사용 가능</span><span class="caption">ISSUE 1042</span></div><p class="event-label">반려동물 여름 케어 위크</p><h3>여름 정률 쿠폰</h3><strong class="benefit">20%</strong><p>3만원 이상 구매 · 최대 1만원 할인</p><div class="card-bottom"><time datetime="2026-08-28T23:59">8월 28일 23:59까지</time><a class="card-link" href="coupon-detail.html?id=1042">상세 보기 →</a></div>
+          </article>
+          <article class="hairline-card coupon-card" data-filter-item data-status="usable" data-record-id="issue-1038">
+            <div class="card-topline"><span class="status status--warning">곧 만료</span><span class="caption">ISSUE 1038</span></div><p class="event-label">함께 걷는 계절</p><h3>산책용품 할인 쿠폰</h3><strong class="benefit">7,000원</strong><p>2만원 이상 산책용품 구매</p><div class="card-bottom"><time datetime="2026-08-25T15:22">8월 25일 15:22까지</time><a class="card-link" href="coupon-detail.html?id=1038">상세 보기 →</a></div>
+          </article>
+          <article class="hairline-card coupon-card" data-filter-item data-status="used" data-record-id="issue-1029">
+            <div class="card-topline"><span class="status status--used">사용 완료</span><span class="caption">ISSUE 1029</span></div><p class="event-label">웰컴 펫데이</p><h3>웰컴 케어 쿠폰</h3><strong class="benefit">10%</strong><p>3만원 이상 기본 케어 · 최대 8천원 할인</p><div class="card-bottom"><time datetime="2026-07-22T17:40">7월 22일 사용</time><a class="card-link" href="coupon-detail.html?id=1029">이력 보기 →</a></div>
+          </article>
+          <article class="hairline-card coupon-card" data-filter-item data-status="expired" data-record-id="issue-1011">
+            <div class="card-topline"><span class="status status--closed">만료</span><span class="caption">ISSUE 1011</span></div><p class="event-label">웰컴 펫데이</p><h3>첫 구매 쿠폰</h3><strong class="benefit">5,000원</strong><p>2만원 이상 첫 구매 전용</p><div class="card-bottom"><time datetime="2026-07-18T23:59">7월 18일 만료</time><a class="card-link" href="coupon-detail.html?id=1011">이력 보기 →</a></div>
+          </article>
+        </div>
+        <div class="empty-state" data-filter-empty role="status" hidden><h3>해당 상태의 쿠폰이 없어요.</h3><p>다른 상태를 선택하거나 새로운 이벤트를 둘러보세요.</p><a class="button button--secondary" href="../index.html#event-list">이벤트 보기</a></div>
+      </div>
+    </section>
+  </main>
+
+  <div data-site-footer></div>
+  <div class="toast" data-toast role="status" aria-live="polite" aria-atomic="true" hidden></div>
+</body>
+</html>
+
+
