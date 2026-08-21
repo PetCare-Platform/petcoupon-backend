@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.service;
 
+import java.time.LocalDateTime;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,7 +38,7 @@ public class CouponIssueCancelServiceImpl implements CouponIssueCancelService {
         Long couponId = couponIssue.getCoupon().getCouponId();
 
         int updatedRows = couponIssueRepository.cancelUsageIfMatches(
-                couponIssueId, IssueStatus.USED, IssueStatus.ISSUED
+                couponIssueId, IssueStatus.USED, IssueStatus.ISSUED, LocalDateTime.now()
         );
 
         if (updatedRows == 0) {

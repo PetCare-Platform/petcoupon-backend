@@ -33,10 +33,12 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	           SET c.status = :toStatus, c.usedAt = NULL
 	         WHERE c.couponIssueId = :couponIssueId
 	           AND c.status = :fromStatus
+	           AND c.expiresAt > :now
 	        """)
 	int cancelUsageIfMatches(
 	        @Param("couponIssueId") Long couponIssueId,
 	        @Param("fromStatus") IssueStatus fromStatus,
-	        @Param("toStatus") IssueStatus toStatus
+	        @Param("toStatus") IssueStatus toStatus,
+	        @Param("now") LocalDateTime now
 	);
 }

@@ -59,7 +59,7 @@ class CouponIssueCancelServiceImplTest {
 
         when(couponIssueRepository.findById(couponIssueId)).thenReturn(Optional.of(couponIssue));
         when(couponIssueRepository.cancelUsageIfMatches(
-                eq(couponIssueId), eq(IssueStatus.USED), eq(IssueStatus.ISSUED)
+                eq(couponIssueId), eq(IssueStatus.USED), eq(IssueStatus.ISSUED), any(LocalDateTime.class)
         )).thenReturn(1);
 
         couponIssueCancelService.cancelUsage(couponIssueId, userId);
@@ -120,7 +120,38 @@ class CouponIssueCancelServiceImplTest {
 
         when(couponIssueRepository.findById(couponIssueId)).thenReturn(Optional.of(couponIssue));
         when(couponIssueRepository.cancelUsageIfMatches(
-                eq(couponIssueId), eq(IssueStatus.USED), eq(IssueStatus.ISSUED)
+                eq(couponIssueId), eq(IssueStatus.USED), eq(IssueStatus.ISSUED), any(LocalDateTime.class)
+        )).thenReturn(0);
+
+        assertThatThrownBy(() -> couponIssueCancelService.cancelUsage(couponIssueId, userId))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.INVALID_ISSUE_STATUS);
+
+        verify(couponIssueHistoryRepository, never()).save(any());
+    }
+
+    @Test
+    void cancelUsageThrowsExceptionWhenAlreadyExpired() {
+        Long couponIssueId = 1L;
+        Long userId = 100L;
+
+        AppUser owner = mock(AppUser.class);
+        when(owner.getUserId()).thenReturn(userId);
+
+        Coupon coupon = mock(Coupon.class);
+        when(coupon.getCouponId()).thenReturn(10L);
+
+        CouponIssue couponIssue = CouponIssue.builder()
+                .coupon(coupon)
+                .user(owner)
+                .status(IssueStatus.USED)
+                .expiresAt(LocalDateTime.now().minusDays(1))
+                .build();
+
+        when(couponIssueRepository.findById(couponIssueId)).thenReturn(Optional.of(couponIssue));
+        when(couponIssueRepository.cancelUsageIfMatches(
+                eq(couponIssueId), eq(IssueStatus.USED), eq(IssueStatus.ISSUED), any(LocalDateTime.class)
         )).thenReturn(0);
 
         assertThatThrownBy(() -> couponIssueCancelService.cancelUsage(couponIssueId, userId))
