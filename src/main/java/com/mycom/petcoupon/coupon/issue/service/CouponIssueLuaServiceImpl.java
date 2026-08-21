@@ -29,7 +29,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     }
     
     @Override
-    public CouponIssueLuaResultStatus issue(Long couponId, Long userId) {
+    public CouponIssueLuaResultStatus issue(Long couponId, Long userId, String requestId) {
     	
     	Long resultCode = redisTemplate.execute(
     		couponIssueLuaScript,
@@ -37,7 +37,8 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     			stockKey(couponId), 
     			applicantsKey(couponId)
     		),
-    		userId.toString()
+    		userId.toString(),
+    		requestId
     	);
 
     	if (resultCode == null) {

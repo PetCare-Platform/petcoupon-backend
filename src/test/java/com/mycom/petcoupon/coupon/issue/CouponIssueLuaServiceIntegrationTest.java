@@ -60,23 +60,27 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L
+            10L,
+            "request-1"
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SUCCESS);
         assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
-        assertThat(redisTemplate.opsForSet().isMember(APPLICANTS_KEY, "10")).isTrue();
+        assertThat(
+        	    redisTemplate.opsForHash().get(APPLICANTS_KEY, "10")
+        ).isEqualTo("request-1");
     }
 
     @Test
     void 동일_사용자가_다시_신청하면_중복으로_처리한다() {
         redisTemplate.opsForValue().set(STOCK_KEY, "10");
 
-        couponIssueLuaService.issue(COUPON_ID, 10L);
+        couponIssueLuaService.issue(COUPON_ID, 10L, "request-1");
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L
+            10L, 
+            "request-2"
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.ALREADY_APPLIED);
@@ -89,15 +93,15 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L
+            10L,
+            "request-1"
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SOLD_OUT);
     }
 
     @Test
-    void 동시_요청이_재고보다_많아도_재고를_초과해_발급하지_않는다()
-        throws Exception {
+    void 동시_요청이_재고보다_많아도_재고를_초과해_발급하지_않는다() throws Exception {
 
         int stock = 30;
         int requestCount = 100;
@@ -118,7 +122,8 @@ public class CouponIssueLuaServiceIntegrationTest {
 
                     return couponIssueLuaService.issue(
                         COUPON_ID,
-                        userId
+                        userId,
+                        "request-" + userId
                     );
                 }));
             }
@@ -135,10 +140,30 @@ public class CouponIssueLuaServiceIntegrationTest {
 
             assertThat(successCount).isEqualTo(stock);
             assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
-            assertThat(redisTemplate.opsForSet().size(APPLICANTS_KEY)).isEqualTo((long) stock);
+            assertThat(redisTemplate.opsForHash().size(APPLICANTS_KEY)).isEqualTo((long) stock);
 
         } finally {
             executor.shutdownNow();
         }
+    }
+    
+    @Test
+    void 같은_요청이_재시도되면_동일_요청_재시도로_처리한다() {
+        redisTemplate.opsForValue().set(STOCK_KEY, "10");
+
+        couponIssueLuaService.issue(
+            COUPON_ID,
+            10L,
+            "request-1"
+        );
+
+        CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
+            COUPON_ID,
+            10L,
+            "request-1"
+        );
+
+        assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SAME_REQUEST_RETRY);
+        assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("9");
     }
 }
