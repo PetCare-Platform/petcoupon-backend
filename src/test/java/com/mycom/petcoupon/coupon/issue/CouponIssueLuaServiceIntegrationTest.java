@@ -16,19 +16,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 
 @SpringBootTest(properties = {
-	"coupon.issue.stream.enabled=false",
-	"coupon.issue.stream.key=coupon:issue:stream:lua-test"
+	"coupon.issue.stream.enabled=false"
 })
 public class CouponIssueLuaServiceIntegrationTest {
 
 	private static final Long COUPON_ID = 1L;
-    private static final String STOCK_KEY = "coupon:issue:stock:1";
-    private static final String APPLICANTS_KEY = "coupon:issue:applicants:1";
+	private static final String STOCK_KEY = "coupon:issue:stock:{1}";
+	private static final String APPLICANTS_KEY = "coupon:issue:applicants:{1}";
 
     @Autowired
     private CouponIssueLuaService couponIssueLuaService;
@@ -36,63 +34,53 @@ public class CouponIssueLuaServiceIntegrationTest {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
-    @Autowired
-    private CouponIssueStreamProperties streamProperties;
-
     @BeforeEach
     void setUp() {
-        redisTemplate.delete(
-            List.of(
-                STOCK_KEY,
-                APPLICANTS_KEY,
-                streamProperties.getKey()
-            )
-        );
+    	redisTemplate.delete(
+    		List.of(
+    			STOCK_KEY,
+    			APPLICANTS_KEY
+    		)
+    	);
     }
 
     @AfterEach
     void tearDown() {
-        redisTemplate.delete(
-            List.of(
-                STOCK_KEY,
-                APPLICANTS_KEY,
-                streamProperties.getKey()
-            )
+    	redisTemplate.delete(
+        	List.of(
+        		STOCK_KEY,
+        		APPLICANTS_KEY
+        	)
         );
     }
 
     @Test
-    void 재고가_있으면_발급_요청을_등록하고_Stream에_메시지를_발행한다() {
+    void 재고가_있으면_재고를_차감하고_신청자를_등록한다() {
         redisTemplate.opsForValue().set(STOCK_KEY, "1");
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L,
-            "request-1"
+            10L
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SUCCESS);
         assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
         assertThat(redisTemplate.opsForSet().isMember(APPLICANTS_KEY, "10")).isTrue();
-        assertThat(redisTemplate.opsForStream().size(streamProperties.getKey())).isEqualTo(1L);
     }
 
     @Test
     void 동일_사용자가_다시_신청하면_중복으로_처리한다() {
         redisTemplate.opsForValue().set(STOCK_KEY, "10");
 
-        couponIssueLuaService.issue(COUPON_ID, 10L, "request-1");
+        couponIssueLuaService.issue(COUPON_ID, 10L);
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L,
-            "request-2"
+            10L
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.ALREADY_APPLIED);
         assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("9");
-        assertThat(redisTemplate.opsForStream().size(streamProperties.getKey()))
-            .isEqualTo(1L);
     }
 
     @Test
@@ -101,12 +89,10 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
             COUPON_ID,
-            10L,
-            "request-1"
+            10L
         );
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SOLD_OUT);
-        assertThat(redisTemplate.opsForStream().size(streamProperties.getKey())).isEqualTo(0L);
     }
 
     @Test
@@ -132,8 +118,7 @@ public class CouponIssueLuaServiceIntegrationTest {
 
                     return couponIssueLuaService.issue(
                         COUPON_ID,
-                        userId,
-                        "request-" + userId
+                        userId
                     );
                 }));
             }
@@ -151,7 +136,6 @@ public class CouponIssueLuaServiceIntegrationTest {
             assertThat(successCount).isEqualTo(stock);
             assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
             assertThat(redisTemplate.opsForSet().size(APPLICANTS_KEY)).isEqualTo((long) stock);
-            assertThat(redisTemplate.opsForStream().size(streamProperties.getKey())).isEqualTo((long) stock);
 
         } finally {
             executor.shutdownNow();

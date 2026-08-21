@@ -6,8 +6,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
-import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
 
@@ -17,36 +18,37 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 
 	private final StringRedisTemplate redisTemplate;
     private final DefaultRedisScript<Long> couponIssueLuaScript;
-    private final CouponIssueStreamProperties streamProperties;
+ 
 
     private String stockKey(Long couponId) {
-        return "coupon:issue:stock:" + couponId;
+        return "coupon:issue:stock:{" + couponId + "}";
     }
 
     private String applicantsKey(Long couponId) {
-        return "coupon:issue:applicants:" + couponId;
+        return "coupon:issue:applicants:{" + couponId + "}";
     }
     
     @Override
-    public CouponIssueLuaResultStatus issue(Long couponId, Long userId, String requestId) {
+    public CouponIssueLuaResultStatus issue(Long couponId, Long userId) {
     	
     	Long resultCode = redisTemplate.execute(
     		couponIssueLuaScript,
     		List.of(
     			stockKey(couponId), 
-    			applicantsKey(couponId),
-    			streamProperties.getKey()
+    			applicantsKey(couponId)
     		),
-    		couponId.toString(),
-    		userId.toString(),
-    		requestId
-    		
+    		userId.toString()
     	);
 
     	if (resultCode == null) {
-    		throw new IllegalStateException("쿠폰 발급 Lua Script 실행 결과가 없습니다.");
+    		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
     	}
 
-        return CouponIssueLuaResultStatus.from(resultCode);
+    	try {
+    	    return CouponIssueLuaResultStatus.from(resultCode);
+    	    
+    	} catch (IllegalArgumentException e) {
+    	    throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
+    	}
     }
 }
