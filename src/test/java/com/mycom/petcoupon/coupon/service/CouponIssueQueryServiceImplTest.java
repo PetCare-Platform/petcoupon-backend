@@ -20,7 +20,6 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
-import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 @ExtendWith(MockitoExtension.class)
@@ -62,7 +61,7 @@ class CouponIssueQueryServiceImplTest {
         assertThatThrownBy(() -> couponIssueQueryService.getStatus(999L))
                 .isInstanceOf(GeneralException.class)
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
-                .isEqualTo(CommonErrorCode.NOT_FOUND);
+                .isEqualTo(CouponErrorCode.COUPON_ISSUE_NOT_FOUND);
     }
 
     @Test
