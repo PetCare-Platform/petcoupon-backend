@@ -19,6 +19,7 @@ import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
@@ -30,13 +31,17 @@ class CouponIssueStreamProducerTest {
 
     @Mock
     private StreamOperations<String, Object, Object> streamOperations;
+    
+    @Mock
+    private CouponIssueStreamProperties properties;
 
     @InjectMocks
     private CouponIssueStreamProducer producer;
-
     
     @Test
     void 쿠폰_신청_요청을_정상적으로_저장한다() {
+    	
+    	when(properties.getKey()).thenReturn("coupon:issue:stream");
     	
         RecordId expectedId = RecordId.of("1-0");
 
@@ -61,6 +66,7 @@ class CouponIssueStreamProducerTest {
     @Test
     void Redis_저장_결과가_null이면_예외가_발생한다() {
     	
+    	when(properties.getKey()).thenReturn("coupon:issue:stream");
         when(redisTemplate.opsForStream()).thenReturn(streamOperations);
 
         when(streamOperations.add(
@@ -82,6 +88,8 @@ class CouponIssueStreamProducerTest {
 
     @Test
     void Redis_저장_중_예외가_발생하면_공통_예외로_변환한다() {
+    	
+    	when(properties.getKey()).thenReturn("coupon:issue:stream");
     	
         when(redisTemplate.opsForStream()).thenReturn(streamOperations);
 

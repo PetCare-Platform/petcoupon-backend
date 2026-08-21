@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
@@ -20,10 +21,8 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class CouponIssueStreamProducer {
 
-	// Redis Stream 이름 설정 
-	private static final String STREAM_KEY = "coupon:issue:stream";
-	
 	private final StringRedisTemplate redisTemplate;
+	private final CouponIssueStreamProperties properties;
 	
 	// 쿠폰 신청 요청을 Redis Stream 에 저장하고, 저장된 메시지 ID를 반환 
 	public RecordId publish(Long couponId, Long userId, String requestId) {
@@ -44,7 +43,7 @@ public class CouponIssueStreamProducer {
 		// Redis Stream 에 저장할 메시지 객체 생성 
 		MapRecord<String, String, String> record = StreamRecords
 				.newRecord()
-				.in(STREAM_KEY)
+				.in(properties.getKey())
 				.ofMap(message);
 
 		try {
