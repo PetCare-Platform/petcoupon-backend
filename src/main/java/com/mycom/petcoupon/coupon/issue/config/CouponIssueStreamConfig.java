@@ -53,8 +53,6 @@ public class CouponIssueStreamConfig {
 			consumer
 		);
 
-		container.start();
-
 		return container;
 	}
 	
