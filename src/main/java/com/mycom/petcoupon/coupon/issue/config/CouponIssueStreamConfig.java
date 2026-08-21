@@ -128,6 +128,8 @@ public class CouponIssueStreamConfig {
 	        		log.info("Redis Stream Consumer 재시작 완료");
 	                
 	        	} catch (Exception recoveryError) {
+	        		recoveryScheduled.set(false);
+	        		
 	        		log.error(
 	        			"Redis Stream Consumer 복구에 실패했습니다.",
 	        			recoveryError
@@ -135,9 +137,7 @@ public class CouponIssueStreamConfig {
 	        		
 	        		// TODO(#26, #47): 복구 실패 시 지수 백오프 재시도 및 장애 복구 통합 테스트 추가
 	        		
-	        	} finally {
-	        		recoveryScheduled.set(false);
-	            }
+	        	} 
 	        },
 	        
 	        Instant.now().plusMillis(ERROR_RETRY_DELAY_MILLIS)
@@ -153,6 +153,10 @@ public class CouponIssueStreamConfig {
 	        ensureConsumerGroup();
 	        log.info("Redis Stream Consumer Group을 복구했습니다.");
 	    }
+	    
+	    // 재시작 직후 발생하는 오류도 다음 복구 작업을 예약할 수 있도록 해제
+	    recoveryScheduled.set(false);
+	    
 	    container.start();
 	}
 		
