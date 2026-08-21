@@ -13,6 +13,8 @@ public enum EventErrorCode implements BaseErrorCode {
 
 	INVALID_EVENT_PERIOD(HttpStatus.BAD_REQUEST, "EVENT400-0", "이벤트 기간이 올바르지 않습니다."),
 
+	SAME_EVENT_STATUS(HttpStatus.BAD_REQUEST, "EVENT400-1", "현재 상태와 동일합니다."),
+
 	EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT404-0", "존재하지 않는 이벤트입니다.");
 
 	private final HttpStatus status;

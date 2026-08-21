@@ -68,4 +68,21 @@ public class Event extends BaseEntity {
 		this.closeAt = closeAt;
 		this.status = EventStatus.SCHEDULED;
 	}
+
+	public void updateName(String name) {
+		this.name = name;
+	}
+
+	public void updateDescription(String description) {
+		this.description = description;
+	}
+
+	public void updatePeriod(LocalDateTime openAt, LocalDateTime closeAt) {
+		this.openAt = openAt;
+		this.closeAt = closeAt;
+	}
+
+	public void updateStatus(EventStatus status) {
+		this.status = status;
+	}
 }
