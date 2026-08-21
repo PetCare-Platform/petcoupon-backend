@@ -76,9 +76,25 @@ public class CouponIssueStreamConfig {
 			
 		} catch (Exception e) {
 			// 이미 Consumer Group이 존재하는 경우 무시
-			if (e.getMessage() == null || !e.getMessage().contains("BUSYGROUP")) {
-				throw e;
-			}
+		    if (!isBusyGroup(e)) {
+		        throw e;
+		    }
 		}
+	}
+	
+	private boolean isBusyGroup(Throwable throwable) {
+		Throwable cause = throwable;
+		
+		while(cause != null) {
+			String message = cause.getMessage();
+			
+			if (message != null && message.contains("BUSYGROUP")) {
+	            return true;
+	        }
+
+	        cause = cause.getCause();
+		}
+		
+		return false;
 	}
 }
