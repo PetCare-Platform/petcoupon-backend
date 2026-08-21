@@ -132,6 +132,9 @@ public class CouponIssueStreamConfig {
 	        			"Redis Stream Consumer 복구에 실패했습니다.",
 	        			recoveryError
 	        		);
+	        		
+	        		// TODO(#26, #47): 복구 실패 시 지수 백오프 재시도 및 장애 복구 통합 테스트 추가
+	        		
 	        	} finally {
 	        		recoveryScheduled.set(false);
 	            }
