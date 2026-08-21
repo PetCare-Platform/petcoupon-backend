@@ -17,10 +17,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.stream.RecordId;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-@SpringBootTest
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
+
+@SpringBootTest(properties = {
+        "coupon.issue.stream.key=coupon:issue:stream"
+})
 public class CouponIssueStreamProducerIntegrationTest {
 	
-	private static final String STREAM_KEY = "coupon:issue:stream";
+	@Autowired
+	private CouponIssueStreamProperties properties;
 	
 	@Autowired
     private CouponIssueStreamProducer producer;
@@ -30,12 +36,12 @@ public class CouponIssueStreamProducerIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        redisTemplate.delete(STREAM_KEY);
+        redisTemplate.delete(properties.getKey());
     }
     
     @AfterEach
     void tearDown() {
-        redisTemplate.delete(STREAM_KEY);
+        redisTemplate.delete(properties.getKey());
     }
 
     @Test
@@ -74,7 +80,7 @@ public class CouponIssueStreamProducerIntegrationTest {
 
         executor.shutdown();
 
-        Long streamSize = redisTemplate.opsForStream().size(STREAM_KEY);
+        Long streamSize = redisTemplate.opsForStream().size(properties.getKey());
 
         assertThat(streamSize).isEqualTo((long) requestCount);
 
