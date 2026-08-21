@@ -3,6 +3,7 @@ package com.mycom.petcoupon.coupon.converter;
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDetailResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 
@@ -25,6 +26,18 @@ public class CouponIssueConverter {
                 .status(couponIssue.getStatus().name())
                 .isUsable(isUsable)
                 .expiresAt(couponIssue.getExpiresAt())
+                .build();
+    }
+
+    public CouponIssueDetailResponse toDetailResponse(CouponIssue couponIssue, boolean isUsable) {
+        return CouponIssueDetailResponse.builder()
+                .couponIssueId(couponIssue.getCouponIssueId())
+                .couponCode(couponIssue.getCouponCode())
+                .status(couponIssue.getStatus().name())
+                .isUsable(isUsable)
+                .usedAt(couponIssue.getUsedAt())
+                .expiresAt(couponIssue.getExpiresAt())
+                .createdAt(couponIssue.getCreatedAt())
                 .build();
     }
 }

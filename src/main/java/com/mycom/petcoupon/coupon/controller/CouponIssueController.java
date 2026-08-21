@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueUseRequest;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDetailResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
 import com.mycom.petcoupon.coupon.service.CouponIssueQueryService;
 import com.mycom.petcoupon.coupon.service.CouponIssueUseService;
@@ -24,6 +25,13 @@ public class CouponIssueController {
 
     private final CouponIssueQueryService couponIssueQueryService;
     private final CouponIssueUseService couponIssueUseService;
+
+    @GetMapping("/coupon-issues/{couponIssueId}")
+    public CustomResponse<CouponIssueDetailResponse> getCouponIssueDetail(
+            @PathVariable("couponIssueId") @Positive Long couponIssueId) {
+        CouponIssueDetailResponse response = couponIssueQueryService.getDetail(couponIssueId);
+        return CustomResponse.onSuccess(response);
+    }
 
     @GetMapping("/coupon-issues/{couponIssueId}/status")
     public CustomResponse<CouponIssueStatusResponse> getCouponIssueStatus(
