@@ -21,7 +21,8 @@ import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
 
 @SpringBootTest(properties = {
-        "coupon.issue.stream.key=coupon:issue:stream"
+	"coupon.issue.stream.enabled=false",
+	"coupon.issue.stream.key=coupon:issue:stream:producer-test"
 })
 public class CouponIssueStreamProducerIntegrationTest {
 	
