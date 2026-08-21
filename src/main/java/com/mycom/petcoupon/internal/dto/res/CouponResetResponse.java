@@ -13,6 +13,7 @@ public record CouponResetResponse(
 		long deletedNotifications,
 		long deletedIssues,
 		long deletedMessages,
+		long deletedReports,
 		int totalQuantity,
 		int remainingQuantity
 ) {

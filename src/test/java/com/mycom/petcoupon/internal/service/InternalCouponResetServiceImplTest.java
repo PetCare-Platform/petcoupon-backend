@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDateTime;
 
@@ -146,6 +148,47 @@ class InternalCouponResetServiceImplTest {
 	}
 
 	@Test
+	@DisplayName("발급 메시지도 함께 삭제된다 - 다음 회차에서 순번이 겹치지 않도록")
+	void resetDeletesIssueMessages() {
+		// IssueMessage 는 빌더가 없어 네이티브 INSERT 로 만든다.
+		메시지를_만든다(2);
+
+		CouponResetResponse response =
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+
+		assertEquals(2, response.deletedMessages());
+		assertEquals(0L, 남은개수(
+				"SELECT COUNT(m) FROM IssueMessage m WHERE m.coupon.couponId = :couponId"));
+	}
+
+	@Test
+	@DisplayName("정합성 검증 결과도 함께 삭제된다 - 상세가 있어도 외래키 위반 없이")
+	void resetDeletesReconciliationReports() {
+		정합성_리포트를_만든다();
+
+		CouponResetResponse response =
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+
+		assertEquals(1, response.deletedReports());
+		assertEquals(0L, 남은개수(
+				"SELECT COUNT(r) FROM ReconciliationReport r WHERE r.coupon.couponId = :couponId"));
+		assertEquals(0L, 남은개수(
+				"SELECT COUNT(d) FROM VerificationDetail d WHERE d.report.coupon.couponId = :couponId"));
+	}
+
+	@Test
+	@DisplayName("재고를 되돌리면 updatedAt 도 갱신된다")
+	void resetUpdatesStockTimestamp() {
+		LocalDateTime before = entityManager.find(CouponStock.class, coupon.getCouponId()).getUpdatedAt();
+
+		internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(200));
+
+		LocalDateTime after = entityManager.find(CouponStock.class, coupon.getCouponId()).getUpdatedAt();
+		assertNotNull(after);
+		assertTrue(!after.isBefore(before), "재고 변경 시각이 갱신돼야 한다");
+	}
+
+	@Test
 	@DisplayName("totalQuantity 를 주면 총재고까지 바꾼다")
 	void resetChangesTotalQuantityWhenGiven() {
 		CouponResetResponse response =
@@ -223,6 +266,51 @@ class InternalCouponResetServiceImplTest {
 					.build());
 		}
 		entityManager.flush();
+	}
+
+	private void 메시지를_만든다(int count) {
+		for (int i = 1; i <= count; i++) {
+			entityManager.createNativeQuery("""
+							INSERT INTO issue_message
+							       (coupon_id, user_id, sequence_no, message_key, topic, payload,
+							        status, retry_count, created_at)
+							VALUES (:couponId, :userId, :seq, :messageKey, 'coupon-issue', '{}',
+							        'CONSUMED', 0, NOW(6))
+							""")
+					.setParameter("couponId", coupon.getCouponId())
+					.setParameter("userId", user.getUserId())
+					.setParameter("seq", i)
+					.setParameter("messageKey", coupon.getCouponId() + ":" + i)
+					.executeUpdate();
+		}
+	}
+
+	private void 정합성_리포트를_만든다() {
+		entityManager.createNativeQuery("""
+						INSERT INTO reconciliation_report
+						       (coupon_id, as_of_at, started_at, finished_at,
+						        total_count, success_count, error_count, result,
+						        stock_total, stock_issued, stock_remaining,
+						        db_active_count, db_canceled_count, db_expired_count, db_dlq_count)
+						VALUES (:couponId, NOW(6), NOW(6), NOW(6),
+						        10, 10, 0, 'MATCHED',
+						        100, 10, 90,
+						        10, 0, 0, 0)
+						""")
+				.setParameter("couponId", coupon.getCouponId())
+				.executeUpdate();
+
+		Long reportId = ((Number) entityManager.createNativeQuery(
+						"SELECT MAX(report_id) FROM reconciliation_report WHERE coupon_id = :couponId")
+				.setParameter("couponId", coupon.getCouponId())
+				.getSingleResult()).longValue();
+
+		entityManager.createNativeQuery("""
+						INSERT INTO verification_detail (report_id, error_type, created_at)
+						VALUES (:reportId, 'STOCK_MISMATCH', NOW(6))
+						""")
+				.setParameter("reportId", reportId)
+				.executeUpdate();
 	}
 
 	private Long 첫_발급_id() {

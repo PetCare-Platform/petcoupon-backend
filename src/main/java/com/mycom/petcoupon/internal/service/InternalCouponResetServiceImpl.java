@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.internal.service;
 
+import java.time.LocalDateTime;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,6 +52,11 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 		// 다음 회차에서 순번이 겹쳐 전부 실패한다.
 		long deletedMessages = deleteMessages(couponId);
 
+		// 이전 회차의 정합성 검증 결과가 남아 있으면 대시보드가 헷갈린다.
+		// verification_detail 의 외래키가 ON DELETE CASCADE 가 아니므로(ddl-auto 생성분)
+		// 상세를 먼저 지우고 리포트를 지운다.
+		long deletedReports = deleteReconciliationReports(couponId);
+
 		int totalQuantity = request.totalQuantity() != null
 				? request.totalQuantity()
 				: stock.getTotalQuantity();
@@ -63,6 +70,7 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.deletedNotifications(deletedNotifications)
 				.deletedIssues(deletedIssues)
 				.deletedMessages(deletedMessages)
+				.deletedReports(deletedReports)
 				.totalQuantity(totalQuantity)
 				.remainingQuantity(totalQuantity)
 				.build();
@@ -111,15 +119,40 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.executeUpdate();
 	}
 
+	/**
+	 * 정합성 검증 결과를 지운다.
+	 * verification_detail 의 외래키가 ON DELETE CASCADE 가 아니므로 상세를 먼저 지운다.
+	 */
+	private long deleteReconciliationReports(Long couponId) {
+		entityManager.createQuery("""
+						DELETE FROM VerificationDetail d
+						 WHERE d.report.reportId IN (
+						       SELECT r.reportId FROM ReconciliationReport r WHERE r.coupon.couponId = :couponId)
+						""")
+				.setParameter("couponId", couponId)
+				.executeUpdate();
+
+		return entityManager.createQuery(
+						"DELETE FROM ReconciliationReport r WHERE r.coupon.couponId = :couponId")
+				.setParameter("couponId", couponId)
+				.executeUpdate();
+	}
+
+	/**
+	 * 벌크 UPDATE 는 Hibernate 이벤트를 거치지 않아 {@code @LastModifiedDate} 가 동작하지 않는다.
+	 * updatedAt 을 쿼리에서 직접 갱신한다.
+	 */
 	private void resetStock(Long couponId, int totalQuantity) {
 		entityManager.createQuery("""
 						UPDATE CouponStock s
 						   SET s.totalQuantity = :totalQuantity,
 						       s.issuedQuantity = 0,
-						       s.remainingQuantity = :totalQuantity
+						       s.remainingQuantity = :totalQuantity,
+						       s.updatedAt = :now
 						 WHERE s.couponId = :couponId
 						""")
 				.setParameter("totalQuantity", totalQuantity)
+				.setParameter("now", LocalDateTime.now())
 				.setParameter("couponId", couponId)
 				.executeUpdate();
 
