@@ -7,8 +7,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mycom.petcoupon.coupon.dto.req.CouponIssueCancelRequest;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueUseRequest;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDetailResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
+import com.mycom.petcoupon.coupon.service.CouponIssueCancelService;
 import com.mycom.petcoupon.coupon.service.CouponIssueQueryService;
 import com.mycom.petcoupon.coupon.service.CouponIssueUseService;
 import com.mycom.petcoupon.global.common.CustomResponse;
@@ -24,6 +27,14 @@ public class CouponIssueController {
 
     private final CouponIssueQueryService couponIssueQueryService;
     private final CouponIssueUseService couponIssueUseService;
+    private final CouponIssueCancelService couponIssueCancelService;
+
+    @GetMapping("/coupon-issues/{couponIssueId}")
+    public CustomResponse<CouponIssueDetailResponse> getCouponIssueDetail(
+            @PathVariable("couponIssueId") @Positive Long couponIssueId) {
+        CouponIssueDetailResponse response = couponIssueQueryService.getDetail(couponIssueId);
+        return CustomResponse.onSuccess(response);
+    }
 
     @GetMapping("/coupon-issues/{couponIssueId}/status")
     public CustomResponse<CouponIssueStatusResponse> getCouponIssueStatus(
@@ -38,6 +49,15 @@ public class CouponIssueController {
             @Valid @RequestBody CouponIssueUseRequest request
     ) {
         couponIssueUseService.use(couponIssueId, request.userId());
+        return CustomResponse.onSuccess(null);
+    }
+
+    @PostMapping("/coupon-issues/{couponIssueId}/cancel")
+    public CustomResponse<Void> cancelCouponIssue(
+            @PathVariable("couponIssueId") @Positive Long couponIssueId,
+            @Valid @RequestBody CouponIssueCancelRequest request
+    ) {
+        couponIssueCancelService.cancelUsage(couponIssueId, request.userId());
         return CustomResponse.onSuccess(null);
     }
 }

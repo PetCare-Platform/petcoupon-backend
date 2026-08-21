@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDetailResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
@@ -33,5 +34,16 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
                 && couponIssue.getExpiresAt().isAfter(LocalDateTime.now());
 
         return couponIssueConverter.toStatusResponse(couponIssue, isUsable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CouponIssueDetailResponse getDetail(Long couponIssueId){
+        CouponIssue couponIssue = couponIssueRepository.findById(couponIssueId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_ISSUE_NOT_FOUND));
+
+        boolean isUsable = couponIssue.getStatus() == IssueStatus.ISSUED && couponIssue.getExpiresAt().isAfter(LocalDateTime.now());
+        
+        return couponIssueConverter.toDetailResponse(couponIssue, isUsable);
     }
 }
