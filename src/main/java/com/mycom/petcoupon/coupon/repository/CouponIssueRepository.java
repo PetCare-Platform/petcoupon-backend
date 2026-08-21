@@ -26,4 +26,17 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
             @Param("toStatus") IssueStatus toStatus,
             @Param("usedAt") LocalDateTime usedAt
     );
+	
+	@Modifying(clearAutomatically = true)
+	@Query("""
+	        UPDATE CouponIssue c
+	           SET c.status = :toStatus, c.usedAt = NULL
+	         WHERE c.couponIssueId = :couponIssueId
+	           AND c.status = :fromStatus
+	        """)
+	int cancelUsageIfMatches(
+	        @Param("couponIssueId") Long couponIssueId,
+	        @Param("fromStatus") IssueStatus fromStatus,
+	        @Param("toStatus") IssueStatus toStatus
+	);
 }
