@@ -41,4 +41,17 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	        @Param("toStatus") IssueStatus toStatus,
 	        @Param("now") LocalDateTime now
 	);
+	
+	@Modifying(clearAutomatically = true)
+	@Query("""
+	        UPDATE CouponIssue c
+	           SET c.status = :toStatus
+	         WHERE c.status = :fromStatus
+	           AND c.expiresAt < :now
+	        """)
+	int expireOverdueCoupons(
+	        @Param("fromStatus") IssueStatus fromStatus,
+	        @Param("toStatus") IssueStatus toStatus,
+	        @Param("now") LocalDateTime now
+	);
 }
