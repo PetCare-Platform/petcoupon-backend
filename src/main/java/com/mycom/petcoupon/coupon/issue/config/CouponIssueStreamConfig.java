@@ -1,6 +1,9 @@
 package com.mycom.petcoupon.coupon.issue.config;
 
 
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,6 +14,7 @@ import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
+import org.springframework.scheduling.TaskScheduler;
 
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 
@@ -32,6 +36,16 @@ public class CouponIssueStreamConfig {
 
 	private final CouponIssueStreamProperties properties;
 	private final StringRedisTemplate redisTemplate;
+	private final TaskScheduler taskScheduler;
+	
+	// Redis 장애 발생 후 Consumer 재시작까지 대기하는 시간 
+	private static final long ERROR_RETRY_DELAY_MILLIS = 1_000L;
+	
+	// 동일한 장애에 대해 복구 작업이 중복 예약되지 않도록 방지
+	private final AtomicBoolean recoveryScheduled = new AtomicBoolean(false);
+	
+
+	private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
 	
 	@Bean
 	public StreamMessageListenerContainer<String, MapRecord<String, String, String>> couponIssueStreamContainer(
@@ -49,7 +63,7 @@ public class CouponIssueStreamConfig {
 
 		
 		// Container 생성 
-		StreamMessageListenerContainer<String, MapRecord<String, String, String>> container = StreamMessageListenerContainer.create(connectionFactory, options);
+		this.container = StreamMessageListenerContainer.create(connectionFactory, options);
 
 		StreamMessageListenerContainer.ConsumerStreamReadRequest<String> request =
 			StreamMessageListenerContainer.StreamReadRequest
@@ -67,15 +81,15 @@ public class CouponIssueStreamConfig {
 			    )
 			    .autoAcknowledge(false)
 			    .errorHandler(this::handleStreamError)
-			    .cancelOnError(error -> false)
+			    .cancelOnError(error -> true)  // 오류 발생 시 현재 요청을 취소하고 Scheduler가 지연 후 Container를 재시작
 			    .build();
 
-			container.register(request, consumer);
+		this.container.register(request, consumer);
 
-		return container;
+		return this.container;
 	}
 	
-	// Consumer Group이 존재하지 않으면 생성함 
+	// 애플리케이션 최초 시작 시 Consumer Group 생성
 	private void ensureConsumerGroup() {
 
 		try {
@@ -94,21 +108,53 @@ public class CouponIssueStreamConfig {
 		}
 	}
 	
+	// Redis 오류로 Consumer Group이 사라진 경우 복구
+	private void recreateConsumerGroup() {
+	    try {
+	        redisTemplate.opsForStream().createGroup(
+	            properties.getKey(),
+	            ReadOffset.latest(),	// 과거 메시지 전체 재처리를 방지하기 위해 최신 메시지부터 시작
+	            properties.getGroup()
+	        );
+	    } catch (Exception e) {
+	        if (!hasErrorMessage(e, "BUSYGROUP")) {
+	            throw e;
+	        }
+	    }
+	}
+	
+	// 오류 발생 시 즉시 재시도하지 않고 Scheduler를 통해 지연 후 재시작
 	private void handleStreamError(Throwable error) {
 		
         log.error("Redis Stream 읽기 오류가 발생했습니다.", error);
 
-        if (hasErrorMessage(error, "NOGROUP")) {
-            try {
-                ensureConsumerGroup();
-                log.info("Redis Stream Consumer Group을 다시 생성했습니다.");
-            } catch (Exception recoveryError) {
-                log.error(
-                    "Redis Stream Consumer Group 재생성에 실패했습니다.",
-                    recoveryError
-                );
-            }
+        if (!recoveryScheduled.compareAndSet(false, true)) {
+            return;
         }
+        
+        taskScheduler.schedule(
+            () -> {
+            	try { 
+            		if (hasErrorMessage(error, "NOGROUP")) {
+            			recreateConsumerGroup();
+                        log.info("Redis Stream Consumer Group을 복구했습니다.");
+                    }
+            		
+            		container.start();
+                    log.info("Redis Stream Consumer 재시작 완료");
+                    
+            	} catch (Exception recoveryError) {
+            		log.error(
+            			"Redis Stream Consumer 복구에 실패했습니다.",
+                        recoveryError
+                    );
+            	} finally {
+            		recoveryScheduled.set(false);
+                }
+            
+            },
+            Instant.now().plusMillis(ERROR_RETRY_DELAY_MILLIS)
+        );
     }
 	
 	private boolean hasErrorMessage(Throwable throwable, String targetMessage) {
