@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.issue.config;
 
+import java.nio.charset.StandardCharsets;
+
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -8,6 +10,7 @@ import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.ReadOffset;
 import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamMessageListenerContainer;
 
@@ -22,13 +25,14 @@ import lombok.RequiredArgsConstructor;
 public class CouponIssueStreamConfig {
 
 	private final CouponIssueStreamProperties properties;
+	private final StringRedisTemplate redisTemplate;
 	
 	@Bean
 	public StreamMessageListenerContainer<String, MapRecord<String, String, String>> couponIssueStreamContainer(
 		RedisConnectionFactory connectionFactory,
 		CouponIssueStreamConsumer consumer
 	) {
-		ensureConsumerGroup(connectionFactory);
+		ensureConsumerGroup();
 
 		// Redis Stream 을 계속 감시하는 Listener Container 설정 
 		StreamMessageListenerContainer.StreamMessageListenerContainerOptions<String, MapRecord<String, String, String>> options =
@@ -55,18 +59,23 @@ public class CouponIssueStreamConfig {
 	}
 	
 	// Consumer Group이 존재하지 않으면 생성함 
-	private void ensureConsumerGroup(RedisConnectionFactory connectionFactory) {
-		
-		StringRedisTemplate redisTemplate = new StringRedisTemplate(connectionFactory);
+	private void ensureConsumerGroup() {
 
 		try {
-			redisTemplate.opsForStream().createGroup(
-				properties.getKey(),
-				ReadOffset.from("0-0"),		// Stream의 가장 처음 메시지부터 읽도록 설정 
-				properties.getGroup()
-			);
+			RedisCallback<Void> createGroupCallback = connection -> {
+	            connection.streamCommands().xGroupCreate(
+	                properties.getKey().getBytes(StandardCharsets.UTF_8),
+	                properties.getGroup(),
+	                ReadOffset.from("0-0"), // Stream의 가장 처음 메시지부터 읽도록 설정 
+	                true // MKSTREAM: Stream이 없으면 생성
+	            );
+	            return null;
+	        };
+	        
+	        redisTemplate.execute(createGroupCallback);
+			
 		} catch (Exception e) {
-			// 이미 Group이 존재하는 경우 혹은 null 은 무시
+			// 이미 Consumer Group이 존재하는 경우 무시
 			if (e.getMessage() == null || !e.getMessage().contains("BUSYGROUP")) {
 				throw e;
 			}
