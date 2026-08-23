@@ -15,7 +15,7 @@ import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
-import com.mycom.petcoupon.user.exception.code.UserErrorCode;
+import com.mycom.petcoupon.user.exception.UserErrorCode;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
