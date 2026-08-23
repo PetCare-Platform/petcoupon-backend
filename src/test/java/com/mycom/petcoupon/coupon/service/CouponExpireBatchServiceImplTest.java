@@ -3,6 +3,8 @@ package com.mycom.petcoupon.coupon.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,7 +32,7 @@ import jakarta.persistence.PersistenceContext;
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
-@DataJpaTest
+@DataJpaTest(properties = "coupon.expire.chunk-size=3")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(CouponExpireBatchServiceImpl.class)
 class CouponExpireBatchServiceImplTest {
@@ -114,6 +116,22 @@ class CouponExpireBatchServiceImplTest {
 	@Test
 	void expireOverdueCoupons_succeedsWhenNothingToExpire() {
 		couponExpireBatchService.expireOverdueCoupons();
+	}
+
+	@Test
+	void expireOverdueCoupons_processesAllRowsAcrossMultipleChunks() {
+		// chunk-size=3인데 대상이 7건이라, 3+3+1 세 번의 청크로 나뉘어 처리돼야 함
+		List<CouponIssue> issues = IntStream.rangeClosed(1, 7)
+				.mapToObj(i -> createCouponIssue(IssueStatus.ISSUED, LocalDateTime.now().minusDays(1), "EXP-CHUNK-" + i))
+				.toList();
+
+		couponExpireBatchService.expireOverdueCoupons();
+		entityManager.clear();
+
+		for (CouponIssue issue : issues) {
+			CouponIssue reloaded = couponIssueRepository.findById(issue.getCouponIssueId()).orElseThrow();
+			assertThat(reloaded.getStatus()).isEqualTo(IssueStatus.EXPIRED);
+		}
 	}
 
 	private CouponIssue createCouponIssue(IssueStatus status, LocalDateTime expiresAt, String couponCode) {

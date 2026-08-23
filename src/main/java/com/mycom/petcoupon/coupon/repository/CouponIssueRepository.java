@@ -3,6 +3,7 @@ package com.mycom.petcoupon.coupon.repository;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -54,7 +55,8 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	        """)
 	List<Long> findIdsToExpire(
 	        @Param("status") IssueStatus status,
-	        @Param("now") LocalDateTime now
+	        @Param("now") LocalDateTime now,
+	        Pageable pageable
 	);
 
 	@Modifying(clearAutomatically = true)
