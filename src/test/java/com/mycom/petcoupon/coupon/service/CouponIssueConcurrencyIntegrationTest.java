@@ -24,6 +24,7 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -165,12 +166,8 @@ class CouponIssueConcurrencyIntegrationTest {
 			for (int i = 0; i < threadCount; i++) {
 				futures.add(executor.submit(() -> {
 					startLatch.await();
-					try {
-						couponIssueUseService.use(couponIssueId, issuedUserId);
-						return true;
-					} catch (GeneralException e) {
-						return false;
-					}
+					couponIssueUseService.use(couponIssueId, issuedUserId);
+					return true;
 				}));
 			}
 
@@ -205,12 +202,8 @@ class CouponIssueConcurrencyIntegrationTest {
 			for (int i = 0; i < threadCount; i++) {
 				futures.add(executor.submit(() -> {
 					startLatch.await();
-					try {
-						couponIssueCancelService.cancelUsage(couponIssueId, issuedUserId);
-						return true;
-					} catch (GeneralException e) {
-						return false;
-					}
+					couponIssueCancelService.cancelUsage(couponIssueId, issuedUserId);
+					return true;
 				}));
 			}
 
@@ -235,7 +228,8 @@ class CouponIssueConcurrencyIntegrationTest {
 		try {
 			return future.get();
 		} catch (ExecutionException e) {
-			if (e.getCause() instanceof GeneralException) {
+			if (e.getCause() instanceof GeneralException ge
+					&& ge.getErrorCode() == CouponErrorCode.INVALID_ISSUE_STATUS) {
 				return false;
 			}
 			throw new RuntimeException(e.getCause());
