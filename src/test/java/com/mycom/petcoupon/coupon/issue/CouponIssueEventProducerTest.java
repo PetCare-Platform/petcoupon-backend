@@ -115,4 +115,21 @@ class CouponIssueEventProducerTest {
 		verify(kafkaTemplate, org.mockito.Mockito.never())
 			.send(any(String.class), any(), any());
 	}
+
+	@Test
+	void 발행_성공_콜백에서_상태갱신_자체가_실패해도_예외가_밖으로_새지_않는다() {
+		when(issueMessage.getMessageId()).thenReturn(1L);
+		when(issueMessage.getPayload()).thenReturn("{}");
+		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
+
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+			.thenReturn(CompletableFuture.completedFuture(null));
+
+		when(issueMessageRepository.updateStatus(1L, IssueMessageStatus.SENT))
+			.thenThrow(new RuntimeException("db down"));
+
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
+
+		assertThat(thrown).isNull();
+	}
 }

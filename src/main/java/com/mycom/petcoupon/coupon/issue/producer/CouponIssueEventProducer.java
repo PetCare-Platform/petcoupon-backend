@@ -41,12 +41,21 @@ public class CouponIssueEventProducer {
 			// 그 안의 블로킹 DB 호출이 발행 파이프라인을 지연시키지 않도록 별도 executor로 뺌
 			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, parsedEvent.requestId(), parsedEvent)
 				.whenCompleteAsync((result, ex) -> {
-					if (ex != null) {
-						log.error("[CouponIssueEvent] 발행 실패: requestId={}", parsedEvent.requestId(), ex);
-						markFailed(issueMessage, parsedEvent, ex);
-					} else {
-						log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
-						markSent(issueMessage);
+					// whenCompleteAsync가 반환하는 새 Future를 아무도 지켜보지 않으므로,
+					// 콜백 내부(markSent/markFailed의 DB 호출 등)에서 예외가 나면 로그도 없이 그냥 사라짐 — 직접 잡아서 남김
+					try {
+						if (ex != null) {
+							log.error("[CouponIssueEvent] 발행 실패: requestId={}", parsedEvent.requestId(), ex);
+							markFailed(issueMessage, parsedEvent, ex);
+						} else {
+							log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
+							markSent(issueMessage);
+						}
+					} catch (Exception callbackException) {
+						log.error(
+							"[CouponIssueEvent] 발행 완료 콜백 처리 중 예외 발생, 수동 확인 필요: messageId={}, requestId={}",
+							issueMessage.getMessageId(), parsedEvent.requestId(), callbackException
+						);
 					}
 				}, kafkaCallbackExecutor);
 		} catch (RuntimeException e) {
