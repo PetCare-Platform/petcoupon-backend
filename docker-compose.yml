@@ -1,3 +1,20 @@
+# 로컬 개발 환경 (MySQL + Redis)
+#
+#   docker compose up -d      MySQL, Redis 기동
+#   docker compose ps         상태 확인
+#   docker compose down       중지 (데이터 보존)
+#   docker compose down -v    중지 + 데이터 삭제 (완전 초기화)
+#
+# Kafka는 아직 애플리케이션 코드가 없어 기본 실행에서 제외한다.
+# 필요하면 프로파일을 지정해 함께 띄운다.
+#
+#   docker compose --profile kafka up -d
+#
+# 3306 포트 충돌이 나면 Windows에 MySQL이 서비스로 설치돼 있는 경우다.
+# 관리자 권한 PowerShell 에서 아래를 실행한다.
+#
+#   net stop MySQL80
+
 services:
   mysql:
     image: mysql:8.0
@@ -8,6 +25,12 @@ services:
       TZ: Asia/Seoul
     ports:
       - "3306:3306"
+    command:
+      # 기본값 151은 부하 테스트에서 부족하다.
+      # HikariCP 풀 크기 * 인스턴스 수보다 넉넉해야 커넥션 고갈이 나지 않는다.
+      - --max-connections=500
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
@@ -21,15 +44,29 @@ services:
     container_name: petcoupon-redis
     ports:
       - "6379:6379"
+    command:
+      - redis-server
+      # 쿠폰 재고 키가 메모리 압박으로 삭제되면 재고가 남아 있어도 품절로 처리된다.
+      # 기본값이지만 의도를 명시한다.
+      - --maxmemory-policy
+      - noeviction
+      # 컨테이너를 내렸다 올려도 재고 키가 남도록 AOF 사용
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
 
+  # 애플리케이션에 Kafka 코드가 들어오면 profiles 항목을 제거한다.
   kafka:
     image: apache/kafka:3.7.0
     container_name: petcoupon-kafka
+    profiles:
+      - kafka
     ports:
       - "9092:9092"
     environment:
@@ -42,6 +79,13 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
 volumes:
   mysql-data:
+  redis-data:
