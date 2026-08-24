@@ -22,6 +22,7 @@ import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -100,7 +101,34 @@ public class ReconciliationReport {
 	)
 	private List<VerificationDetail> verificationDetails = new ArrayList<>();
 	
-	@Enumerated(EnumType.STRING) 
-	@Column(nullable = false, length = 20) 
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
 	private ReconciliationResult result;
+
+	@Builder
+	private ReconciliationReport(
+			Coupon coupon, LocalDateTime asOfAt, LocalDateTime startedAt, LocalDateTime finishedAt,
+			long totalCount, long successCount, long errorCount,
+			int stockTotal, int stockIssued, int stockRemaining,
+			long dbActiveCount, long dbCanceledCount, long dbExpiredCount, long dbDlqCount,
+			Long maxSequenceNo, Integer redisRemaining, ReconciliationResult result
+	) {
+		this.coupon = coupon;
+		this.asOfAt = asOfAt;
+		this.startedAt = startedAt;
+		this.finishedAt = finishedAt;
+		this.totalCount = totalCount;
+		this.successCount = successCount;
+		this.errorCount = errorCount;
+		this.stockTotal = stockTotal;
+		this.stockIssued = stockIssued;
+		this.stockRemaining = stockRemaining;
+		this.dbActiveCount = dbActiveCount;
+		this.dbCanceledCount = dbCanceledCount;
+		this.dbExpiredCount = dbExpiredCount;
+		this.dbDlqCount = dbDlqCount;
+		this.maxSequenceNo = maxSequenceNo;
+		this.redisRemaining = redisRemaining;
+		this.result = result;
+	}
 }
