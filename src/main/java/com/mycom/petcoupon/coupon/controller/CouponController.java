@@ -94,7 +94,7 @@ public class CouponController {
         // recordId를 기록해두지 않으면 이 레코드가 영원히 IN_PROGRESS로 남는다.
         Long recordId = decision.recordId();
         try {
-            CouponIssueCreateResponse response = couponIssueService.issue(couponId, request);
+            CouponIssueCreateResponse response = couponIssueService.issue(couponId, request, idempotencyKey);
             CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(response);
             // 성공 응답을 통째로 저장 — 다음에 같은 키가 오면 이 JSON을 그대로 재현한다
             

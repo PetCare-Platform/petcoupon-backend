@@ -16,9 +16,12 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 public class CouponIssueConverter {
 
     public CouponIssueCreateResponse toCreateResponse(Long couponId, Long userId) {
+        // 이 메서드는 Stream 발행까지 성공한 시점에만 호출되고, 아직 Consumer의 CouponIssue 저장 전이라
+        // status는 항상 "WAITING" 하나뿐이다. 실제 저장 결과에 따른 상태 분기가 필요해지면 그때 파라미터화한다.
         return CouponIssueCreateResponse.builder()
                 .couponId(couponId)
                 .userId(userId)
+                .status("WAITING")
                 .build();
     }
 

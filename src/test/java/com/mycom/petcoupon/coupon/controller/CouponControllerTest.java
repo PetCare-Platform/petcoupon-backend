@@ -206,7 +206,7 @@ class CouponControllerTest {
 
     @Test
     void 정상_요청이면_200과_응답값을_반환하고_성공을_기록한다() throws Exception {
-        when(couponIssueService.issue(eq(5L), any()))
+        when(couponIssueService.issue(eq(5L), any(), any()))
                 .thenReturn(CouponIssueCreateResponse.builder()
                         .couponId(5L)
                         .userId(1L)
@@ -226,7 +226,7 @@ class CouponControllerTest {
 
     @Test
     void Redis_예외가_터지면_바디없이_FAILED로_기록하고_500을_반환한다() throws Exception {
-        when(couponIssueService.issue(eq(5L), any())).thenThrow(new RuntimeException("redis down"));
+        when(couponIssueService.issue(eq(5L), any(), any())).thenThrow(new RuntimeException("redis down"));
 
         mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
                         .header(IDEMPOTENCY_HEADER, KEY)

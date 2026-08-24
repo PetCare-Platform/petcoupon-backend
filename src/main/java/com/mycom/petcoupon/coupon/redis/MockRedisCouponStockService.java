@@ -54,4 +54,14 @@ public class MockRedisCouponStockService implements RedisCouponStockService {
         return CouponIssueResult.SUCCESS;
     }
 
+    @Override
+    public void restoreStock(Long couponId, Long userId, String requestId) {
+        // 재고를 되돌리고 유저 키를 풀어서 재신청 가능하게 한다.
+        // seenRequestIds는 일부러 안 건드림 — SOLD_OUT 분기(위 decreaseStock)도 같은 이유로 그대로 둠:
+        // 같은 requestId로 재시도할 일이 없고(재시도는 새 requestId로 옴), 지워버리면 그 사이에 다른 요청이
+        // 같은 requestId를 재사용해도 DUPLICATE_REQUEST로 못 걸러내게 된다.
+        stockByCoupon.computeIfAbsent(couponId, id -> new AtomicInteger(DEFAULT_STOCK)).incrementAndGet();
+        issueUserKeys.remove(couponId + ":" + userId);
+    }
+
 }

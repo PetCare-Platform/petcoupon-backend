@@ -31,6 +31,8 @@ public enum CouponErrorCode implements BaseErrorCode {
     COUPON_ISSUE_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-1", "발급 내역을 찾을 수 없습니다."),
     NOT_COUPON_OWNER(HttpStatus.FORBIDDEN, "COUPON403-0", "본인의 쿠폰이 아닙니다."),
     INVALID_ISSUE_STATUS(HttpStatus.CONFLICT, "COUPON409-3", "현재 상태에서는 처리할 수 없습니다."),
+    // Lua 재고 키가 아직 세팅 안 됐을 때(LuaRedisCouponStockService가 CouponIssueLuaResultStatus.STOCK_NOT_INITIALIZED를 매핑)
+    STOCK_NOT_INITIALIZED(HttpStatus.CONFLICT, "COUPON409-4", "쿠폰 재고가 아직 초기화되지 않았습니다."),
 
     // 아래 2개는 이슈 #16(Idempotency-Key) 추가분 — IdempotencyKeyService.begin()의 CONFLICT/KEY_REUSED에 대응
     // COUPON409-3은 PR #28(박신형, INVALID_ISSUE_STATUS)이 먼저 씀 — 겹쳐서 409-5/6으로 옮김

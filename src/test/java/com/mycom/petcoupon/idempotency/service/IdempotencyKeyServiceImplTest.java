@@ -2,16 +2,20 @@ package com.mycom.petcoupon.idempotency.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -140,6 +144,21 @@ class IdempotencyKeyServiceImplTest {
         IdempotencyDecision decision = idempotencyKeyService.begin(USER_ID, COUPON_ID, KEY);
 
         assertThat(decision.type()).isEqualTo(IdempotencyDecision.Type.KEY_REUSED);
+    }
+
+    @Test
+    void 보관기간이_지난_레코드를_삭제하고_삭제된_개수를_반환한다() {
+        when(idempotencyKeyRepository.deleteByCreatedAtBefore(any())).thenReturn(5);
+
+        int deletedCount = idempotencyKeyService.cleanupExpiredRecords();
+
+        assertThat(deletedCount).isEqualTo(5);
+
+        ArgumentCaptor<LocalDateTime> thresholdCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(idempotencyKeyRepository).deleteByCreatedAtBefore(thresholdCaptor.capture());
+
+        LocalDateTime expectedThreshold = LocalDateTime.now().minusDays(7);
+        assertThat(thresholdCaptor.getValue()).isCloseTo(expectedThreshold, within(5, ChronoUnit.SECONDS));
     }
 
     // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로
