@@ -261,6 +261,7 @@ class CouponIssueConcurrencyIntegrationTest {
 					.couponCode(couponCode)
 					.requestId("concurrency-test-request-" + couponCode)
 					.status(status)
+					.usedAt(status == IssueStatus.USED ? LocalDateTime.now() : null)
 					.expiresAt(LocalDateTime.now().plusDays(1))
 					.build();
 			entityManager.persist(issue);
