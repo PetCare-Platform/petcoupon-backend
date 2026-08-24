@@ -41,7 +41,8 @@ import lombok.NoArgsConstructor;
 		            columnNames = {"coupon_id", "sequence_no"}
 		    )
 		}
-	)@NoArgsConstructor(access = AccessLevel.PROTECTED) 
+	)
+@NoArgsConstructor(access = AccessLevel.PROTECTED) 
 public class CouponIssue extends BaseEntity {
 	
 	@Id 
