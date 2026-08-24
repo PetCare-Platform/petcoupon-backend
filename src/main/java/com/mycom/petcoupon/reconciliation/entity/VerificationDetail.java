@@ -63,6 +63,11 @@ public class VerificationDetail {
 	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
 
+	public void assignReport(ReconciliationReport report) {
+	    this.report = report;
+	    report.getVerificationDetails().add(this);
+	}
+	
 	@Builder
 	private VerificationDetail(
 			ReconciliationReport report, VerificationErrorType errorType,
