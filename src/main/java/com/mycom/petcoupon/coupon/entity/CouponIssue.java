@@ -14,6 +14,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -26,18 +27,21 @@ import lombok.NoArgsConstructor;
 @Entity 
 @Getter 
 @Table(
-	name = "coupon_issue",
-	uniqueConstraints = {
-		@UniqueConstraint(
-				name = "uk_issue_coupon_user",
-	            columnNames = {"coupon_id", "user_id"}
-	    ),
-		@UniqueConstraint(
-	            name = "uk_issue_sequence",
-	            columnNames = {"coupon_id", "sequence_no"}
-	    )
-	}
-)
+		name = "coupon_issue",
+		indexes = {
+			@Index(name = "idx_issue_expire", columnList = "status, expires_at")
+		},
+		uniqueConstraints = {
+			@UniqueConstraint(
+					name = "uk_issue_coupon_user",
+		            columnNames = {"coupon_id", "user_id"}
+		    ),
+			@UniqueConstraint(
+		            name = "uk_issue_sequence",
+		            columnNames = {"coupon_id", "sequence_no"}
+		    )
+		}
+	)
 @NoArgsConstructor(access = AccessLevel.PROTECTED) 
 public class CouponIssue extends BaseEntity {
 	
