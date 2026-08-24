@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.issue.producer;
 
 import java.util.concurrent.Executor;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -23,6 +24,10 @@ public class CouponIssueEventProducer {
 	private final KafkaTemplate<String, Object> kafkaTemplate;
 	private final IssueMessageRepository issueMessageRepository;
 	private final JsonMapper jsonMapper;
+
+	// Executor 타입 빈이 여러 개(redisStreamRecoveryTaskScheduler 등)라 @Qualifier로 특정함.
+	// 프로젝트 루트 lombok.config에 등록해둬서 @RequiredArgsConstructor가 이 어노테이션을 생성자로 복사해줌
+	@Qualifier("kafkaCallbackExecutor")
 	private final Executor kafkaCallbackExecutor;
 
 	public void publish(IssueMessage issueMessage) {
