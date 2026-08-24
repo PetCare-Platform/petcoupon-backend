@@ -3,7 +3,6 @@ package com.mycom.petcoupon.event.service;
 import java.time.LocalDateTime;
 import java.util.List;
 
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,36 +27,47 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 
 	// 오픈 시각이 이미 지난 SCHEDULED 이벤트를 먼저 OPEN으로 올린 뒤, 같은 now 기준으로 종료 시각이 지난
 	// OPEN 이벤트를 CLOSED로 내린다 — 배치가 한동안 못 돌고 재기동해도 한 번의 실행에서 SCHEDULED->CLOSED까지 이어진다.
+	// 실제 실행 주기는 여기가 아니라 EventSchedulingConfig(전용 TaskScheduler)에서 등록한다.
 	@Override
 	@Transactional
-	@Scheduled(cron = "${event.status.scheduler.cron:0 * * * * *}")
 	public void syncEventStatuses() {
 		LocalDateTime now = LocalDateTime.now();
 
-		int opened = openScheduledEvents(now);
-		int closed = closeOpenEvents(now);
+		// 스케줄러 실행 자체가 예외로 죽으면 안 되므로, 여기서 잡고 로그만 남긴다 — 다음 주기에 다시 시도된다.
+		try {
+			int opened = openScheduledEvents(now);
+			int closed = closeOpenEvents(now);
 
-		if (opened > 0 || closed > 0) {
-			log.info("이벤트 상태 전환 스케줄러 완료. OPEN 전환={}건, CLOSED 전환={}건", opened, closed);
+			if (opened > 0 || closed > 0) {
+				log.info("이벤트 상태 전환 스케줄러 완료. OPEN 전환={}건, CLOSED 전환={}건", opened, closed);
+			}
+		} catch (Exception e) {
+			log.error("이벤트 상태 전환 스케줄러 실행 중 오류가 발생했습니다.", e);
 		}
 	}
 
 	private int openScheduledEvents(LocalDateTime now) {
 		List<Event> targets = eventRepository.findByStatusAndOpenAtLessThanEqual(EventStatus.SCHEDULED, now);
-		transition(targets, EventStatus.OPEN, "오픈 시각 도달");
-		return targets.size();
+		return transition(targets, EventStatus.SCHEDULED, EventStatus.OPEN, "오픈 시각 도달");
 	}
 
 	private int closeOpenEvents(LocalDateTime now) {
 		List<Event> targets = eventRepository.findByStatusAndCloseAtLessThanEqual(EventStatus.OPEN, now);
-		transition(targets, EventStatus.CLOSED, "종료 시각 도달");
-		return targets.size();
+		return transition(targets, EventStatus.OPEN, EventStatus.CLOSED, "종료 시각 도달");
 	}
 
-	private void transition(List<Event> events, EventStatus toStatus, String reason) {
+	// 더티체킹 대신 관리자 API(EventServiceImpl)와 동일한 원자적 조건부 업데이트를 쓴다.
+	// 그 사이 다른 주체가 이미 상태를 바꿔놨으면 0건이 반환되는데, 그러면 이력도 안 남기고 건너뛴다 —
+	// 그냥 덮어쓰면 동시 변경을 무시하게 되고, EventStatusHistory의 (event_id, from_status, to_status)
+	// 유니크 제약과 충돌해서 그 틱에서 처리 중이던 다른 이벤트들까지 함께 롤백될 수 있다.
+	private int transition(List<Event> events, EventStatus fromStatus, EventStatus toStatus, String reason) {
+		int transitioned = 0;
+
 		for (Event event : events) {
-			EventStatus fromStatus = event.getStatus();
-			event.updateStatus(toStatus);
+			int updatedRows = eventRepository.updateStatusIfMatches(event.getEventId(), fromStatus, toStatus);
+			if (updatedRows == 0) {
+				continue;
+			}
 
 			eventStatusHistoryRepository.save(EventStatusHistory.builder()
 					.event(event)
@@ -67,6 +77,10 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 					.actorId(null)
 					.reason(reason)
 					.build());
+
+			transitioned++;
 		}
+
+		return transitioned;
 	}
 }
