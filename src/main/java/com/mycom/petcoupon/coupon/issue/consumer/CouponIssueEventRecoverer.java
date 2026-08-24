@@ -36,9 +36,24 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 			return;
 		}
 
-		restoreStock(event);
-		markDlq(event, exception);
-		publishToDlqTopic(event);
+		// 세 단계는 서로 독립적인 부수효과라, 하나가 실패해도 나머지는 최대한 시도되도록 각각 감쌈
+		try {
+			restoreStock(event);
+		} catch (Exception e) {
+			log.error("[CouponIssueEvent] 재고 보상 처리 중 예외 발생: requestId={}", event.requestId(), e);
+		}
+
+		try {
+			markDlq(event, exception);
+		} catch (Exception e) {
+			log.error("[CouponIssueEvent] issue_message DLQ 상태 갱신 중 예외 발생: requestId={}", event.requestId(), e);
+		}
+
+		try {
+			publishToDlqTopic(event);
+		} catch (Exception e) {
+			log.error("[CouponIssueEvent] DLQ 토픽 발행 중 예외 발생, 수동 확인 필요: requestId={}", event.requestId(), e);
+		}
 	}
 
 	private void publishToDlqTopic(CouponIssueEvent event) {
@@ -46,14 +61,15 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 	}
 
 	private void markDlq(CouponIssueEvent event, Exception exception) {
-		issueMessageRepository.findByMessageKey(event.requestId()).ifPresentOrElse(
-			issueMessage -> issueMessageRepository.markDlq(
-				issueMessage.getMessageId(), IssueMessageStatus.DLQ, exception.getMessage()
-			),
-			() -> log.error(
-				"[CouponIssueEvent] issue_message row를 찾지 못해 DLQ 상태 갱신 불가: requestId={}", event.requestId()
-			)
+		int updatedRows = issueMessageRepository.markDlq(
+			KafkaTopics.COUPON_ISSUE_EVENT, event.requestId(), IssueMessageStatus.DLQ, exception.getMessage()
 		);
+
+		if (updatedRows == 0) {
+			log.error(
+				"[CouponIssueEvent] issue_message row를 찾지 못해 DLQ 상태 갱신 불가: requestId={}", event.requestId()
+			);
+		}
 	}
 
 	// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)

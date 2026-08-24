@@ -41,7 +41,14 @@ public class CouponIssuePersister {
 				.build()
 		);
 
-		couponStockRepository.increaseIssuedQuantity(event.couponId());
+		int updatedRows = couponStockRepository.increaseIssuedQuantity(event.couponId());
+
+		if (updatedRows == 0) {
+			throw new IllegalStateException(
+				"coupon_stock 갱신 실패(remaining_quantity 부족 또는 coupon_id 없음): couponId=" + event.couponId()
+					+ ", requestId=" + event.requestId()
+			);
+		}
 
 		couponIssueHistoryRepository.save(
 			CouponIssueHistory.builder()

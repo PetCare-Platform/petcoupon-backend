@@ -48,10 +48,8 @@ public class CouponIssueEventConsumer {
 			} else {
 				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요
 				// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
-				log.error(
-					"[CouponIssueEvent] 제약 위반으로 저장 실패, 재고 보상 필요: requestId={}",
-					event.requestId(), e
-				);
+				// 여기서 삼키면 오프셋이 정상 커밋돼 재시도/DLQ 경로를 아예 안 타므로 재전파해서 그 경로를 타게 함
+				throw e;
 			}
 		}
 		// 그 외 예외는 그대로 던져서 DefaultErrorHandler의 재시도(FixedBackOff) 대상이 되도록 함

@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.issue.producer;
 
+import java.util.concurrent.Executor;
+
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -21,26 +23,37 @@ public class CouponIssueEventProducer {
 	private final KafkaTemplate<String, Object> kafkaTemplate;
 	private final IssueMessageRepository issueMessageRepository;
 	private final JsonMapper jsonMapper;
+	private final Executor kafkaCallbackExecutor;
 
 	public void publish(IssueMessage issueMessage) {
-		CouponIssueEvent event = jsonMapper.readValue(issueMessage.getPayload(), CouponIssueEvent.class);
+		CouponIssueEvent event = null;
 
 		try {
-			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, event.requestId(), event)
-				.whenComplete((result, ex) -> {
+			final CouponIssueEvent parsedEvent = jsonMapper.readValue(issueMessage.getPayload(), CouponIssueEvent.class);
+			event = parsedEvent;
+
+			// whenComplete는 기본적으로 Kafka producer I/O 스레드에서 실행되므로,
+			// 그 안의 블로킹 DB 호출이 발행 파이프라인을 지연시키지 않도록 별도 executor로 뺌
+			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, parsedEvent.requestId(), parsedEvent)
+				.whenCompleteAsync((result, ex) -> {
 					if (ex != null) {
-						log.error("[CouponIssueEvent] 발행 실패: requestId={}", event.requestId(), ex);
-						markFailed(issueMessage, event, ex);
+						log.error("[CouponIssueEvent] 발행 실패: requestId={}", parsedEvent.requestId(), ex);
+						markFailed(issueMessage, parsedEvent, ex);
 					} else {
-						log.info("[CouponIssueEvent] 발행 성공: requestId={}", event.requestId());
+						log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
 						markSent(issueMessage);
 					}
-				});
+				}, kafkaCallbackExecutor);
 		} catch (RuntimeException e) {
-			// send()가 Future를 반환하기 전에 동기 예외를 던지면 whenComplete 콜백이 등록되지 않으므로
-			// 여기서 직접 보상하고, 호출자가 WAITING 상태를 유지하지 않도록 예외를 그대로 전파
-			log.error("[CouponIssueEvent] 발행 시도 자체가 동기 예외로 실패: requestId={}", event.requestId(), e);
-			markFailed(issueMessage, event, e);
+			// payload 파싱 실패(event==null) 또는 send()가 Future를 반환하기 전 동기 예외로 실패한 경우 —
+			// 어느 쪽이든 issue_message는 FAILED로 남겨야 하고, 호출자가 WAITING 상태를 유지하지 않도록 예외를 그대로 전파
+			log.error("[CouponIssueEvent] 발행 처리 실패: messageId={}", issueMessage.getMessageId(), e);
+			if (event != null) {
+				restoreStock(event);
+			}
+			issueMessageRepository.updateStatusWithError(
+				issueMessage.getMessageId(), IssueMessageStatus.FAILED, e.getMessage()
+			);
 			throw e;
 		}
 	}
