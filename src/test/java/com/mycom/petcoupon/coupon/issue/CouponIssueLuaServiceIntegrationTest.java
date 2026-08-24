@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.coupon.issue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,10 +19,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 
-@SpringBootTest(properties = {
-	"coupon.issue.stream.enabled=false"
-})
+@SpringBootTest
 public class CouponIssueLuaServiceIntegrationTest {
 
 	private static final Long COUPON_ID = 1L;
@@ -165,5 +165,25 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(result).isEqualTo(CouponIssueLuaResultStatus.SAME_REQUEST_RETRY);
         assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("9");
+    }
+    
+    @Test
+    void 재고_키가_초기화되지_않으면_미초기화_상태로_처리한다() {
+
+        CouponIssueLuaResultStatus result = couponIssueLuaService.issue(
+            COUPON_ID,
+            10L,
+            "request-1"
+        );
+
+        assertThat(result).isEqualTo(CouponIssueLuaResultStatus.STOCK_NOT_INITIALIZED);
+        assertThat(redisTemplate.hasKey(APPLICANTS_KEY)).isFalse();
+    }
+    
+    @Test
+    void 유효하지_않은_발급_요청은_예외가_발생한다() {
+        assertThatThrownBy(() ->
+            couponIssueLuaService.issue(null, 10L, "request-1")
+        ).isInstanceOf(GeneralException.class);
     }
 }

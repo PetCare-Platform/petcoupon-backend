@@ -24,7 +24,13 @@ if existingRequestId then
     return 2
 end
 
-local stock = tonumber(redis.call('GET', stockKey) or '0')
+local stockValue = redis.call('GET', stockKey)
+
+if not stockValue then
+    return 5
+end
+
+local stock = tonumber(stockValue)
 
 if stock <= 0 then
     return 3
