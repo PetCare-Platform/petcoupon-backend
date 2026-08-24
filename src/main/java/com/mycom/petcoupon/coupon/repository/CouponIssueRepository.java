@@ -64,9 +64,11 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	        UPDATE CouponIssue c
 	           SET c.status = :toStatus
 	         WHERE c.couponIssueId IN :ids
+	           AND c.status = :fromStatus
 	        """)
 	int expireByIds(
 	        @Param("ids") List<Long> ids,
+	        @Param("fromStatus") IssueStatus fromStatus,
 	        @Param("toStatus") IssueStatus toStatus
 	);
 }
