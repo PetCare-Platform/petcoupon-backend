@@ -6,6 +6,7 @@ import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
+import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
 import com.mycom.petcoupon.user.entity.AppUser;
@@ -36,6 +37,17 @@ public class EventConverter {
 
 	public EventDetailResponse toDetailResponse(Event event) {
 		return EventDetailResponse.builder()
+				.eventId(event.getEventId())
+				.name(event.getName())
+				.description(event.getDescription())
+				.openAt(event.getOpenAt())
+				.closeAt(event.getCloseAt())
+				.status(event.getStatus())
+				.build();
+	}
+
+	public EventUpdateResponse toUpdateResponse(Event event) {
+		return EventUpdateResponse.builder()
 				.eventId(event.getEventId())
 				.name(event.getName())
 				.description(event.getDescription())

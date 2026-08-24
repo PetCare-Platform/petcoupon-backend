@@ -14,6 +14,7 @@ import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
+import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
 import com.mycom.petcoupon.user.entity.AppUser;
@@ -67,6 +68,22 @@ class EventConverterTest {
 		Event event = eventFixture();
 
 		EventDetailResponse response = eventConverter.toDetailResponse(event);
+
+		assertAllEventFields(
+				response.eventId(),
+				response.name(),
+				response.description(),
+				response.openAt(),
+				response.closeAt(),
+				response.status()
+		);
+	}
+
+	@Test
+	void toUpdateResponseMapsAllEventFields() {
+		Event event = eventFixture();
+
+		EventUpdateResponse response = eventConverter.toUpdateResponse(event);
 
 		assertAllEventFields(
 				response.eventId(),
