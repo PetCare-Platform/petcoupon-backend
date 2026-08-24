@@ -36,11 +36,9 @@ public class CouponIssueEventProducer {
 	private final Executor kafkaCallbackExecutor;
 
 	public CompletableFuture<Void> publish(IssueMessage issueMessage) {
-		CouponIssueEvent event = null;
 
 		try {
 			final CouponIssueEvent parsedEvent = jsonMapper.readValue(issueMessage.getPayload(), CouponIssueEvent.class);
-			event = parsedEvent;
 
 			// Kafka 발행 완료 후 수행하는 DB 상태 갱신 작업을
 			// Kafka Producer I/O 스레드와 분리하기 위해 별도 Executor에서 처리
@@ -50,7 +48,7 @@ public class CouponIssueEventProducer {
 					try {
 						if (ex != null) {
 							log.error("[CouponIssueEvent] 발행 실패: requestId={}", parsedEvent.requestId(), ex);
-							markFailed(issueMessage, parsedEvent, ex);
+							markFailed(issueMessage, ex);
 							
 							// Publisher가 발행 실패를 인식하도록 Future를 예외 완료 상태로 만듦
 							throw new CompletionException(ex);
@@ -72,11 +70,11 @@ public class CouponIssueEventProducer {
 				}, kafkaCallbackExecutor);
 			
 		} catch (RuntimeException e) {
-			// payload 파싱 실패(event==null) 또는 send()가 Future를 반환하기 전 동기 예외로 실패한 경우 —
-			// 어느 쪽이든 issue_message는 FAILED로 남겨야 하고, 호출자가 WAITING 상태를 유지하지 않도록 예외를 그대로 전파
+			// payload 파싱 실패 또는 send()가 Future를 반환하기 전 동기 예외가 발생한 경우
+			// issue_message를 FAILED 상태로 변경하고 Publisher에 실패를 전파
 			log.error("[CouponIssueEvent] 발행 처리 실패: messageId={}", issueMessage.getMessageId(), e);
 			
-			markFailed(issueMessage, event, e);
+			markFailed(issueMessage, e);
 			
 			// Publisher의 exceptionally()에서 실패를 처리할 수 있도록 반환
 			return CompletableFuture.failedFuture(e);
@@ -87,21 +85,11 @@ public class CouponIssueEventProducer {
 		issueMessageRepository.markSent(issueMessage.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
 	}
 
-	private void markFailed(IssueMessage issueMessage, CouponIssueEvent event, Throwable ex) {
-		if (event != null) {
-	        restoreStock(event);
-	    }
-		
+	private void markFailed(IssueMessage issueMessage, Throwable ex) {
 		issueMessageRepository.markPublishFailed(issueMessage.getMessageId(), IssueMessageStatus.FAILED, errorMessage(ex));
 	}
 
-	// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
-	private void restoreStock(CouponIssueEvent event) {
-		log.warn(
-			"[CouponIssueEvent] 발행 실패로 재고 보상이 필요하지만 아직 구현되지 않음. couponId={}, userId={}, requestId={}",
-			event.couponId(), event.userId(), event.requestId()
-		);
-	}
+	// TODO: 최대 재시도 초과 Outbox 메시지의 DLQ 처리 및 Redis 재고 보상/정합성 보정 정책 구현
 	
 	private String errorMessage(Throwable throwable) {
 	    String message = throwable.getMessage();

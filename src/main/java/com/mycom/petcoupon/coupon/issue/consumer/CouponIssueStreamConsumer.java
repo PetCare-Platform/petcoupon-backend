@@ -56,7 +56,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 			);
 			
 			log.info(
-				    "[ISSUE] 선점 requestId={} status={} sequenceNo={}",
+				    "[ISSUE] Lua 처리 결과 requestId={} status={} sequenceNo={}",
 				    issueMessage.requestId(),
 				    luaResult.status(),
 				    luaResult.sequenceNo()
@@ -64,6 +64,10 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 			
 			switch (luaResult.status()) {
 				case SUCCESS, SAME_REQUEST_RETRY -> {
+					log.info(
+						"[ISSUE] 선점 requestId={} sequenceNo={}", issueMessage.requestId(), luaResult.sequenceNo()
+				    );
+					
 					couponIssueOutboxService.saveIfAbsent(issueMessage.couponId(), issueMessage.userId(), issueMessage.requestId(), luaResult.sequenceNo());
 
 					acknowledge(message);
