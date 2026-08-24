@@ -23,21 +23,8 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 	private final StringRedisTemplate redisTemplate;
     private final DefaultRedisScript<List> couponIssueLuaScript;
  
-
-    private String stockKey(Long couponId) {
-        return "coupon:issue:stock:{" + couponId + "}";
-    }
-
-    private String applicantsKey(Long couponId) {
-        return "coupon:issue:applicants:{" + couponId + "}";
-    }
-    
-    private String sequenceKey(Long couponId) {
-        return "coupon:issue:sequence:{" + couponId + "}";
-    }
-
-    private String requestSequenceKey(Long couponId) {
-        return "coupon:issue:request-sequence:{" + couponId + "}";
+    private String issueKey(String suffix, Long couponId) {
+        return "coupon:issue:" + suffix + ":{" + couponId + "}";
     }
     
     @Override
@@ -50,10 +37,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		luaResult = redisTemplate.execute(
     	    	couponIssueLuaScript,
     	    	List.of(
-    	    		stockKey(couponId), 
-    	    		applicantsKey(couponId),
-    	    		sequenceKey(couponId),
-    	    		requestSequenceKey(couponId)
+    	    		issueKey("stock", couponId), 
+    	    		issueKey("applicants", couponId),
+    	    	    issueKey("sequence", couponId),
+    	    	    issueKey("request-sequence", couponId)
     	    	),
     	    	userId.toString(),
     	    	requestId
@@ -78,8 +65,17 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     	}
 
     	try {
-    		long resultCode = ((Number) luaResult.get(0)).longValue();
-            long sequenceNo = ((Number) luaResult.get(1)).longValue();
+    		Object resultCodeValue = luaResult.get(0);
+    		Object sequenceNoValue = luaResult.get(1);
+
+    		if (!(resultCodeValue instanceof Number resultCodeNumber)
+    		        || !(sequenceNoValue instanceof Number sequenceNoNumber)) {
+
+    		    throw new IllegalArgumentException("Lua 결과 값이 숫자 형식이 아닙니다. result=" + luaResult);
+    		}
+    		
+    		long resultCode = resultCodeNumber.longValue();
+            long sequenceNo = sequenceNoNumber.longValue();
             
             CouponIssueLuaResultStatus status = CouponIssueLuaResultStatus.from(resultCode);
     	    
@@ -100,7 +96,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 	            		.sequenceNo(issuedSequenceNo)
 	            		.build();
             
-    	} catch (IllegalArgumentException | ClassCastException e) {
+    	} catch (IllegalArgumentException e) {
     		log.error(
     			"알 수 없는 쿠폰 발급 Lua 결과입니다. couponId={}, userId={}, requestId={}, result={}",
     			couponId,
@@ -128,10 +124,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     	
     	try {
     		redisTemplate.delete(List.of(
-    			stockKey(couponId),
-    			applicantsKey(couponId),
-    			sequenceKey(couponId),
-    			requestSequenceKey(couponId)
+    			issueKey("stock", couponId),  
+    			issueKey("applicants", couponId), 
+    			issueKey("sequence", couponId),
+    			issueKey("request-sequence", couponId)
     		));
     		
     	} catch (DataAccessException e) {

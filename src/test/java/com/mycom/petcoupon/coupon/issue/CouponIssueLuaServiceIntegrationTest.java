@@ -28,10 +28,10 @@ import com.mycom.petcoupon.global.common.exception.GeneralException;
 public class CouponIssueLuaServiceIntegrationTest {
 
 	private static final Long COUPON_ID = 1L;
-	private static final String STOCK_KEY = "coupon:issue:stock:{1}";
-	private static final String APPLICANTS_KEY = "coupon:issue:applicants:{1}";
-	private static final String SEQUENCE_KEY = "coupon:issue:sequence:{1}";
-	private static final String REQUEST_SEQUENCE_KEY = "coupon:issue:request-sequence:{1}";
+	
+	private static String issueKey(String suffix) {
+	    return "coupon:issue:" + suffix + ":{" + COUPON_ID + "}";
+	}
 		
     @Autowired
     private CouponIssueLuaService couponIssueLuaService;
@@ -43,10 +43,10 @@ public class CouponIssueLuaServiceIntegrationTest {
     void setUp() {
     	redisTemplate.delete(
     		List.of(
-    			STOCK_KEY,
-    			APPLICANTS_KEY,
-    			SEQUENCE_KEY,
-    	        REQUEST_SEQUENCE_KEY
+    			issueKey("stock"),
+    			issueKey("applicants"),
+    			issueKey("sequence"), 
+    			issueKey("request-sequence")
     		)
     	);
     }
@@ -55,17 +55,17 @@ public class CouponIssueLuaServiceIntegrationTest {
     void tearDown() {
     	redisTemplate.delete(
         	List.of(
-        		STOCK_KEY,
-        		APPLICANTS_KEY,
-        		SEQUENCE_KEY,
-                REQUEST_SEQUENCE_KEY
+        		issueKey("stock"),
+        		issueKey("applicants"),
+        		issueKey("sequence"), 
+        		issueKey("request-sequence")
         	)
         );
     }
 
     @Test
     void 재고가_있으면_재고를_차감하고_신청자를_등록한다() {
-        redisTemplate.opsForValue().set(STOCK_KEY, "1");
+        redisTemplate.opsForValue().set(issueKey("stock"), "1");
 
         CouponIssueLuaResult result = couponIssueLuaService.issue(
             COUPON_ID,
@@ -75,19 +75,19 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(result.status()).isEqualTo(CouponIssueLuaResultStatus.SUCCESS);
         assertThat(result.sequenceNo()).isEqualTo(1L);
-        assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
+        assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("0");
         assertThat(
-        	redisTemplate.opsForHash().get(APPLICANTS_KEY, "10")
+        	redisTemplate.opsForHash().get(issueKey("applicants"), "10")
         ).isEqualTo("request-1");
         
         assertThat(      		
-        	redisTemplate.opsForHash().get(REQUEST_SEQUENCE_KEY, "request-1")
+        	redisTemplate.opsForHash().get(issueKey("request-sequence"), "request-1")
         ).isEqualTo("1");
     }
 
     @Test
     void 동일_사용자가_다시_신청하면_중복으로_처리한다() {
-        redisTemplate.opsForValue().set(STOCK_KEY, "10");
+        redisTemplate.opsForValue().set(issueKey("stock"), "10");
 
         couponIssueLuaService.issue(COUPON_ID, 10L, "request-1");
 
@@ -99,12 +99,12 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(result.status()).isEqualTo(CouponIssueLuaResultStatus.ALREADY_APPLIED);
         assertThat(result.sequenceNo()).isNull();
-        assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("9");
+        assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
     }
 
     @Test
     void 재고가_없으면_품절로_처리한다() {
-        redisTemplate.opsForValue().set(STOCK_KEY, "0");
+        redisTemplate.opsForValue().set(issueKey("stock"), "0");
 
         CouponIssueLuaResult result = couponIssueLuaService.issue(
             COUPON_ID,
@@ -122,7 +122,7 @@ public class CouponIssueLuaServiceIntegrationTest {
         int stock = 30;
         int requestCount = 100;
 
-        redisTemplate.opsForValue().set(STOCK_KEY, String.valueOf(stock));
+        redisTemplate.opsForValue().set(issueKey("stock"), String.valueOf(stock));
 
         ExecutorService executor = Executors.newFixedThreadPool(10);
         CountDownLatch startLatch = new CountDownLatch(1);
@@ -159,10 +159,10 @@ public class CouponIssueLuaServiceIntegrationTest {
             }
 
             assertThat(successCount).isEqualTo(stock);
-            assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("0");
-            assertThat(redisTemplate.opsForValue().get(SEQUENCE_KEY)).isEqualTo(String.valueOf(stock));
-            assertThat(redisTemplate.opsForHash().size(APPLICANTS_KEY)).isEqualTo((long) stock);
-            assertThat(redisTemplate.opsForHash().size(REQUEST_SEQUENCE_KEY)).isEqualTo((long) stock);
+            assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("0");
+            assertThat(redisTemplate.opsForValue().get(issueKey("sequence"))).isEqualTo(String.valueOf(stock));
+            assertThat(redisTemplate.opsForHash().size(issueKey("applicants"))).isEqualTo((long) stock);
+            assertThat(redisTemplate.opsForHash().size(issueKey("request-sequence"))).isEqualTo((long) stock);
 
             assertThat(sequenceNumbers).hasSize(stock);
             for (long sequenceNo = 1; sequenceNo <= stock; sequenceNo++) {
@@ -176,7 +176,7 @@ public class CouponIssueLuaServiceIntegrationTest {
     
     @Test
     void 같은_요청이_재시도되면_최초_발급_순번을_반환한다() {
-        redisTemplate.opsForValue().set(STOCK_KEY, "10");
+        redisTemplate.opsForValue().set(issueKey("stock"), "10");
 
         CouponIssueLuaResult firstResult = couponIssueLuaService.issue(
             COUPON_ID,
@@ -196,8 +196,8 @@ public class CouponIssueLuaServiceIntegrationTest {
         assertThat(retryResult.status()).isEqualTo(CouponIssueLuaResultStatus.SAME_REQUEST_RETRY);
         assertThat(retryResult.sequenceNo()).isEqualTo(1L);
 
-        assertThat(redisTemplate.opsForValue().get(STOCK_KEY)).isEqualTo("9");
-        assertThat(redisTemplate.opsForValue().get(SEQUENCE_KEY)).isEqualTo("1");
+        assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+        assertThat(redisTemplate.opsForValue().get(issueKey("sequence"))).isEqualTo("1");
     }
     
     @Test
@@ -211,7 +211,7 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(result.status()).isEqualTo(CouponIssueLuaResultStatus.STOCK_NOT_INITIALIZED);
         assertThat(result.sequenceNo()).isNull();
-        assertThat(redisTemplate.hasKey(APPLICANTS_KEY)).isFalse();
+        assertThat(redisTemplate.hasKey(issueKey("applicants"))).isFalse();
     }
     
     @Test
@@ -224,7 +224,7 @@ public class CouponIssueLuaServiceIntegrationTest {
     @Test
     void 신청_이력은_있지만_순번_이력이_없으면_순번_조회_실패로_처리한다() {
         redisTemplate.opsForHash().put(
-            APPLICANTS_KEY,
+        	issueKey("applicants"),
             "10",
             "request-1"
         );
@@ -242,7 +242,7 @@ public class CouponIssueLuaServiceIntegrationTest {
     
     @Test
     void 쿠폰_발급_Redis_상태를_초기화한다() {
-        redisTemplate.opsForValue().set(STOCK_KEY, "10");
+        redisTemplate.opsForValue().set(issueKey("stock"), "10");
 
         couponIssueLuaService.issue(
             COUPON_ID,
@@ -252,9 +252,9 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         couponIssueLuaService.clearIssueState(COUPON_ID);
 
-        assertThat(redisTemplate.hasKey(STOCK_KEY)).isFalse();
-        assertThat(redisTemplate.hasKey(APPLICANTS_KEY)).isFalse();
-        assertThat(redisTemplate.hasKey(SEQUENCE_KEY)).isFalse();
-        assertThat(redisTemplate.hasKey(REQUEST_SEQUENCE_KEY)).isFalse();
+        assertThat(redisTemplate.hasKey(issueKey("stock"))).isFalse();
+        assertThat(redisTemplate.hasKey(issueKey("applicants"))).isFalse();
+        assertThat(redisTemplate.hasKey(issueKey("sequence"))).isFalse();
+        assertThat(redisTemplate.hasKey(issueKey("request-sequence"))).isFalse();
     }
 }
