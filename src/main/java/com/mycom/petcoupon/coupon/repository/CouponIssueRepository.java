@@ -17,6 +17,9 @@ import jakarta.persistence.LockModeType;
 
 public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> {
 
+	// Kafka Consumer 중복 소비 방지용 (request_id unique 제약과 짝을 이룸)
+	boolean existsByRequestId(String requestId);
+
 	@Modifying(clearAutomatically = true)
     @Query("""
             UPDATE CouponIssue c
