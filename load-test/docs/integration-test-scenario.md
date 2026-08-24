@@ -208,6 +208,31 @@ TC-80 · TC-81 · TC-82는 **요청이 서버에 도착한 시각**을 알아야
 [ISSUE] 저장 완료  requestId=... couponIssueId=...
 ```
 
+| 단계 | 위치 | 현재 |
+| --- | --- | --- |
+| 접수 | `CouponController` / `CouponIssueServiceImpl` | 없음 |
+| 선점 | `CouponIssueLuaServiceImpl` | 없음 |
+| 발행 | `CouponIssueEventProducer` | 있음 |
+| 수신 | `CouponIssueEventConsumer` | 있음 |
+| 저장 완료 | `CouponIssuePersister` | 없음 |
+
+#### 로그 레벨
+
+건당 로그는 순서 검증(TC-80 ~ TC-82)에만 필요하다. 부하 테스트 규모에서는 요청 20,000건당 10만 줄이 쌓여 확인이 불가능하고, 로그 기록 시간이 응답 시간 측정에 섞인다.
+
+레벨을 환경변수로 분리해 상황에 따라 조절한다.
+
+```properties
+logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
+```
+
+| 상황 | 설정 | 결과 |
+| --- | --- | --- |
+| 통합 테스트 · 순서 검증 | 기본값 (`INFO`) | 단계별 로그 전부 기록 |
+| 부하 테스트 | `ISSUE_LOG_LEVEL=WARN` | 정상 경로 로그 제외, **에러 로그는 유지** |
+
+대규모에서의 순서 검증은 로그가 아니라 SQL로 수행한다. `sequence_no`가 1~N 빠짐·중복 없이 부여됐는지만 확인하면 되기 때문이다.
+
 ## 4. 판정 기준
 
 | 항목 | 합격 조건 |

@@ -52,6 +52,7 @@
 | MySQL | `max_connections=500` |
 | 부하 발생기 | `ulimit -n` 상향 (셸 세션마다 재설정 필요) |
 | 커널 | `ip_local_port_range` 확장 (인스턴스 재시작 시 초기화됨) |
+| **로그 레벨** | `ISSUE_LOG_LEVEL=WARN` — 건당 로그가 응답 시간 측정에 섞이지 않도록 낮춘다. 에러 로그는 유지된다 |
 
 ## 3. 단계 구성
 
