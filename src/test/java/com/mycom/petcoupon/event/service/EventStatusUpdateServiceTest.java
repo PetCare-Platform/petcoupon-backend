@@ -2,8 +2,10 @@ package com.mycom.petcoupon.event.service;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -63,6 +65,8 @@ class EventStatusUpdateServiceTest {
 		when(admin.getUserId()).thenReturn(10L);
 		when(appUserRepository.findFirstByRoleAndStatusOrderByUserIdAsc(UserRole.ROLE_ADMIN, UserStatus.ACTIVE))
 				.thenReturn(Optional.of(admin));
+		when(eventRepository.updateStatusIfMatches(eventId, EventStatus.SCHEDULED, EventStatus.OPEN))
+				.thenReturn(1);
 
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).status(EventStatus.OPEN).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
@@ -95,6 +99,88 @@ class EventStatusUpdateServiceTest {
 
 		assertSame(EventErrorCode.SAME_EVENT_STATUS, exception.getErrorCode());
 		verifyNoInteractions(appUserRepository);
+		verifyNoInteractions(eventStatusHistoryRepository);
+		verifyNoInteractions(eventConverter);
+	}
+
+	@Test
+	void updateEventStatusThrowsInvalidTransitionWhenSkippingOpen() {
+		Long eventId = 1L;
+		EventStatusUpdateRequest request = new EventStatusUpdateRequest(EventStatus.CLOSED, null);
+		Event event = mock(Event.class);
+		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
+		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> eventService.updateEventStatus(eventId, request)
+		);
+
+		assertSame(EventErrorCode.INVALID_EVENT_STATUS_TRANSITION, exception.getErrorCode());
+		verifyNoInteractions(appUserRepository);
+		verifyNoInteractions(eventStatusHistoryRepository);
+		verifyNoInteractions(eventConverter);
+	}
+
+	@Test
+	void updateEventStatusThrowsInvalidTransitionWhenGoingBackwards() {
+		Long eventId = 1L;
+		EventStatusUpdateRequest request = new EventStatusUpdateRequest(EventStatus.SCHEDULED, null);
+		Event event = mock(Event.class);
+		when(event.getStatus()).thenReturn(EventStatus.OPEN);
+		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> eventService.updateEventStatus(eventId, request)
+		);
+
+		assertSame(EventErrorCode.INVALID_EVENT_STATUS_TRANSITION, exception.getErrorCode());
+		verifyNoInteractions(appUserRepository);
+		verifyNoInteractions(eventStatusHistoryRepository);
+		verifyNoInteractions(eventConverter);
+	}
+
+	@Test
+	void updateEventStatusThrowsInvalidTransitionWhenEventIsAlreadyClosed() {
+		Long eventId = 1L;
+		EventStatusUpdateRequest request = new EventStatusUpdateRequest(EventStatus.OPEN, null);
+		Event event = mock(Event.class);
+		when(event.getStatus()).thenReturn(EventStatus.CLOSED);
+		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> eventService.updateEventStatus(eventId, request)
+		);
+
+		assertSame(EventErrorCode.INVALID_EVENT_STATUS_TRANSITION, exception.getErrorCode());
+		verifyNoInteractions(appUserRepository);
+		verifyNoInteractions(eventStatusHistoryRepository);
+		verifyNoInteractions(eventConverter);
+	}
+
+	@Test
+	void updateEventStatusThrowsConflictWhenStatusWasChangedConcurrently() {
+		Long eventId = 1L;
+		EventStatusUpdateRequest request = new EventStatusUpdateRequest(EventStatus.OPEN, "선착순 마감으로 오픈");
+		Event event = mock(Event.class);
+		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
+		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+
+		AppUser admin = mock(AppUser.class);
+		when(appUserRepository.findFirstByRoleAndStatusOrderByUserIdAsc(UserRole.ROLE_ADMIN, UserStatus.ACTIVE))
+				.thenReturn(Optional.of(admin));
+		when(eventRepository.updateStatusIfMatches(eventId, EventStatus.SCHEDULED, EventStatus.OPEN))
+				.thenReturn(0);
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> eventService.updateEventStatus(eventId, request)
+		);
+
+		assertSame(EventErrorCode.EVENT_STATUS_CONFLICT, exception.getErrorCode());
+		verify(event, never()).updateStatus(any());
 		verifyNoInteractions(eventStatusHistoryRepository);
 		verifyNoInteractions(eventConverter);
 	}

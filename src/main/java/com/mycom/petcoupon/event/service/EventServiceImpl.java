@@ -125,8 +125,16 @@ public class EventServiceImpl implements EventService {
 		if (fromStatus == toStatus) {
 			throw new GeneralException(EventErrorCode.SAME_EVENT_STATUS);
 		}
+		if (!fromStatus.canTransitionTo(toStatus)) {
+			throw new GeneralException(EventErrorCode.INVALID_EVENT_STATUS_TRANSITION);
+		}
 
 		AppUser admin = findActiveAdmin();
+
+		int updatedRows = eventRepository.updateStatusIfMatches(eventId, fromStatus, toStatus);
+		if (updatedRows == 0) {
+			throw new GeneralException(EventErrorCode.EVENT_STATUS_CONFLICT);
+		}
 		event.updateStatus(toStatus);
 
 		EventStatusHistory history = EventStatusHistory.builder()
