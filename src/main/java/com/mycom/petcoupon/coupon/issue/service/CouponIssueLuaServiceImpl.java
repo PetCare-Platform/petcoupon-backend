@@ -121,4 +121,35 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
         }
     }
+    
+    @Override
+	public void clearIssueState(Long couponId) {
+    	validateCouponId(couponId);
+    	
+    	try {
+    		redisTemplate.delete(List.of(
+    			stockKey(couponId),
+    			applicantsKey(couponId),
+    			sequenceKey(couponId),
+    			requestSequenceKey(couponId)
+    		));
+    		
+    	} catch (DataAccessException e) {
+    		log.error(
+    			"쿠폰 발급 Redis 상태 초기화에 실패했습니다. couponId={}", 
+    			couponId,
+    			e
+    		);
+    		throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+		}
+		
+	}
+    
+    private void validateCouponId(Long couponId) {
+        if (couponId == null || couponId <= 0) {
+            throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
+        }
+    }
+    
+    
 }

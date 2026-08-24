@@ -239,4 +239,22 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(result.sequenceNo()).isNull();
     }
+    
+    @Test
+    void 쿠폰_발급_Redis_상태를_초기화한다() {
+        redisTemplate.opsForValue().set(STOCK_KEY, "10");
+
+        couponIssueLuaService.issue(
+            COUPON_ID,
+            10L,
+            "request-1"
+        );
+
+        couponIssueLuaService.clearIssueState(COUPON_ID);
+
+        assertThat(redisTemplate.hasKey(STOCK_KEY)).isFalse();
+        assertThat(redisTemplate.hasKey(APPLICANTS_KEY)).isFalse();
+        assertThat(redisTemplate.hasKey(SEQUENCE_KEY)).isFalse();
+        assertThat(redisTemplate.hasKey(REQUEST_SEQUENCE_KEY)).isFalse();
+    }
 }
