@@ -96,4 +96,17 @@ class CouponIssueServiceImplTest {
 
         verify(redisCouponStockService).restoreStock(COUPON_ID, USER_ID, IDEMPOTENCY_KEY);
     }
+
+    @Test
+    void 롤백_자체가_실패해도_원래_발행_실패_예외를_그대로_전파한다() {
+        when(redisCouponStockService.decreaseStock(eq(COUPON_ID), eq(USER_ID), anyString()))
+            .thenReturn(CouponIssueResult.SUCCESS);
+        GeneralException publishFailure = new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
+        when(couponIssueStreamProducer.publish(any(), any(), any())).thenThrow(publishFailure);
+        org.mockito.Mockito.doThrow(new UnsupportedOperationException("롤백 스크립트 미구현"))
+            .when(redisCouponStockService).restoreStock(any(), any(), any());
+
+        assertThatThrownBy(() -> service.issue(COUPON_ID, request, IDEMPOTENCY_KEY))
+            .isSameAs(publishFailure);
+    }
 }

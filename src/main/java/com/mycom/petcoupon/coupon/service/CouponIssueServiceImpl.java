@@ -14,6 +14,7 @@ import com.mycom.petcoupon.global.common.code.BaseErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 선착순 쿠폰 신청 오케스트레이션.
@@ -21,6 +22,7 @@ import lombok.RequiredArgsConstructor;
  * 성공이면 응답 DTO로, 실패면 GeneralException으로 변환해서 던진다.
  * Redis 차감 성공 후에는 Stream 발행까지 이어가고, 발행이 실패하면 차감된 재고를 되돌린다(#58).
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CouponIssueServiceImpl implements CouponIssueService {
@@ -53,8 +55,18 @@ public class CouponIssueServiceImpl implements CouponIssueService {
         try {
             couponIssueStreamProducer.publish(couponId, request.userId(), requestId);
         } catch (RuntimeException e) {
-            // 발행 실패 시 이미 차감된 Redis 재고를 되돌려서 고아 차감이 남지 않게 한다
-            redisCouponStockService.restoreStock(couponId, request.userId(), requestId);
+            // 발행 실패 시 이미 차감된 Redis 재고를 되돌려서 고아 차감이 남지 않게 한다.
+            // restoreStock 자체가 실패해도(예: 롤백 스크립트 미구현) 원래 발행 실패 예외(e)를 그대로 던져야 한다 —
+            // 안 그러면 catch(GeneralException)이 아니라 catch(RuntimeException) 쪽으로 새서 컨트롤러가
+            // idempotency 실패를 failWithoutBody로 기록하게 되고, 재시도 때 Redis가 다시 호출된다.
+            try {
+                redisCouponStockService.restoreStock(couponId, request.userId(), requestId);
+            } catch (RuntimeException restoreException) {
+                log.error(
+                    "재고 롤백 실패 — Redis 재고가 복구되지 않았을 수 있습니다. couponId={}, userId={}, requestId={}",
+                    couponId, request.userId(), requestId, restoreException
+                );
+            }
             throw e;
         }
 
