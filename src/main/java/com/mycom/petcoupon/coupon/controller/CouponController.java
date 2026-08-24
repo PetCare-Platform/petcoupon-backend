@@ -27,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -49,7 +50,7 @@ public class CouponController {
     @PostMapping("/coupons/{couponId}/issues")
     public ResponseEntity<?> issue(
             @PathVariable("couponId") @Positive Long couponId,
-            @RequestHeader("Idempotency-Key") @NotBlank String idempotencyKey,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 64) String idempotencyKey,
             @Valid @RequestBody CouponIssueCreateRequest request) {
 
         // 0단계: 쿠폰 존재 확인을 멱등성 체크보다 먼저 한다.
@@ -93,8 +94,12 @@ public class CouponController {
         // 실제 발급 로직(CouponIssueService)을 실행하고, 그 결과를 반드시 idempotency_key에 기록한다.
         // recordId를 기록해두지 않으면 이 레코드가 영원히 IN_PROGRESS로 남는다.
         Long recordId = decision.recordId();
+        // Idempotency-Key는 (user_id, idempotency_key)에서만 유니크해서 서로 다른 유저가 같은 값을 보낼 수 있다.
+        // requestId는 coupon_issue.request_id/issue_message.message_key처럼 전역 유니크해야 하는 곳에 쓰이므로,
+        // 전역 유일한 idempotency_id(recordId) 기반으로 별도 생성한다.
+        String requestId = "issue:" + recordId;
         try {
-            CouponIssueCreateResponse response = couponIssueService.issue(couponId, request, idempotencyKey);
+            CouponIssueCreateResponse response = couponIssueService.issue(couponId, request, requestId);
             CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(response);
             // 성공 응답을 통째로 저장 — 다음에 같은 키가 오면 이 JSON을 그대로 재현한다
             

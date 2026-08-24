@@ -28,15 +28,11 @@ public class CouponIssueServiceImpl implements CouponIssueService {
     private final CouponIssueConverter couponIssueConverter;
 
     @Override
-    public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request, String idempotencyKey) {
+    public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request, String requestId) {
         // 존재하지 않는 쿠폰이면 Stream에 넣을 필요 없이 여기서 바로 차단
         if (!couponRepository.existsById(couponId)) {
             throw new GeneralException(CouponErrorCode.COUPON_NOT_FOUND);
         }
-
-        // 클라이언트가 보낸 Idempotency-Key를 그대로 Stream 메시지의 requestId로 쓴다.
-        // Consumer 쪽 Lua 실행이 이 값으로 재요청/재처리를 구분한다(#57/#60 참고).
-        String requestId = idempotencyKey;
 
         couponIssueStreamProducer.publish(couponId, request.userId(), requestId);
 
