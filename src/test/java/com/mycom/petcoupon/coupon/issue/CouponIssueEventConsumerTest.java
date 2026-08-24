@@ -69,15 +69,17 @@ class CouponIssueEventConsumerTest {
 	}
 
 	@Test
-	void 저장중_실제_제약위반이면_예외없이_로그만_남긴다() {
+	void 저장중_실제_제약위반이면_예외를_재전파해_재시도_DLQ_경로를_타게_한다() {
 		when(couponIssueRepository.existsByRequestId("request-1"))
 			.thenReturn(false)
 			.thenReturn(false);
 
-		doThrow(new DataIntegrityViolationException("fk violation"))
-			.when(couponIssuePersister).persist(EVENT);
+		DataIntegrityViolationException fkViolation = new DataIntegrityViolationException("fk violation");
+		doThrow(fkViolation).when(couponIssuePersister).persist(EVENT);
 
-		assertThatCode(() -> consumer.consume(EVENT)).doesNotThrowAnyException();
+		Throwable thrown = catchThrowable(() -> consumer.consume(EVENT));
+
+		assertThat(thrown).isSameAs(fkViolation);
 	}
 
 	@Test

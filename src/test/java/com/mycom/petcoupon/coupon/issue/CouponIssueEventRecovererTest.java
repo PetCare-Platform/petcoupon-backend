@@ -2,14 +2,11 @@ package com.mycom.petcoupon.coupon.issue;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
-import java.util.Optional;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
@@ -22,7 +19,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueEventRecoverer;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
-import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -44,9 +40,9 @@ class CouponIssueEventRecovererTest {
 
 	@Test
 	void 이벤트_역직렬화에_성공하면_DLQ_토픽에_발행하고_상태를_갱신한다() {
-		IssueMessage issueMessage = mock(IssueMessage.class);
-		when(issueMessage.getMessageId()).thenReturn(1L);
-		when(issueMessageRepository.findByMessageKey("request-1")).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.markDlq(
+			KafkaTopics.COUPON_ISSUE_EVENT, "request-1", IssueMessageStatus.DLQ, "consume failed"
+		)).thenReturn(1);
 
 		ConsumerRecord<String, Object> record =
 			new ConsumerRecord<>(KafkaTopics.COUPON_ISSUE_EVENT, 0, 0L, "request-1", EVENT);
@@ -54,12 +50,16 @@ class CouponIssueEventRecovererTest {
 		recoverer.accept(record, new RuntimeException("consume failed"));
 
 		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
-		verify(issueMessageRepository).markDlq(eq(1L), eq(IssueMessageStatus.DLQ), any());
+		verify(issueMessageRepository).markDlq(
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+		);
 	}
 
 	@Test
 	void issue_message를_찾지_못해도_DLQ_토픽_발행은_그대로_한다() {
-		when(issueMessageRepository.findByMessageKey("request-1")).thenReturn(Optional.empty());
+		when(issueMessageRepository.markDlq(
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+		)).thenReturn(0);
 
 		ConsumerRecord<String, Object> record =
 			new ConsumerRecord<>(KafkaTopics.COUPON_ISSUE_EVENT, 0, 0L, "request-1", EVENT);
@@ -67,7 +67,20 @@ class CouponIssueEventRecovererTest {
 		recoverer.accept(record, new RuntimeException("consume failed"));
 
 		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
-		verify(issueMessageRepository, never()).markDlq(any(), any(), any());
+	}
+
+	@Test
+	void markDlq_처리중_예외가_나도_DLQ_토픽_발행은_시도한다() {
+		when(issueMessageRepository.markDlq(
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+		)).thenThrow(new RuntimeException("db down"));
+
+		ConsumerRecord<String, Object> record =
+			new ConsumerRecord<>(KafkaTopics.COUPON_ISSUE_EVENT, 0, 0L, "request-1", EVENT);
+
+		recoverer.accept(record, new RuntimeException("consume failed"));
+
+		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
 	}
 
 	@Test

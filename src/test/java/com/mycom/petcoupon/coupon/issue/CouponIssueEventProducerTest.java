@@ -10,9 +10,9 @@ import static org.mockito.Mockito.when;
 import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -46,8 +46,14 @@ class CouponIssueEventProducerTest {
 	@Mock
 	private IssueMessage issueMessage;
 
-	@InjectMocks
 	private CouponIssueEventProducer producer;
+
+	@BeforeEach
+	void setUp() {
+		// whenCompleteAsync는 별도 executor에서 콜백을 돌리는데, 테스트에서 비동기로 두면
+		// verify() 시점에 콜백이 아직 안 끝났을 수 있어 그 자리에서 바로 실행하는 executor를 씀
+		producer = new CouponIssueEventProducer(kafkaTemplate, issueMessageRepository, jsonMapper, Runnable::run);
+	}
 
 	@Test
 	void 발행에_성공하면_SENT로_상태를_갱신한다() {
@@ -93,5 +99,20 @@ class CouponIssueEventProducerTest {
 
 		assertThat(thrown).isInstanceOf(RuntimeException.class);
 		verify(issueMessageRepository).updateStatusWithError(eq(1L), eq(IssueMessageStatus.FAILED), any());
+	}
+
+	@Test
+	void payload_파싱에_실패하면_FAILED로_갱신하고_예외를_전파한다() {
+		when(issueMessage.getMessageId()).thenReturn(1L);
+		when(issueMessage.getPayload()).thenReturn("not-json");
+		when(jsonMapper.readValue("not-json", CouponIssueEvent.class))
+			.thenThrow(new RuntimeException("malformed json"));
+
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
+
+		assertThat(thrown).isInstanceOf(RuntimeException.class);
+		verify(issueMessageRepository).updateStatusWithError(eq(1L), eq(IssueMessageStatus.FAILED), any());
+		verify(kafkaTemplate, org.mockito.Mockito.never())
+			.send(any(String.class), any(), any());
 	}
 }

@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.coupon.issue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,6 +67,8 @@ class CouponIssuePersisterTest {
 		when(couponIssueRepository.saveAndFlush(couponIssueCaptor.capture()))
 			.thenAnswer(invocation -> invocation.getArgument(0));
 
+		when(couponStockRepository.increaseIssuedQuantity(1L)).thenReturn(1);
+
 		persister.persist(EVENT);
 
 		CouponIssue savedCouponIssue = couponIssueCaptor.getValue();
@@ -84,5 +88,23 @@ class CouponIssuePersisterTest {
 		assertThat(history.getActorType()).isEqualTo(HistoryActorType.SYSTEM);
 		assertThat(history.getCouponId()).isEqualTo(1L);
 		assertThat(history.getUserId()).isEqualTo(10L);
+	}
+
+	@Test
+	void 재고_갱신이_0건이면_예외를_던져_트랜잭션이_롤백되게_한다() {
+		Coupon coupon = mock(Coupon.class);
+		AppUser user = mock(AppUser.class);
+
+		when(couponRepository.getReferenceById(1L)).thenReturn(coupon);
+		when(appUserRepository.getReferenceById(10L)).thenReturn(user);
+		when(couponIssueRepository.saveAndFlush(org.mockito.ArgumentMatchers.any(CouponIssue.class)))
+			.thenAnswer(invocation -> invocation.getArgument(0));
+
+		when(couponStockRepository.increaseIssuedQuantity(1L)).thenReturn(0);
+
+		Throwable thrown = catchThrowable(() -> persister.persist(EVENT));
+
+		assertThat(thrown).isInstanceOf(IllegalStateException.class);
+		verify(couponIssueHistoryRepository, never()).save(org.mockito.ArgumentMatchers.any());
 	}
 }
