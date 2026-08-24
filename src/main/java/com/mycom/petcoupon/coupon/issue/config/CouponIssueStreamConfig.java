@@ -35,7 +35,9 @@ public class CouponIssueStreamConfig {
 
 	private final CouponIssueStreamProperties properties;
 	private final StringRedisTemplate redisTemplate;
-	private final TaskScheduler taskScheduler;
+	// 필드명을 빈 이름(redisStreamRecoveryTaskScheduler)과 똑같이 맞춰서, 이제 TaskScheduler 빈이
+	// 두 개(이거+CouponBatchSchedulerConfig.taskScheduler)가 됐어도 이름 매칭으로 정확히 이 빈만 주입되게 함.
+	private final TaskScheduler redisStreamRecoveryTaskScheduler;
 	private final CouponIssueStreamConsumer consumer;
 	
 	// Redis 오류 발생 후 복구 시도까지의 지연 시간
@@ -121,7 +123,7 @@ public class CouponIssueStreamConfig {
 	        return;
 	    }
 
-	    taskScheduler.schedule(
+	    redisStreamRecoveryTaskScheduler.schedule(
 	        () -> {
 	        	try {
 	        		recoverConsumer(error);
