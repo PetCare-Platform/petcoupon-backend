@@ -1,13 +1,20 @@
 package com.mycom.petcoupon.event.service;
 
+import java.time.LocalDateTime;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
+import com.mycom.petcoupon.event.dto.req.EventDescriptionUpdateRequest;
+import com.mycom.petcoupon.event.dto.req.EventNameUpdateRequest;
+import com.mycom.petcoupon.event.dto.req.EventPeriodUpdateRequest;
+import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
+import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.EventStatusHistory;
 import com.mycom.petcoupon.event.entity.enums.ActorType;
@@ -72,8 +79,83 @@ public class EventServiceImpl implements EventService {
 		return eventConverter.toStatusResponse(eventId, status);
 	}
 
+	@Override
+	@Transactional
+	public EventUpdateResponse updateEventName(Long eventId, EventNameUpdateRequest request) {
+		Event event = eventRepository.findById(eventId)
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
+
+		event.updateName(request.name());
+
+		return eventConverter.toUpdateResponse(event);
+	}
+
+	@Override
+	@Transactional
+	public EventUpdateResponse updateEventPeriod(Long eventId, EventPeriodUpdateRequest request) {
+		validatePeriod(request.openAt(), request.closeAt());
+
+		Event event = eventRepository.findById(eventId)
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
+
+		event.updatePeriod(request.openAt(), request.closeAt());
+
+		return eventConverter.toUpdateResponse(event);
+	}
+
+	@Override
+	@Transactional
+	public EventUpdateResponse updateEventDescription(Long eventId, EventDescriptionUpdateRequest request) {
+		Event event = eventRepository.findById(eventId)
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
+
+		event.updateDescription(request.description());
+
+		return eventConverter.toUpdateResponse(event);
+	}
+
+	@Override
+	@Transactional
+	public EventUpdateResponse updateEventStatus(Long eventId, EventStatusUpdateRequest request) {
+		Event event = eventRepository.findById(eventId)
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
+
+		EventStatus fromStatus = event.getStatus();
+		EventStatus toStatus = request.status();
+		if (fromStatus == toStatus) {
+			throw new GeneralException(EventErrorCode.SAME_EVENT_STATUS);
+		}
+		if (!fromStatus.canTransitionTo(toStatus)) {
+			throw new GeneralException(EventErrorCode.INVALID_EVENT_STATUS_TRANSITION);
+		}
+
+		AppUser admin = findActiveAdmin();
+
+		int updatedRows = eventRepository.updateStatusIfMatches(eventId, fromStatus, toStatus);
+		if (updatedRows == 0) {
+			throw new GeneralException(EventErrorCode.EVENT_STATUS_CONFLICT);
+		}
+		event.updateStatus(toStatus);
+
+		EventStatusHistory history = EventStatusHistory.builder()
+				.event(event)
+				.fromStatus(EventHistoryStatus.valueOf(fromStatus.name()))
+				.toStatus(EventHistoryStatus.valueOf(toStatus.name()))
+				.actorType(ActorType.ADMIN)
+				.actorId(admin.getUserId())
+				.reason(request.reason())
+				.build();
+		eventStatusHistoryRepository.save(history);
+
+		return eventConverter.toUpdateResponse(event);
+	}
+
 	private void validatePeriod(EventCreateRequest request) {
-		if (!request.closeAt().isAfter(request.openAt())) {
+		validatePeriod(request.openAt(), request.closeAt());
+	}
+
+	private void validatePeriod(LocalDateTime openAt, LocalDateTime closeAt) {
+		if (!closeAt.isAfter(openAt)) {
 			throw new GeneralException(EventErrorCode.INVALID_EVENT_PERIOD);
 		}
 	}
