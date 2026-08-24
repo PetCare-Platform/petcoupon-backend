@@ -55,28 +55,27 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				issueMessage.requestId()
 			);
 			
+			log.info(
+				    "[ISSUE] 선점 requestId={} status={} sequenceNo={}",
+				    issueMessage.requestId(),
+				    luaResult.status(),
+				    luaResult.sequenceNo()
+			);
+			
 			switch (luaResult.status()) {
-		    case SUCCESS, SAME_REQUEST_RETRY -> {
-		        couponIssueOutboxService.saveIfAbsent(
-		            issueMessage.couponId(),
-		            issueMessage.userId(),
-		            issueMessage.requestId(),
-		            luaResult.sequenceNo()
-		        );
+				case SUCCESS, SAME_REQUEST_RETRY -> {
+					couponIssueOutboxService.saveIfAbsent(issueMessage.couponId(), issueMessage.userId(), issueMessage.requestId(), luaResult.sequenceNo());
 
-		        acknowledge(message);
-		    }
+					acknowledge(message);
+				}
 
-		    case ALREADY_APPLIED, SOLD_OUT -> {
-		        acknowledge(message);
-		    }
+				case ALREADY_APPLIED, SOLD_OUT -> {
+					acknowledge(message);
+				}
 
-		    case STOCK_NOT_INITIALIZED, SEQUENCE_NOT_FOUND ->
-		        throw new IllegalStateException(
-		            "쿠폰 발급 Redis 상태가 정상적이지 않습니다. status="
-		                + luaResult.status()
-		        );
-			}
+				case STOCK_NOT_INITIALIZED, SEQUENCE_NOT_FOUND ->
+					throw new IllegalStateException("쿠폰 발급 Redis 상태가 정상적이지 않습니다. status=" + luaResult.status());
+				}
 			
 			log.info("쿠폰 신청 메시지 처리 및 ACK 완료. messageId={}", message.getId());
 

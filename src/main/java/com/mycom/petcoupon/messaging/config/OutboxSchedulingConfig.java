@@ -12,8 +12,7 @@ public class OutboxSchedulingConfig {
 	
 	@Bean
     public TaskScheduler outboxTaskScheduler() {
-        ThreadPoolTaskScheduler scheduler =
-            new ThreadPoolTaskScheduler();
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
 
         scheduler.setPoolSize(1);
         scheduler.setThreadNamePrefix("coupon-outbox-publisher-");
