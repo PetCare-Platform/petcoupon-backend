@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -187,6 +188,7 @@ class CouponIssueConcurrencyIntegrationTest {
 		entityManager.clear();
 		CouponIssue reloaded = couponIssueRepository.findById(couponIssueId).orElseThrow();
 		assertThat(reloaded.getStatus()).isEqualTo(IssueStatus.USED);
+		assertThat(historyCountOf(couponIssueId)).isEqualTo(1L);
 	}
 
 	@Test
@@ -226,14 +228,28 @@ class CouponIssueConcurrencyIntegrationTest {
 		entityManager.clear();
 		CouponIssue reloaded = couponIssueRepository.findById(couponIssueId).orElseThrow();
 		assertThat(reloaded.getStatus()).isEqualTo(IssueStatus.ISSUED);
+		assertThat(historyCountOf(couponIssueId)).isEqualTo(1L);
 	}
 
 	private boolean resultOf(Future<Boolean> future) {
 		try {
 			return future.get();
-		} catch (Exception e) {
-			return false;
+		} catch (ExecutionException e) {
+			if (e.getCause() instanceof GeneralException) {
+				return false;
+			}
+			throw new RuntimeException(e.getCause());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RuntimeException(e);
 		}
+	}
+
+	private long historyCountOf(Long couponIssueId) {
+		return entityManager.createQuery(
+						"SELECT COUNT(h) FROM CouponIssueHistory h WHERE h.couponIssue.couponIssueId = :id", Long.class)
+				.setParameter("id", couponIssueId)
+				.getSingleResult();
 	}
 
 	private CouponIssue createCouponIssue(IssueStatus status, String couponCode) {
