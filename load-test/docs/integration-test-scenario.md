@@ -140,6 +140,74 @@
 | TC-73 | 대량 상태에서 초기화 API | `POST /internal/coupons/{id}/reset` | 정상 완료, 타임아웃 없음 |
 | TC-74 | 개인정보 마스킹 | 발급·조회 API 호출 후 로그·응답 확인 | 이메일·전화번호가 평문으로 남지 않음 |
 
+### G. 선착순 순서 보장 — TC-80 ~ TC-84
+
+> "몇 건 발급됐는가"와 별개로 **"먼저 온 사람이 먼저 받았는가"** 를 검증하는 구간이다.
+
+#### 어디까지 보장되는가
+
+| 구간 | 순서 보장 | 근거 |
+| --- | --- | --- |
+| 클라이언트 전송 → 서버 도착 | ❌ | 네트워크·스레드 스케줄링. 물리적으로 보장 불가 |
+| 서버 도착 → Lua 호출 | ⚠️ | 대체로 유지되나 보장은 아님 |
+| **Lua 내부 `INCR`** | ✅ **완전 보장** | Redis 단일 스레드 + 스크립트 원자 실행 |
+| Lua → Kafka 발행 | ❌ | 비동기 |
+| Kafka 파티션 간 | ❌ | 파티션 3개, 키가 `requestId`라 분산 |
+| Consumer → DB 저장 | ❌ | 파티션 병렬 처리 |
+
+**선착순 순위는 Lua의 `sequence_no`에서 확정되며, 그 이후 구간의 순서는 발급 결과에 영향을 주지 않는다.** DB 저장 순서(`created_at`)가 `sequence_no` 순서와 달라지는 것은 비동기 구조의 정상 동작이다.
+
+따라서 순서 검증은 `created_at`이 아니라 **`sequence_no` 기준**으로 수행한다.
+
+#### 시나리오
+
+| ID | 시나리오 | 실행 | 기대 결과 |
+| --- | --- | --- | --- |
+| TC-80 | 순차 요청의 순서 일치 | 재고 100, 요청 100건을 **순차로** 전송 | 도착 순서와 `sequence_no`가 **완전 일치** (1, 2, 3 … 100) |
+| TC-81 | 동시 요청의 순서 역전율 | 재고 100, 동시 200건 | 서버 도착 로그 순서와 `sequence_no` 순서를 비교해 **역전 건수를 기록**. 완전 일치는 기대하지 않음 |
+| TC-82 | 단일 요청 전 구간 추적 | 요청 1건 후 `requestId`로 로그 검색 | 컨트롤러 → Lua → Kafka 발행 → Consumer 수신 → DB 저장까지 **모든 단계의 통과 시각이 조회됨** |
+| TC-83 | 저장 순서 역전 확인 | TC-81 직후 SQL 조회 | `created_at` 순서와 `sequence_no` 순서가 다를 수 있음. **그럼에도 `sequence_no`는 1~N 빠짐·중복 없이 부여됨** |
+| TC-84 | 재고 경계에서의 선착순 | 재고 100, 요청 150건 | `sequence_no` 1~100은 발급 성공, 101번째 이후 요청은 전건 `COUPON409-0` |
+
+#### 검증 쿼리
+
+```sql
+-- TC-83: sequence_no 순서와 DB 저장 순서가 다른 건수
+SELECT COUNT(*) FROM (
+  SELECT sequence_no,
+         ROW_NUMBER() OVER (ORDER BY created_at) AS save_order
+    FROM coupon_issue
+   WHERE coupon_id = ?
+) t
+WHERE sequence_no <> save_order;
+-- 0이 아니어도 정상. 비동기 저장의 특성이다.
+```
+
+```sql
+-- TC-80 · TC-84: sequence_no가 1~N 빠짐·중복 없이 부여됐는지
+SELECT COUNT(*)                    AS total,
+       COUNT(DISTINCT sequence_no) AS distinct_no,
+       MIN(sequence_no)            AS min_no,
+       MAX(sequence_no)            AS max_no
+  FROM coupon_issue
+ WHERE coupon_id = ?;
+-- 재고 100인 경우 100, 100, 1, 100 이어야 정상
+```
+
+#### 선행 조건 — 요청 도착 로그
+
+TC-80 · TC-81 · TC-82는 **요청이 서버에 도착한 시각**을 알아야 실행할 수 있다. 현재 신청 API 경로에 로그가 없어 도착 순서를 확인할 방법이 없다.
+
+`requestId`를 공통 키로 각 단계에 로그를 남기면, `requestId` 하나로 전 구간 흐름을 추적할 수 있다.
+
+```
+[ISSUE] 접수      requestId=... couponId=... userId=...
+[ISSUE] 선점      requestId=... status=SUCCESS sequenceNo=42
+[ISSUE] 발행      requestId=...
+[ISSUE] 수신      requestId=...
+[ISSUE] 저장 완료  requestId=... couponIssueId=...
+```
+
 ## 4. 판정 기준
 
 | 항목 | 합격 조건 |
@@ -147,6 +215,7 @@
 | 기능 정확성 | 모든 시나리오의 HTTP 상태·응답 코드가 기대값과 일치 |
 | 데이터 정합성 | DB 상태가 기대값과 일치. 재고 음수·초과 발급 0건 |
 | 중복 방지 | 1인 1매, 동일 requestId 중복 처리 0건 |
+| **선착순 순서** | `sequence_no`가 1~N 빠짐·중복 없이 부여. 순차 요청 시 도착 순서와 완전 일치 |
 | 이력 기록 | 모든 상태 전이가 history 테이블에 누락 없이 기록 |
 | 재현성 | 초기화 후 동일 시나리오 재실행 시 같은 결과 |
 
@@ -159,6 +228,7 @@
 | D (배치·정합성) | 수동 트리거 + SQL 조회 | 배치는 스케줄 대기 없이 직접 호출 |
 | E (비동기) | 컨테이너 기동·중단 + Consumer Lag 조회 | Docker로 Kafka·Consumer를 직접 조작 |
 | F (대량 데이터) | 더미 SQL 적재 후 재실행 + `EXPLAIN` | 부하 테스트 직전에 수행 |
+| G (선착순 순서) | k6 + 애플리케이션 로그 + SQL 조회 | 도착 시각은 로그에서, 순위는 `sequence_no`에서 확인 |
 
 각 담당자의 JUnit 테스트 결과는 `./gradlew test` 실행 후 `build/reports/tests/test/index.html`에서 한 번에 확인한다.
 
@@ -191,4 +261,5 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | 초기화 API의 Redis 키 삭제 | 미구현 — DB만 초기화한다. 반복 실행 시 2회차부터 전건 실패 | TC-40 ~ TC-44, TC-55 |
 | 개인정보 마스킹 | 미착수 | TC-74 |
 | 발급 이력 300만 더미데이터 | 미작성 | TC-71 ~ TC-73 |
+| **요청 도착 로그** | **미구현** — 신청 API 경로에 로그가 없어 도착 순서를 확인할 수 없다 | TC-80 ~ TC-82 |
 | 발급 요청 큐 배치 확정 (Redis Stream 위치) | 미결정 | TC-07 응답 형태(202 WAITING vs 즉시 품절 판정)가 여기서 갈림 |
