@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.event.service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
@@ -61,7 +62,7 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 	// 그냥 덮어쓰면 동시 변경을 무시하게 되고, EventStatusHistory의 (event_id, from_status, to_status)
 	// 유니크 제약과 충돌해서 그 틱에서 처리 중이던 다른 이벤트들까지 함께 롤백될 수 있다.
 	private int transition(List<Event> events, EventStatus fromStatus, EventStatus toStatus, String reason) {
-		int transitioned = 0;
+		List<EventStatusHistory> histories = new ArrayList<>();
 
 		for (Event event : events) {
 			int updatedRows = eventRepository.updateStatusIfMatches(event.getEventId(), fromStatus, toStatus);
@@ -69,7 +70,7 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 				continue;
 			}
 
-			eventStatusHistoryRepository.save(EventStatusHistory.builder()
+			histories.add(EventStatusHistory.builder()
 					.event(event)
 					.fromStatus(EventHistoryStatus.valueOf(fromStatus.name()))
 					.toStatus(EventHistoryStatus.valueOf(toStatus.name()))
@@ -77,10 +78,10 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 					.actorId(null)
 					.reason(reason)
 					.build());
-
-			transitioned++;
 		}
 
-		return transitioned;
+		eventStatusHistoryRepository.saveAll(histories);
+
+		return histories.size();
 	}
 }

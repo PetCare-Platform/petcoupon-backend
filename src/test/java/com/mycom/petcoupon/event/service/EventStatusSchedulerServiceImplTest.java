@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.event.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,11 +26,16 @@ import com.mycom.petcoupon.user.entity.enums.UserRole;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 /**
- * cron을 1초 주기로 덮어써서 실제 @Scheduled 실행이 이벤트 상태를 바꾸는지 확인한다.
+ * cron을 1초 주기로 덮어써서 실제 스케줄러 실행이 이벤트 상태를 바꾸는지 확인한다.
+ * 고정 Thread.sleep 대신 Awaitility로 폴링해서, 조건이 충족되는 즉시 끝나고
+ * 실패 시에도 지정한 시간까지는 재시도하도록 한다 (CI 부하로 인한 flaky 완화).
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
 @SpringBootTest(properties = "event.status.scheduler.cron=*/1 * * * * *")
 class EventStatusSchedulerServiceImplTest {
+
+	private static final Duration AT_MOST = Duration.ofSeconds(5);
+	private static final Duration POLL_INTERVAL = Duration.ofMillis(200);
 
 	@Autowired
 	private EventRepository eventRepository;
@@ -54,13 +61,13 @@ class EventStatusSchedulerServiceImplTest {
 	}
 
 	@Test
-	void 오픈_시각이_지난_SCHEDULED_이벤트는_스케줄러가_자동으로_OPEN으로_전환한다() throws InterruptedException {
+	void 오픈_시각이_지난_SCHEDULED_이벤트는_스케줄러가_자동으로_OPEN으로_전환한다() {
 		Event event = createEvent(LocalDateTime.now().minusSeconds(5), LocalDateTime.now().plusDays(1));
 
-		Thread.sleep(3000);
-
-		Event reloaded = eventRepository.findById(event.getEventId()).orElseThrow();
-		assertThat(reloaded.getStatus()).isEqualTo(EventStatus.OPEN);
+		await().atMost(AT_MOST).pollInterval(POLL_INTERVAL).untilAsserted(() ->
+				assertThat(eventRepository.findById(event.getEventId()).orElseThrow().getStatus())
+						.isEqualTo(EventStatus.OPEN)
+		);
 
 		EventStatusHistory history = onlyHistoryOf(event);
 		assertThat(history.getFromStatus()).isEqualTo(EventHistoryStatus.SCHEDULED);
@@ -70,15 +77,15 @@ class EventStatusSchedulerServiceImplTest {
 	}
 
 	@Test
-	void 종료_시각이_지난_OPEN_이벤트는_스케줄러가_자동으로_CLOSED로_전환한다() throws InterruptedException {
+	void 종료_시각이_지난_OPEN_이벤트는_스케줄러가_자동으로_CLOSED로_전환한다() {
 		Event event = createEvent(LocalDateTime.now().minusDays(1), LocalDateTime.now().minusSeconds(5));
 		event.updateStatus(EventStatus.OPEN);
 		eventRepository.save(event);
 
-		Thread.sleep(3000);
-
-		Event reloaded = eventRepository.findById(event.getEventId()).orElseThrow();
-		assertThat(reloaded.getStatus()).isEqualTo(EventStatus.CLOSED);
+		await().atMost(AT_MOST).pollInterval(POLL_INTERVAL).untilAsserted(() ->
+				assertThat(eventRepository.findById(event.getEventId()).orElseThrow().getStatus())
+						.isEqualTo(EventStatus.CLOSED)
+		);
 
 		EventStatusHistory history = onlyHistoryOf(event);
 		assertThat(history.getFromStatus()).isEqualTo(EventHistoryStatus.OPEN);
@@ -87,13 +94,13 @@ class EventStatusSchedulerServiceImplTest {
 	}
 
 	@Test
-	void 오픈_종료_시각이_모두_지난_SCHEDULED_이벤트는_CLOSED까지_전환된다() throws InterruptedException {
+	void 오픈_종료_시각이_모두_지난_SCHEDULED_이벤트는_CLOSED까지_전환된다() {
 		Event event = createEvent(LocalDateTime.now().minusDays(2), LocalDateTime.now().minusSeconds(5));
 
-		Thread.sleep(3000);
-
-		Event reloaded = eventRepository.findById(event.getEventId()).orElseThrow();
-		assertThat(reloaded.getStatus()).isEqualTo(EventStatus.CLOSED);
+		await().atMost(AT_MOST).pollInterval(POLL_INTERVAL).untilAsserted(() ->
+				assertThat(eventRepository.findById(event.getEventId()).orElseThrow().getStatus())
+						.isEqualTo(EventStatus.CLOSED)
+		);
 
 		List<EventStatusHistory> histories = eventStatusHistoryRepository.findByEvent_EventId(event.getEventId());
 		assertThat(histories)
@@ -102,13 +109,14 @@ class EventStatusSchedulerServiceImplTest {
 	}
 
 	@Test
-	void 오픈_시각이_아직_안된_이벤트는_전환되지_않는다() throws InterruptedException {
+	void 오픈_시각이_아직_안된_이벤트는_전환되지_않는다() {
 		Event event = createEvent(LocalDateTime.now().plusDays(1), LocalDateTime.now().plusDays(2));
 
-		Thread.sleep(3000);
-
-		Event reloaded = eventRepository.findById(event.getEventId()).orElseThrow();
-		assertThat(reloaded.getStatus()).isEqualTo(EventStatus.SCHEDULED);
+		// "전환되지 않는다"는 한 번 확인하고 끝낼 수 없으니, 일정 시간 동안 계속 SCHEDULED로 유지되는지 확인한다.
+		await().during(Duration.ofSeconds(3)).atMost(Duration.ofSeconds(4)).untilAsserted(() ->
+				assertThat(eventRepository.findById(event.getEventId()).orElseThrow().getStatus())
+						.isEqualTo(EventStatus.SCHEDULED)
+		);
 		assertThat(eventStatusHistoryRepository.findByEvent_EventId(event.getEventId())).isEmpty();
 	}
 
