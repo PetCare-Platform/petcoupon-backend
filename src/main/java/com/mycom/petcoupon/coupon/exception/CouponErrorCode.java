@@ -38,7 +38,8 @@ public enum CouponErrorCode implements BaseErrorCode {
     IDEMPOTENCY_KEY_REUSED(HttpStatus.CONFLICT, "COUPON409-6", "이미 사용된 Idempotency-Key입니다. 다른 요청에는 새 키를 사용해주세요."),
 
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
-	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다.");
+	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
+	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다.");
 
     private final HttpStatus status;
     private final String code;

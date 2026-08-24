@@ -3,6 +3,7 @@ package com.mycom.petcoupon.coupon.issue.config;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -35,7 +36,10 @@ public class CouponIssueStreamConfig {
 
 	private final CouponIssueStreamProperties properties;
 	private final StringRedisTemplate redisTemplate;
+	
+	@Qualifier("redisStreamRecoveryTaskScheduler")
 	private final TaskScheduler taskScheduler;
+	
 	private final CouponIssueStreamConsumer consumer;
 	
 	// Redis 오류 발생 후 복구 시도까지의 지연 시간

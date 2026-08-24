@@ -17,6 +17,10 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.messaging.service.CouponIssueOutboxService;
 
 @ExtendWith(MockitoExtension.class)
 public class CouponIssueStreamConsumerTest {
@@ -30,15 +34,26 @@ public class CouponIssueStreamConsumerTest {
 	@Mock
 	private CouponIssueStreamProperties properties;
 
+	@Mock
+    private CouponIssueLuaService couponIssueLuaService;
+
+    @Mock
+    private CouponIssueOutboxService couponIssueOutboxService;
+
 	private CouponIssueStreamConsumer consumer;
 
 	@BeforeEach
 	void setUp() {
-		consumer = new CouponIssueStreamConsumer(redisTemplate, properties);
+		consumer = new CouponIssueStreamConsumer(redisTemplate, properties, couponIssueLuaService, couponIssueOutboxService);
 	}
 
 	@Test
-	void 정상적인_메시지를_처리하면_ACK한다() {
+	void 정상적인_메시지를_처리하면_Outbox를_저장하고_ACK한다() {
+		
+		when(couponIssueLuaService.issue(1L, 100L, "request-1"))
+			.thenReturn(
+	            new CouponIssueLuaResult(CouponIssueLuaResultStatus.SUCCESS,  1L)
+	    );
 		
 		when(redisTemplate.opsForStream()).thenReturn(streamOperations);
 		when(properties.getKey()).thenReturn("coupon:issue:stream");
@@ -55,6 +70,19 @@ public class CouponIssueStreamConsumerTest {
 
 		consumer.onMessage(message);
 
+		verify(couponIssueLuaService).issue(
+			1L,   
+			100L,
+			"request-1"
+	    );
+		
+		verify(couponIssueOutboxService).saveIfAbsent(
+			1L,
+			100L,
+			"request-1",
+			1L
+		);
+		
 		verify(streamOperations).acknowledge(
 			"coupon:issue:stream",
 			"coupon-issue-group",
@@ -75,7 +103,9 @@ public class CouponIssueStreamConsumerTest {
 		);
 
 		consumer.onMessage(message);
-
+		
+		verifyNoInteractions(couponIssueLuaService);
+        verifyNoInteractions(couponIssueOutboxService);
 		verifyNoInteractions(redisTemplate);
 	}
 }
