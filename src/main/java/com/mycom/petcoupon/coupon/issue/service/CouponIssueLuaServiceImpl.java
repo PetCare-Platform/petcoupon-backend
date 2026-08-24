@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
@@ -20,29 +21,26 @@ import lombok.extern.slf4j.Slf4j;
 public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 
 	private final StringRedisTemplate redisTemplate;
-    private final DefaultRedisScript<Long> couponIssueLuaScript;
+    private final DefaultRedisScript<List> couponIssueLuaScript;
  
-
-    private String stockKey(Long couponId) {
-        return "coupon:issue:stock:{" + couponId + "}";
-    }
-
-    private String applicantsKey(Long couponId) {
-        return "coupon:issue:applicants:{" + couponId + "}";
+    private String issueKey(String suffix, Long couponId) {
+        return "coupon:issue:" + suffix + ":{" + couponId + "}";
     }
     
     @Override
-    public CouponIssueLuaResultStatus issue(Long couponId, Long userId, String requestId) {
+    public CouponIssueLuaResult issue(Long couponId, Long userId, String requestId) {
     	validate(couponId, userId, requestId);
     	
-    	Long resultCode;
+    	List<?> luaResult;
     	
     	try {
-    		resultCode = redisTemplate.execute(
+    		luaResult = redisTemplate.execute(
     	    	couponIssueLuaScript,
     	    	List.of(
-    	    		stockKey(couponId), 
-    	    		applicantsKey(couponId)
+    	    		issueKey("stock", couponId), 
+    	    		issueKey("applicants", couponId),
+    	    	    issueKey("sequence", couponId),
+    	    	    issueKey("request-sequence", couponId)
     	    	),
     	    	userId.toString(),
     	    	requestId
@@ -55,26 +53,56 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
 		}
 
-    	if (resultCode == null) {
+    	if (luaResult == null || luaResult.size() != 2) {
     		log.error(
-    			"쿠폰 발급 Lua 실행 결과가 null입니다. couponId={}, userId={}, requestId={}",
+    				"유효하지 않은 쿠폰 발급 Lua 실행 결과입니다. couponId={}, userId={}, requestId={}, result={}",
     			couponId,
     			userId,
-    			requestId
+    			requestId,
+    			luaResult
     		);
     		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
     	}
 
     	try {
-    	    return CouponIssueLuaResultStatus.from(resultCode);
+    		Object resultCodeValue = luaResult.get(0);
+    		Object sequenceNoValue = luaResult.get(1);
+
+    		if (!(resultCodeValue instanceof Number resultCodeNumber)
+    		        || !(sequenceNoValue instanceof Number sequenceNoNumber)) {
+
+    		    throw new IllegalArgumentException("Lua 결과 값이 숫자 형식이 아닙니다. result=" + luaResult);
+    		}
+    		
+    		long resultCode = resultCodeNumber.longValue();
+            long sequenceNo = sequenceNoNumber.longValue();
+            
+            CouponIssueLuaResultStatus status = CouponIssueLuaResultStatus.from(resultCode);
     	    
+            Long issuedSequenceNo = null;
+            
+            if (status == CouponIssueLuaResultStatus.SUCCESS
+                    || status == CouponIssueLuaResultStatus.SAME_REQUEST_RETRY) {
+            	
+            	if(sequenceNo <= 0) {
+            		throw new IllegalArgumentException("성공 또는 재시도 결과에 유효한 순번이 없습니다. sequenceNo=" + sequenceNo);
+            	}
+            	
+            	issuedSequenceNo = sequenceNo;
+            }
+            
+            return CouponIssueLuaResult.builder()
+	            		.status(status)
+	            		.sequenceNo(issuedSequenceNo)
+	            		.build();
+            
     	} catch (IllegalArgumentException e) {
     		log.error(
-    			"알 수 없는 쿠폰 발급 Lua 결과 코드입니다. couponId={}, userId={}, requestId={}, resultCode={}",
+    			"알 수 없는 쿠폰 발급 Lua 결과입니다. couponId={}, userId={}, requestId={}, result={}",
     			couponId,
     			userId,
     			requestId,  
-    			resultCode,
+    			luaResult,
     			e
     		);
     	    throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
@@ -89,4 +117,35 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
         }
     }
+    
+    @Override
+	public void clearIssueState(Long couponId) {
+    	validateCouponId(couponId);
+    	
+    	try {
+    		redisTemplate.delete(List.of(
+    			issueKey("stock", couponId),  
+    			issueKey("applicants", couponId), 
+    			issueKey("sequence", couponId),
+    			issueKey("request-sequence", couponId)
+    		));
+    		
+    	} catch (DataAccessException e) {
+    		log.error(
+    			"쿠폰 발급 Redis 상태 초기화에 실패했습니다. couponId={}", 
+    			couponId,
+    			e
+    		);
+    		throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+		}
+		
+	}
+    
+    private void validateCouponId(Long couponId) {
+        if (couponId == null || couponId <= 0) {
+            throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
+        }
+    }
+    
+    
 }
