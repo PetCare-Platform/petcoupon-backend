@@ -72,7 +72,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .result(details.isEmpty() ? ReconciliationResult.MATCHED : ReconciliationResult.MISMATCHED)
                 .build();
 
-        details.forEach(d -> d.assignReport(report)); // report 연관관계 세팅용 메서드 필요 (아래 참고)
+        details.forEach(d -> d.assignReport(report));
         reconciliationReportRepository.save(report);
     }
 
