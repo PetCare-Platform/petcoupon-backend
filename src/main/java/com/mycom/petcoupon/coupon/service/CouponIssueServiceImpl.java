@@ -11,6 +11,7 @@ import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 선착순 쿠폰 신청 오케스트레이션.
@@ -19,6 +20,7 @@ import lombok.RequiredArgsConstructor;
  * Stream을 소비하는 쪽(#57/#60)에서 비동기로 일어나므로, 여기서는 SUCCESS/SOLD_OUT을 알 수 없다 —
  * 그래서 응답은 항상 "WAITING"(접수됨)이다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CouponIssueServiceImpl implements CouponIssueService {
@@ -29,6 +31,9 @@ public class CouponIssueServiceImpl implements CouponIssueService {
 
     @Override
     public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request, String requestId) {
+        // 선착순 순서 검증용: 도착 순서를 알 수 있는 유일한 지점이라 다른 검증보다 먼저 남긴다.
+        log.info("[ISSUE] 접수 requestId={} couponId={} userId={}", requestId, couponId, request.userId());
+
         // 존재하지 않는 쿠폰이면 Stream에 넣을 필요 없이 여기서 바로 차단
         if (!couponRepository.existsById(couponId)) {
             throw new GeneralException(CouponErrorCode.COUPON_NOT_FOUND);
