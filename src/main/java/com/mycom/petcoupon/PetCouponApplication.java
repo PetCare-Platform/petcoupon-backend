@@ -9,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 
 @EnableJpaAuditing
-@EnableScheduling
+@EnableScheduling // CouponExpireBatchService, IdempotencyKeyCleanupScheduler(둘 다 @Scheduled)를 돌리는 데 필요
 @SpringBootApplication
 @EnableConfigurationProperties(CouponIssueStreamProperties.class)
 public class PetCouponApplication {
