@@ -1,0 +1,374 @@
+-- =====================================================================
+-- 더미 발급 이력 300만 건 생성
+-- 대상: coupon_issue 3,000,000 + coupon_issue_history 3,600,000
+-- =====================================================================
+-- 실행 전 확인
+--   - seed_users.sql 로 회원 100만 명이 들어가 있을 것
+--       SELECT COUNT(*) FROM app_user WHERE role = 'ROLE_MEMBER';  -- 1000000
+--   - 앱을 한 번 띄워 테이블이 생성돼 있을 것 (ddl-auto=update)
+--
+-- 실행
+--   docker compose up -d mysql
+--   docker cp seed_coupon_issues.sql petcoupon-mysql:/tmp/
+--   docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "source /tmp/seed_coupon_issues.sql"
+--
+--   PowerShell 은 `< file` 리다이렉션을 지원하지 않으므로 docker cp 로 넣고 source 로 실행한다.
+--
+-- 왜 쿠폰을 6개로 나누는가
+--   uk_issue_coupon_user (coupon_id, user_id) 때문에 쿠폰 1개당 최대 100만 건이다.
+--   쿠폰 3개 × 전체 회원으로 하면 300만이 되지만 모든 회원이 똑같이 3장을 갖게 되어
+--   "내 쿠폰 목록 조회" 에 편차가 없다. 쿠폰 6개에 회원 범위를 50만씩 겹쳐 잡으면
+--   총합은 그대로 300만이면서 회원별 보유량이 1~5장으로 갈린다.
+--
+-- 이 데이터는 부하 테스트 대상이 아니다
+--   이미 발급이 끝난 과거 데이터다. 선착순 발급 테스트는 재고 10,000짜리 별도 쿠폰으로 한다.
+--   여기서 만드는 300만 건의 역할은 coupon_issue 테이블을 실제 규모로 채워서,
+--   빈 테이블이 아닌 조건에서 발급·조회·정합성 배치를 측정할 수 있게 하는 것이다.
+-- =====================================================================
+
+
+-- ---------------------------------------------------------------------
+-- 0. 재실행 대비 정리
+--
+--    외래키 때문에 이력을 먼저 지운다.
+--    SEED- 로 시작하는 쿠폰만 지우므로 부하 테스트용 쿠폰은 건드리지 않는다.
+-- ---------------------------------------------------------------------
+DELETE h FROM coupon_issue_history h
+  JOIN coupon c ON c.coupon_id = h.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
+DELETE ci FROM coupon_issue ci
+  JOIN coupon c ON c.coupon_id = ci.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
+DELETE s FROM coupon_stock s
+  JOIN coupon c ON c.coupon_id = s.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
+DELETE FROM coupon WHERE name LIKE 'SEED-%';
+DELETE FROM event  WHERE name = 'SEED-더미 이벤트';
+
+
+-- ---------------------------------------------------------------------
+-- 1. 더미 이벤트 1개
+--
+--    created_by 는 회원 시드가 만든 공용 관리자를 쓴다.
+-- ---------------------------------------------------------------------
+INSERT INTO event (name, description, open_at, close_at, status, created_by, created_at, updated_at)
+SELECT 'SEED-더미 이벤트',
+       '부하 테스트용 과거 발급 이력 적재',
+       NOW(6) - INTERVAL 90 DAY,
+       NOW(6) - INTERVAL 1 DAY,
+       'CLOSED',
+       u.user_id,
+       NOW(6), NOW(6)
+  FROM app_user u
+ WHERE u.role = 'ROLE_ADMIN'
+ ORDER BY u.user_id
+ LIMIT 1;
+
+SET @event_id = LAST_INSERT_ID();
+
+
+-- ---------------------------------------------------------------------
+-- 2. 더미 쿠폰 6개 + 재고
+--
+--    쿠폰당 50만 건이 들어갈 예정이므로 총재고를 50만으로 잡는다.
+--    발급 기간이 이미 지났으므로 status 는 ENDED 다.
+-- ---------------------------------------------------------------------
+INSERT INTO coupon
+    (event_id, name, discount_type, discount_value, min_order_amount, max_discount_amount,
+     issue_start_at, issue_end_at, valid_days, limit_per_member, status, created_at, updated_at)
+SELECT @event_id,
+       CONCAT('SEED-쿠폰-', n),
+       'FIXED_AMOUNT', 1000 * n, 10000, NULL,
+       NOW(6) - INTERVAL 90 DAY,
+       NOW(6) - INTERVAL 1 DAY,
+       365, 1, 'ENDED', NOW(6), NOW(6)
+  FROM (SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3
+        UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6) t;
+
+INSERT INTO coupon_stock (coupon_id, total_quantity, issued_quantity, remaining_quantity, updated_at)
+SELECT coupon_id, 500000, 0, 500000, NOW(6)
+  FROM coupon WHERE name LIKE 'SEED-쿠폰-%';
+
+
+-- ---------------------------------------------------------------------
+-- 3. 회원에 1~1,000,000 순번을 매긴 임시 테이블
+--
+--    user_id 는 연속이 아닐 수 있다(관리자가 섞여 있음). 범위를 자르려면
+--    회원만 골라 다시 번호를 매겨야 한다.
+--    300만 건 INSERT 에서 6번 참조하므로 CTE 가 아니라 실제 테이블로 만든다.
+--    (MySQL 은 CTE 를 매번 다시 계산하므로 100만 행 정렬이 6번 반복된다)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS seed_member_seq;
+
+CREATE TABLE seed_member_seq (
+    n       BIGINT NOT NULL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    KEY idx_seed_member_user (user_id)
+) ENGINE = InnoDB;
+
+INSERT INTO seed_member_seq (n, user_id)
+SELECT ROW_NUMBER() OVER (ORDER BY user_id), user_id
+  FROM app_user
+ WHERE role = 'ROLE_MEMBER';
+
+
+-- ---------------------------------------------------------------------
+-- 4. 발급 이력 300만 건
+--
+--    쿠폰 6개에 회원 범위를 50만씩 겹쳐 배정한다.
+--      쿠폰1  n      1 ~ 500,000
+--      쿠폰2  n 100,001 ~ 600,000
+--      쿠폰3  n 200,001 ~ 700,000
+--      쿠폰4  n 300,001 ~ 800,000
+--      쿠폰5  n 400,001 ~ 900,000
+--      쿠폰6  n 500,001 ~ 1,000,000
+--    회원별 보유량은 1~5장으로 갈리고 총합은 정확히 300만이다.
+--
+--    유니크 값은 전부 순번에서 파생시킨다. 랜덤을 쓰면 충돌 검사가 필요하지만
+--    순번 기반이면 중복이 구조적으로 불가능하다.
+--      sequence_no   쿠폰 안에서 1부터 (uk_issue_sequence)
+--      coupon_code   'SEED' + 쿠폰id + 순번 (전역 유니크, 32자 이내)
+--      request_id    'seed-' + 쿠폰id + '-' + 순번 (전역 유니크)
+--
+--    status 는 순번 끝자리로 나눈다 — ISSUED 70% / USED 20% / EXPIRED 10%.
+--    ISSUED 의 expires_at 은 반드시 미래로 둔다. 과거로 두면 만료 배치가
+--    이 더미를 EXPIRED 로 바꿔버려서 기준선이 흔들린다.
+--
+--    쿠폰 하나씩 6번 나눠 실행한다. 300만 건을 한 트랜잭션에 넣으면 느리고,
+--    중간에 끊기면 처음부터다. 나눠 넣으면 실패한 쿠폰만 다시 하면 된다.
+--    아래 블록의 @c / @from / @to 만 바꿔가며 6번 실행한다.
+-- ---------------------------------------------------------------------
+
+-- ---- 쿠폰 1 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-1');
+SET @from = 1;        SET @to = 500000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c,
+       m.user_id,
+       m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY,
+       NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+-- ---- 쿠폰 2 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-2');
+SET @from = 100001;   SET @to = 600000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c, m.user_id, m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+-- ---- 쿠폰 3 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-3');
+SET @from = 200001;   SET @to = 700000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c, m.user_id, m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+-- ---- 쿠폰 4 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-4');
+SET @from = 300001;   SET @to = 800000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c, m.user_id, m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+-- ---- 쿠폰 5 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-5');
+SET @from = 400001;   SET @to = 900000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c, m.user_id, m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+-- ---- 쿠폰 6 ----
+SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-6');
+SET @from = 500001;   SET @to = 1000000;
+
+INSERT INTO coupon_issue
+    (coupon_id, user_id, sequence_no, coupon_code, request_id,
+     status, used_at, expires_at, created_at, updated_at)
+SELECT @c, m.user_id, m.n - @from + 1,
+       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
+       CONCAT('seed-', @c, '-', m.n),
+       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
+            WHEN m.n % 10 >= 7 THEN 'USED'
+            ELSE 'ISSUED' END,
+       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+            ELSE NOW(6) + INTERVAL 365 DAY END,
+       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
+  FROM seed_member_seq m
+ WHERE m.n BETWEEN @from AND @to;
+
+
+-- ---------------------------------------------------------------------
+-- 5. 상태 이력
+--
+--    정합성 검증 배치는 "현재 status 와 최종 이력의 to_status 가 같은가" 를 본다.
+--    이력이 아예 없는 발급 건도 불일치로 잡으므로, 여기를 건너뛰면
+--    300만 건 전부가 HISTORY_MISMATCH 로 리포트된다.
+--
+--    coupon_issue 를 읽어서 파생시키므로 둘이 어긋날 수 없다.
+--      전체        NONE   -> ISSUED
+--      USED 건     ISSUED -> USED
+--      EXPIRED 건  ISSUED -> EXPIRED
+--    history_id 가 AUTO_INCREMENT 라 나중에 넣은 행이 뒤에 오고,
+--    배치는 MAX(history_id) 를 최종 이력으로 보므로 순서가 맞는다.
+-- ---------------------------------------------------------------------
+INSERT INTO coupon_issue_history
+    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, reason, created_at)
+SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'NONE', 'ISSUED', 'SYSTEM', '더미 적재',
+       ci.created_at
+  FROM coupon_issue ci
+  JOIN coupon c ON c.coupon_id = ci.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
+INSERT INTO coupon_issue_history
+    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, reason, created_at)
+SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'ISSUED', 'USED', 'USER', '더미 적재',
+       ci.used_at
+  FROM coupon_issue ci
+  JOIN coupon c ON c.coupon_id = ci.coupon_id
+ WHERE c.name LIKE 'SEED-%' AND ci.status = 'USED';
+
+INSERT INTO coupon_issue_history
+    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, reason, created_at)
+SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'ISSUED', 'EXPIRED', 'BATCH', '더미 적재',
+       ci.expires_at
+  FROM coupon_issue ci
+  JOIN coupon c ON c.coupon_id = ci.coupon_id
+ WHERE c.name LIKE 'SEED-%' AND ci.status = 'EXPIRED';
+
+
+-- ---------------------------------------------------------------------
+-- 6. 재고를 실제 발급 수와 맞춘다
+--
+--    안 맞추면 정합성 배치의 재고 검증이 처음부터 불일치로 나온다.
+-- ---------------------------------------------------------------------
+UPDATE coupon_stock s
+  JOIN (SELECT coupon_id, COUNT(*) AS cnt FROM coupon_issue GROUP BY coupon_id) x
+    ON x.coupon_id = s.coupon_id
+  JOIN coupon c ON c.coupon_id = s.coupon_id
+   SET s.issued_quantity    = x.cnt,
+       s.remaining_quantity = s.total_quantity - x.cnt,
+       s.updated_at         = NOW(6)
+ WHERE c.name LIKE 'SEED-%';
+
+
+-- ---------------------------------------------------------------------
+-- 7. 임시 테이블 정리
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS seed_member_seq;
+
+
+-- =====================================================================
+-- 검증 — 아래를 따로 실행해 확인한다
+-- =====================================================================
+-- 총 건수: 3000000 이어야 한다
+--   SELECT COUNT(*) FROM coupon_issue ci JOIN coupon c ON c.coupon_id = ci.coupon_id
+--    WHERE c.name LIKE 'SEED-%';
+--
+-- 이력 건수: 발급 건수 + USED 수 + EXPIRED 수
+--   SELECT COUNT(*) FROM coupon_issue_history h JOIN coupon c ON c.coupon_id = h.coupon_id
+--    WHERE c.name LIKE 'SEED-%';
+--
+-- 쿠폰별 500000 씩인가
+--   SELECT coupon_id, COUNT(*) FROM coupon_issue GROUP BY coupon_id;
+--
+-- 회원별 보유량이 1~5 로 갈리는가
+--   SELECT cnt, COUNT(*) FROM (
+--     SELECT user_id, COUNT(*) AS cnt FROM coupon_issue GROUP BY user_id) t
+--    GROUP BY cnt ORDER BY cnt;
+--
+-- 1인 1매 위반 0건
+--   SELECT COUNT(*) FROM (
+--     SELECT coupon_id, user_id FROM coupon_issue
+--      GROUP BY coupon_id, user_id HAVING COUNT(*) > 1) t;
+--
+-- 순번이 쿠폰별 1~500000 연속인가
+--   SELECT coupon_id, COUNT(*), COUNT(DISTINCT sequence_no), MIN(sequence_no), MAX(sequence_no)
+--     FROM coupon_issue GROUP BY coupon_id;
+--
+-- 상태와 최종 이력이 어긋난 건 0건 (정합성 배치와 같은 기준)
+--   SELECT COUNT(*) FROM coupon_issue ci
+--     JOIN coupon c ON c.coupon_id = ci.coupon_id
+--     LEFT JOIN coupon_issue_history h
+--       ON h.history_id = (SELECT MAX(h2.history_id) FROM coupon_issue_history h2
+--                           WHERE h2.coupon_issue_id = ci.coupon_issue_id)
+--    WHERE c.name LIKE 'SEED-%'
+--      AND (h.to_status IS NULL OR ci.status <> h.to_status);
+--
+-- 재고가 발급 수와 맞는가
+--   SELECT s.coupon_id, s.total_quantity, s.issued_quantity, s.remaining_quantity
+--     FROM coupon_stock s JOIN coupon c ON c.coupon_id = s.coupon_id
+--    WHERE c.name LIKE 'SEED-%';
+--
+-- =====================================================================
+-- 정리 (전부 지우고 싶을 때)
+--   이 스크립트 맨 위 "0. 재실행 대비 정리" 블록만 실행하면 된다.
+-- =====================================================================
