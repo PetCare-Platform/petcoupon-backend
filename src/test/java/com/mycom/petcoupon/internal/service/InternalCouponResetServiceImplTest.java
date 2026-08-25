@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,9 +12,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.core.StringRedisTemplate;
+
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueLuaConfig;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaServiceImpl;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
@@ -46,7 +53,14 @@ import jakarta.persistence.PersistenceContext;
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(InternalCouponResetServiceImpl.class)
+@Import({
+		InternalCouponResetServiceImpl.class,
+		CouponIssueLuaServiceImpl.class,
+		CouponIssueLuaConfig.class
+})
+// Redis 정리까지 실제로 확인해야 해서 JPA 슬라이스에 Redis 자동설정을 더한다.
+// 목으로 두면 키가 진짜 지워졌는지 알 수 없다. 실행 전 Redis 가 떠 있어야 한다.
+@ImportAutoConfiguration(DataRedisAutoConfiguration.class)
 class InternalCouponResetServiceImplTest {
 
 	@PersistenceContext
@@ -54,6 +68,9 @@ class InternalCouponResetServiceImplTest {
 
 	@Autowired
 	private InternalCouponResetServiceImpl internalCouponResetService;
+
+	@Autowired
+	private StringRedisTemplate redisTemplate;
 
 	private Coupon coupon;
 	private AppUser user;
@@ -214,6 +231,43 @@ class InternalCouponResetServiceImplTest {
 		assertEquals(0, response.deletedIdempotencyKeys());
 		assertEquals(0, response.deletedNotifications());
 		assertEquals(0, response.deletedMessages());
+	}
+
+	@Test
+	@DisplayName("Redis 발급 상태를 지우고 재고를 다시 넣는다 - 이게 없으면 2회차가 전부 ALREADY_APPLIED 로 튕긴다")
+	void resetClearsRedisIssueStateAndRestoresStock() {
+		Long couponId = coupon.getCouponId();
+
+		// 1회차를 돈 뒤의 Redis 상태를 흉내낸다 - 재고는 소진, 신청자와 순번은 쌓여 있다.
+		redisTemplate.opsForValue().set(issueKey("stock", couponId), "0");
+		redisTemplate.opsForHash().put(issueKey("applicants", couponId), "1", "req-1");
+		redisTemplate.opsForValue().set(issueKey("sequence", couponId), "10000");
+		redisTemplate.opsForHash().put(issueKey("request-sequence", couponId), "req-1", "1");
+
+		try {
+			CouponResetResponse response =
+					internalCouponResetService.reset(couponId, new CouponResetRequest(500));
+
+			// 이전 회차 흔적이 남아 있으면 같은 유저가 다시 신청할 때 ALREADY_APPLIED 가 된다.
+			assertFalse(redisTemplate.hasKey(issueKey("applicants", couponId)));
+			assertFalse(redisTemplate.hasKey(issueKey("sequence", couponId)));
+			assertFalse(redisTemplate.hasKey(issueKey("request-sequence", couponId)));
+
+			// 재고 키는 지워진 채로 두면 Lua 가 STOCK_NOT_INITIALIZED 를 반환한다. 다시 채워져 있어야 한다.
+			assertEquals("500", redisTemplate.opsForValue().get(issueKey("stock", couponId)));
+			assertEquals(500, response.redisStock());
+		} finally {
+			redisTemplate.delete(java.util.List.of(
+					issueKey("stock", couponId),
+					issueKey("applicants", couponId),
+					issueKey("sequence", couponId),
+					issueKey("request-sequence", couponId)
+			));
+		}
+	}
+
+	private String issueKey(String suffix, Long couponId) {
+		return "coupon:issue:" + suffix + ":{" + couponId + "}";
 	}
 
 	@Test

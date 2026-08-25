@@ -15,6 +15,9 @@ public record CouponResetResponse(
 		long deletedMessages,
 		long deletedReports,
 		int totalQuantity,
-		int remainingQuantity
+		int remainingQuantity,
+
+		/** 초기화 후 Redis 에 다시 넣은 재고. DB 재고와 어긋나면 여기서 바로 드러난다. */
+		int redisStock
 ) {
 }

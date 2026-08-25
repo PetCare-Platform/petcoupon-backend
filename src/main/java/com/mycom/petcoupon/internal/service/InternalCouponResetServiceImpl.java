@@ -2,11 +2,13 @@ package com.mycom.petcoupon.internal.service;
 
 import java.time.LocalDateTime;
 
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.internal.dto.req.CouponResetRequest;
@@ -28,10 +30,19 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class InternalCouponResetServiceImpl implements InternalCouponResetService {
 
+	/**
+	 * Lua 가 재고를 읽고 쓰는 키. 형식의 원본은 {@code CouponIssueLuaServiceImpl.issueKey()} 인데
+	 * private 이라 여기서 다시 쓴다. 재고 키를 설정하는 공개 메서드가 생기면 이 상수를 지우고
+	 * 그 메서드를 호출하도록 바꾼다.
+	 */
+	private static final String STOCK_KEY_FORMAT = "coupon:issue:stock:{%d}";
+
 	@PersistenceContext
 	private EntityManager entityManager;
 
 	private final CouponStockRepository couponStockRepository;
+	private final CouponIssueLuaService couponIssueLuaService;
+	private final StringRedisTemplate redisTemplate;
 
 	@Override
 	@Transactional
@@ -63,6 +74,9 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 
 		resetStock(couponId, totalQuantity);
 
+		// DB 를 비워도 Redis 에 이전 회차 기록이 남으면 다음 회차가 전부 ALREADY_APPLIED 로 튕긴다.
+		resetIssueState(couponId, totalQuantity);
+
 		return CouponResetResponse.builder()
 				.couponId(couponId)
 				.deletedHistories(deletedHistories)
@@ -73,7 +87,26 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.deletedReports(deletedReports)
 				.totalQuantity(totalQuantity)
 				.remainingQuantity(totalQuantity)
+				.redisStock(totalQuantity)
 				.build();
+	}
+
+	/**
+	 * Redis 발급 상태를 초기화한다.
+	 *
+	 * <p>{@code clearIssueState} 는 신청자·순번 키와 함께 <b>재고 키까지 지운다.</b>
+	 * Lua 는 재고 키가 없으면 {@code STOCK_NOT_INITIALIZED} 를 반환하므로,
+	 * 지운 뒤 반드시 재고를 다시 넣어야 다음 회차 발급이 동작한다.
+	 *
+	 * <p>Redis 는 DB 트랜잭션에 참여하지 않는다. 여기서 실패하면 DB 는 롤백되지만
+	 * Redis 는 이미 지워진 상태로 남을 수 있으므로, 그 경우 초기화 API 를 다시 호출하면 된다.
+	 * 부하 테스트 전용 API 라 재실행으로 복구되는 것으로 충분하다고 보고 별도 보상은 두지 않았다.
+	 */
+	private void resetIssueState(Long couponId, int totalQuantity) {
+		couponIssueLuaService.clearIssueState(couponId);
+
+		redisTemplate.opsForValue()
+				.set(String.format(STOCK_KEY_FORMAT, couponId), String.valueOf(totalQuantity));
 	}
 
 	private long deleteHistories(Long couponId) {
