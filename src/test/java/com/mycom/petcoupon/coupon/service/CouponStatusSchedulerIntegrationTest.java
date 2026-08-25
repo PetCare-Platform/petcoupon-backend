@@ -36,8 +36,8 @@ import jakarta.persistence.PersistenceContext;
 @SpringBootTest(properties = {
 		"coupon.status.interval-seconds=1",
 		"coupon.issue.stream.enabled=false",
-		// 테스트 수행 중 실행되지 않는 유효한 Cron — event.status.scheduler와의 경합 차단
-		"event.status.scheduler.cron=0 0 0 1 1 *"
+		// 이 테스트는 쿠폰 스케줄러만 검증 대상이므로 무관한 이벤트 스케줄러만 끔
+		"event.status.scheduler.enabled=false"
 })
 class CouponStatusSchedulerIntegrationTest {
 
