@@ -63,7 +63,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
 		producer.publish(issueMessage).join();
@@ -84,7 +84,7 @@ class CouponIssueEventProducerTest {
 		CompletableFuture<SendResult<String, Object>> failed = new CompletableFuture<>();
 		failed.completeExceptionally(new RuntimeException("kafka down"));
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(failed);
 
 		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
@@ -100,7 +100,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenThrow(new RuntimeException("sync failure"));
 
 		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
@@ -133,7 +133,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
 		when(issueMessageRepository.markSent(eq(1L), eq(IssueMessageStatus.SENT), any(LocalDateTime.class)))

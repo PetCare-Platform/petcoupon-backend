@@ -42,7 +42,9 @@ public class CouponIssueEventProducer {
 
 			// Kafka 발행 완료 후 수행하는 DB 상태 갱신 작업을
 			// Kafka Producer I/O 스레드와 분리하기 위해 별도 Executor에서 처리
-			return kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, parsedEvent.requestId(), parsedEvent)
+			// 파티션 키는 requestId(요청 단위)가 아니라 couponId여야 함 — 같은 쿠폰의 이벤트가
+			// 항상 같은 파티션으로 가야 sequenceNo 순서가 컨슈머 처리 순서와 일치함(Kafka는 파티션 내에서만 순서 보장)
+			return kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, String.valueOf(parsedEvent.couponId()), parsedEvent)
 				.<Void>handleAsync((result, ex) -> {
 					// 콜백 내부 상태 갱신 예외도 Future에 전파하여 Outbox Publisher가 발행 실패로 인식하도록 처리
 					try {
