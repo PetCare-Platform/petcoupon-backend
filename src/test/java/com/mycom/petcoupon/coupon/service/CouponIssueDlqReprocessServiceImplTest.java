@@ -2,18 +2,24 @@ package com.mycom.petcoupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueDlqConverter;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
@@ -40,12 +46,18 @@ class CouponIssueDlqReprocessServiceImplTest {
 	@InjectMocks
 	private CouponIssueDlqReprocessServiceImpl couponIssueDlqReprocessService;
 
+	@BeforeEach
+	void setUp() {
+		// @Value 필드는 순수 Mockito 단위 테스트에서 주입되지 않아 직접 세팅
+		ReflectionTestUtils.setField(couponIssueDlqReprocessService, "listSize", 100);
+	}
+
 	@Test
 	void listDlqMessages는_DLQ_상태인_메시지만_변환해서_반환한다() {
 		IssueMessage issueMessage = mock(IssueMessage.class);
 		CouponIssueDlqResponse response = CouponIssueDlqResponse.builder().messageId(1L).build();
 
-		when(issueMessageRepository.findAllByStatusOrderByCreatedAtAsc(IssueMessageStatus.DLQ))
+		when(issueMessageRepository.findByStatus(eq(IssueMessageStatus.DLQ), any(Pageable.class)))
 				.thenReturn(List.of(issueMessage));
 		when(couponIssueDlqConverter.toDlqResponse(issueMessage)).thenReturn(response);
 
@@ -55,13 +67,15 @@ class CouponIssueDlqReprocessServiceImplTest {
 	}
 
 	@Test
-	void reprocess는_DLQ_메시지를_다시_발행하고_결과를_반환한다() {
+	void reprocess는_DLQ_메시지를_원자적으로_선점한_뒤_다시_발행한다() {
 		IssueMessage issueMessage = mock(IssueMessage.class);
-		when(issueMessage.getStatus()).thenReturn(IssueMessageStatus.DLQ);
+		when(issueMessage.getRetryCount()).thenReturn(1);
 
 		CouponIssueDlqReprocessResponse response = CouponIssueDlqReprocessResponse.builder().messageId(1L).build();
 
 		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForReprocess(1L, IssueMessageStatus.DLQ, 1))
+				.thenReturn(1);
 		when(couponIssueDlqConverter.toReprocessResponse(issueMessage)).thenReturn(response);
 
 		CouponIssueDlqReprocessResponse result = couponIssueDlqReprocessService.reprocess(1L);
@@ -78,18 +92,24 @@ class CouponIssueDlqReprocessServiceImplTest {
 				.isInstanceOf(GeneralException.class)
 				.extracting(ex -> ((GeneralException) ex).getErrorCode())
 				.isEqualTo(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND);
+
+		verify(couponIssueEventProducer, never()).publish(any());
 	}
 
 	@Test
-	void reprocess는_DLQ_상태가_아니면_예외를_던진다() {
+	void reprocess는_선점에_실패하면_예외를_던지고_재발행하지_않는다() {
 		IssueMessage issueMessage = mock(IssueMessage.class);
-		when(issueMessage.getStatus()).thenReturn(IssueMessageStatus.SENT);
+		when(issueMessage.getRetryCount()).thenReturn(1);
 
 		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForReprocess(1L, IssueMessageStatus.DLQ, 1))
+				.thenReturn(0);
 
 		assertThatThrownBy(() -> couponIssueDlqReprocessService.reprocess(1L))
 				.isInstanceOf(GeneralException.class)
 				.extracting(ex -> ((GeneralException) ex).getErrorCode())
 				.isEqualTo(CouponErrorCode.NOT_DLQ_STATUS);
+
+		verify(couponIssueEventProducer, never()).publish(any());
 	}
 }
