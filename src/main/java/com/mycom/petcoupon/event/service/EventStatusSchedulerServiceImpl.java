@@ -28,22 +28,23 @@ public class EventStatusSchedulerServiceImpl implements EventStatusSchedulerServ
 
 	// 오픈 시각이 이미 지난 SCHEDULED 이벤트를 먼저 OPEN으로 올린 뒤, 같은 now 기준으로 종료 시각이 지난
 	// OPEN 이벤트를 CLOSED로 내린다 — 배치가 한동안 못 돌고 재기동해도 한 번의 실행에서 SCHEDULED->CLOSED까지 이어진다.
-	// 실제 실행 주기는 여기가 아니라 EventSchedulingConfig(전용 TaskScheduler)에서 등록한다.
+	// 실제 실행 주기는 여기가 아니라 EventSchedulingRunner(전용 TaskScheduler)에서 등록한다.
+	//
+	// 여기서는 예외를 잡지 않는다. 스케줄러가 예외로 멈추지 않게 하는 건 EventSchedulingRunner가
+	// 태스크 자체를 감싸서 처리한다 — 이 메서드 안에서 잡으면 @Transactional 경계(커넥션 획득 / 커밋)
+	// 에서 난 예외를 놓치고, 예외를 삼키면 트랜잭션이 rollback-only로 마킹돼 커밋 시점에
+	// UnexpectedRollbackException이 새로 터진다. 그냥 던져서 트랜잭션을 깨끗이 롤백시키고 다음 주기에
+	// 재시도하게 둔다(updateStatusIfMatches가 조건부 UPDATE라 재시도가 안전하다).
 	@Override
 	@Transactional
 	public void syncEventStatuses() {
 		LocalDateTime now = LocalDateTime.now();
 
-		// 스케줄러 실행 자체가 예외로 죽으면 안 되므로, 여기서 잡고 로그만 남긴다 — 다음 주기에 다시 시도된다.
-		try {
-			int opened = openScheduledEvents(now);
-			int closed = closeOpenEvents(now);
+		int opened = openScheduledEvents(now);
+		int closed = closeOpenEvents(now);
 
-			if (opened > 0 || closed > 0) {
-				log.info("이벤트 상태 전환 스케줄러 완료. OPEN 전환={}건, CLOSED 전환={}건", opened, closed);
-			}
-		} catch (Exception e) {
-			log.error("이벤트 상태 전환 스케줄러 실행 중 오류가 발생했습니다.", e);
+		if (opened > 0 || closed > 0) {
+			log.info("이벤트 상태 전환 스케줄러 완료. OPEN 전환={}건, CLOSED 전환={}건", opened, closed);
 		}
 	}
 

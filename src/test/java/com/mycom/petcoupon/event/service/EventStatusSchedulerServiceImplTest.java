@@ -29,9 +29,17 @@ import com.mycom.petcoupon.user.repository.AppUserRepository;
  * cron을 1초 주기로 덮어써서 실제 스케줄러 실행이 이벤트 상태를 바꾸는지 확인한다.
  * 고정 Thread.sleep 대신 Awaitility로 폴링해서, 조건이 충족되는 즉시 끝나고
  * 실패 시에도 지정한 시간까지는 재시도하도록 한다 (CI 부하로 인한 flaky 완화).
+ *
+ * Redis Stream Consumer는 꺼둔다. 이벤트 스케줄러는 Redis와 무관한데, @SpringBootTest가 전체
+ * 컨텍스트를 올리면서 couponIssueStreamContainer 빈까지 생성해 Redis 연결을 시도하기 때문이다.
+ * 켜두면 Redis가 없을 때 이 테스트가 컨텍스트 로딩 단계에서 통째로 실패한다.
+ *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
-@SpringBootTest(properties = "event.status.scheduler.cron=*/1 * * * * *")
+@SpringBootTest(properties = {
+		"event.status.scheduler.cron=*/1 * * * * *",
+		"coupon.issue.stream.enabled=false"
+})
 class EventStatusSchedulerServiceImplTest {
 
 	private static final Duration AT_MOST = Duration.ofSeconds(5);
