@@ -15,11 +15,9 @@ import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
 // CouponIssueEventConsumer가 같은 클래스 내부 메서드를 호출하면 프록시를 안 거쳐 @Transactional이 무시되므로
 // 별도 빈으로 분리함
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class CouponIssuePersister {
@@ -62,11 +60,6 @@ public class CouponIssuePersister {
 				.actorType(HistoryActorType.SYSTEM)
 				.reason("Kafka Consumer 발급 확정")
 				.build()
-		);
-
-		log.info(
-			"[CouponIssueEvent] 저장완료 requestId={} couponIssueId={} sequenceNo={}",
-			event.requestId(), couponIssue.getCouponIssueId(), event.sequenceNo()
 		);
 	}
 }

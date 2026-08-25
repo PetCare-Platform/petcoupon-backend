@@ -37,6 +37,10 @@ public class CouponIssueEventConsumer {
 
 		try {
 			couponIssuePersister.persist(event);
+			log.info(
+				"[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}",
+				event.requestId(), event.sequenceNo()
+			);
 		} catch (DataIntegrityViolationException e) {
 			if (couponIssueRepository.existsByRequestId(event.requestId())) {
 				// 이 requestId로 이미 저장이 끝난 상태 (재전달) — 재고는 정상 소진된 것이므로 보상하지 않음
