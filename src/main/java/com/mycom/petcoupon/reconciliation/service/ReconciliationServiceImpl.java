@@ -59,7 +59,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .finishedAt(LocalDateTime.now())
                 .totalCount(totalCount)
                 .successCount(totalCount - distinctErrorIssueCount)
-                .errorCount(details.size())
+                .errorCount(distinctErrorIssueCount)
                 .stockTotal(0)
                 .stockIssued(0)
                 .stockRemaining(0)

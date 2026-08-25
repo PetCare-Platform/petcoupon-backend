@@ -116,7 +116,7 @@ class ReconciliationServiceImplTest {
     @Test
     void 허용되지_않은_상태_전이_이력이면_INVALID_STATUS를_탐지한다() {
         CouponIssue issue = createIssueWithHistory(IssueStatus.EXPIRED, "INVALID-1", "NONE", "ISSUED");
-        // 화이트리스트에 없는 전이(EXPIRED -> USED)를 추가로 남김
+        // 화이트리스트에 없는 전이(EXPIRED -> USED)를 추가로 남김 — 이러면 HISTORY_MISMATCH도 같이 걸림
         insertHistory(issue, "EXPIRED", "USED");
 
         reconciliationService.reconcile(coupon.getCouponId());
@@ -124,6 +124,11 @@ class ReconciliationServiceImplTest {
         ReconciliationReport report = latestReport();
         assertThat(report.getVerificationDetails())
                 .anyMatch(d -> d.getErrorType() == VerificationErrorType.INVALID_STATUS);
+
+        // 같은 발급 건이 두 항목(HISTORY_MISMATCH + INVALID_STATUS)에 동시에 걸려도,
+        // errorCount는 발급 건 단위로 1건만 세야 하고, totalCount = successCount + errorCount가 항상 성립해야 함
+        assertThat(report.getErrorCount()).isEqualTo(1L);
+        assertThat(report.getTotalCount()).isEqualTo(report.getSuccessCount() + report.getErrorCount());
     }
 
     private ReconciliationReport latestReport() {
