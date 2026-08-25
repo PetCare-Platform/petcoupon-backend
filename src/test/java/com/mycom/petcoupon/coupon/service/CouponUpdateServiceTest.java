@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -40,8 +41,12 @@ class CouponUpdateServiceTest {
 
 	private static final Long EVENT_ID = 1L;
 	private static final Long COUPON_ID = 10L;
-	private static final LocalDateTime EVENT_OPEN_AT = LocalDateTime.of(2026, 8, 20, 9, 0);
-	private static final LocalDateTime EVENT_CLOSE_AT = LocalDateTime.of(2026, 8, 31, 23, 59);
+	// 수정 가능 조건에 issueStartAt > now가 들어가므로 고정 날짜를 쓰면 그 날이 지나는 순간
+	// 테스트가 통째로 깨진다. NOW 하나를 기준으로 삼고 전부 상대 시각으로 잡는다.
+	// NOW는 findDatabaseNow()의 스텁 값이기도 하다 — 프로덕션 코드가 DB 시각을 쓰기 때문.
+	private static final LocalDateTime NOW = LocalDateTime.now();
+	private static final LocalDateTime EVENT_OPEN_AT = NOW.plusDays(1);
+	private static final LocalDateTime EVENT_CLOSE_AT = NOW.plusDays(12);
 
 	@Mock
 	private EventRepository eventRepository;
@@ -58,6 +63,12 @@ class CouponUpdateServiceTest {
 	@InjectMocks
 	private CouponServiceImpl couponService;
 
+	// 상태 검증에서 먼저 걸러지는 테스트는 여기까지 오지 않으므로 lenient로 둔다.
+	@BeforeEach
+	void stubDatabaseNow() {
+		lenient().when(couponRepository.findDatabaseNow()).thenReturn(NOW);
+	}
+
 	@Test
 	void updateCouponAppliesOnlyProvidedFieldsAndKeepsExistingOnes() {
 		Event event = scheduledEvent();
@@ -69,8 +80,8 @@ class CouponUpdateServiceTest {
 				.build();
 		CouponUpdateResponse expected = CouponUpdateResponse.builder().couponId(COUPON_ID).build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 		when(couponConverter.toUpdateResponse(coupon, couponStock)).thenReturn(expected);
 
 		CouponUpdateResponse actual = couponService.updateCoupon(EVENT_ID, COUPON_ID, request);
@@ -90,8 +101,8 @@ class CouponUpdateServiceTest {
 		CouponStock couponStock = couponStock(coupon, 100);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().totalQuantity(200).build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 		when(couponConverter.toUpdateResponse(coupon, couponStock))
 				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
 
@@ -109,8 +120,8 @@ class CouponUpdateServiceTest {
 		when(couponStock.getIssuedQuantity()).thenReturn(5);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().totalQuantity(200).build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -138,7 +149,7 @@ class CouponUpdateServiceTest {
 	@Test
 	void updateCouponThrowsCouponNotFoundWhenCouponDoesNotExist() {
 		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 쿠폰").build();
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.empty());
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.empty());
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -156,7 +167,7 @@ class CouponUpdateServiceTest {
 		when(coupon.getEvent()).thenReturn(event);
 		when(event.getEventId()).thenReturn(2L);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 쿠폰").build();
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -177,8 +188,8 @@ class CouponUpdateServiceTest {
 		CouponStock couponStock = mock(CouponStock.class);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 쿠폰").build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -196,8 +207,8 @@ class CouponUpdateServiceTest {
 		CouponStock couponStock = mock(CouponStock.class);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 쿠폰").build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -205,6 +216,27 @@ class CouponUpdateServiceTest {
 		);
 
 		assertSame(CouponErrorCode.INVALID_COUPON_STATUS_FOR_UPDATE, exception.getErrorCode());
+		verifyNoInteractions(couponConverter);
+	}
+
+	// 스케줄러 지연 구간 재현: issueStartAt은 이미 지났는데 status는 아직 READY로 남아 있는 상태.
+	// status만 봤다면 통과했을 요청이므로, 시간 조건이 실제로 막는지 확인한다.
+	@Test
+	void updateCouponThrowsIssueAlreadyStartedWhenIssueStartAtHasPassedButStatusIsStillReady() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyCouponWithIssueStartAt(event, NOW.minusMinutes(1));
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 쿠폰").build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_ALREADY_STARTED, exception.getErrorCode());
 		verifyNoInteractions(couponConverter);
 	}
 
@@ -217,8 +249,8 @@ class CouponUpdateServiceTest {
 				.issueEndAt(coupon.getIssueStartAt().minusSeconds(1))
 				.build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -238,8 +270,8 @@ class CouponUpdateServiceTest {
 				.issueEndAt(EVENT_CLOSE_AT.plusSeconds(1))
 				.build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -257,8 +289,8 @@ class CouponUpdateServiceTest {
 		CouponStock couponStock = mock(CouponStock.class);
 		CouponUpdateRequest request = CouponUpdateRequest.builder().discountValue(101).build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -278,8 +310,8 @@ class CouponUpdateServiceTest {
 				.discountType(DiscountType.FIXED_AMOUNT)
 				.build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 		when(couponConverter.toUpdateResponse(coupon, couponStock))
 				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
 
@@ -301,8 +333,8 @@ class CouponUpdateServiceTest {
 				.maxDiscountAmount(5_000)
 				.build();
 
-		when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(coupon));
-		when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -331,6 +363,20 @@ class CouponUpdateServiceTest {
 				.minOrderAmount(30_000)
 				.maxDiscountAmount(10_000)
 				.issueStartAt(EVENT_OPEN_AT.plusDays(1))
+				.issueEndAt(EVENT_CLOSE_AT.minusDays(1))
+				.validDays(7)
+				.build();
+	}
+
+	private Coupon readyCouponWithIssueStartAt(Event event, LocalDateTime issueStartAt) {
+		return Coupon.builder()
+				.event(event)
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(issueStartAt)
 				.issueEndAt(EVENT_CLOSE_AT.minusDays(1))
 				.validDays(7)
 				.build();

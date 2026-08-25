@@ -2,6 +2,8 @@ package com.mycom.petcoupon.coupon.entity;
 
 import java.time.LocalDateTime;
 
+import org.hibernate.annotations.DynamicUpdate;
+
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.event.entity.Event;
@@ -23,8 +25,12 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
-@Entity 
-@Getter 
+// @DynamicUpdate: 기본 동작인 전체 컬럼 UPDATE는 updatePolicy가 건드리지도 않은 status까지 쓴다.
+// 그래서 스케줄러가 만든 ACTIVE를 영속성 컨텍스트의 낡은 READY로 되돌릴 수 있다.
+// 변경된 컬럼만 UPDATE하도록 바꿔서 그 경로를 아예 없앤다.
+@Entity
+@Getter
+@DynamicUpdate
 @Table(name = "coupon")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Coupon extends BaseEntity {

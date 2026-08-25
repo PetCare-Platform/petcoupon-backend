@@ -58,13 +58,17 @@ public class CouponServiceImpl implements CouponService {
 			throw new GeneralException(CouponErrorCode.EMPTY_UPDATE_REQUEST);
 		}
 
+		// 두 행 모두 비관적 락으로 잡는다. 스케줄러(activateCoupons)와 발급(increaseIssuedQuantity)이
+		// 검증과 flush 사이에 끼어들면 더티체킹 UPDATE가 그 결과를 덮어쓰기 때문이다.
+		// 잠그는 순서는 coupon -> coupon_stock으로, 발급 경로(FK 검사 -> 재고 갱신)와 같게 맞춰 데드락을 피한다.
 		Coupon coupon = findCouponInEvent(eventId, couponId);
-		CouponStock couponStock = couponStockRepository.findById(couponId)
+		CouponStock couponStock = couponStockRepository.findByIdForUpdate(couponId)
 				.orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 		Event event = coupon.getEvent();
 
 		validateEventStatusForUpdate(event);
 		validateCouponStatusForUpdate(coupon);
+		validateIssueNotStarted(coupon);
 
 		String name = resolve(request.name(), coupon.getName());
 		DiscountType discountType = resolve(request.discountType(), coupon.getDiscountType());
@@ -112,7 +116,7 @@ public class CouponServiceImpl implements CouponService {
 	}
 
 	private Coupon findCouponInEvent(Long eventId, Long couponId) {
-		Coupon coupon = couponRepository.findById(couponId)
+		Coupon coupon = couponRepository.findByIdForUpdate(couponId)
 				.orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
 		if (!coupon.getEvent().getEventId().equals(eventId)) {
@@ -163,6 +167,16 @@ public class CouponServiceImpl implements CouponService {
 	private void validateCouponStatusForUpdate(Coupon coupon) {
 		if (coupon.getStatus() != CouponStatus.READY) {
 			throw new GeneralException(CouponErrorCode.INVALID_COUPON_STATUS_FOR_UPDATE);
+		}
+	}
+
+	// status만으로는 부족하다. READY -> ACTIVE 전이는 스케줄러가 최대 60초 늦게 처리하므로,
+	// issueStartAt이 지났는데도 아직 READY로 남아 있는 구간에서 이미 발급이 열린 쿠폰이 수정될 수 있다.
+	// 시간으로 한 번 더 막는다. 덤으로 activateCoupons(issueStartAt <= now)와 수정 가능 조건이
+	// 서로 배타적이 되어 스케줄러와 같은 쿠폰을 두고 경합할 일이 사실상 없어진다.
+	private void validateIssueNotStarted(Coupon coupon) {
+		if (!coupon.getIssueStartAt().isAfter(couponRepository.findDatabaseNow())) {
+			throw new GeneralException(CouponErrorCode.ISSUE_ALREADY_STARTED);
 		}
 	}
 

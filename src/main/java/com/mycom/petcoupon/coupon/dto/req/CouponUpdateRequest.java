@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
@@ -11,6 +12,10 @@ import lombok.Builder;
 
 @Builder
 public record CouponUpdateRequest(
+		// @NotBlank는 null까지 거부해서 "생략 가능" 의미가 깨진다. @Pattern은 null을 통과시키므로
+		// 필드를 안 보내는 건 허용하고, 보냈는데 전부 공백인 경우만 막는다(생성 API의 @NotBlank와 대응).
+		// (?s)가 없으면 '.'이 줄바꿈에 매칭되지 않아 "가을\n쿠폰" 같은 멀쩡한 이름까지 거부된다.
+		@Pattern(regexp = "(?s).*\\S.*", message = "쿠폰 이름은 공백일 수 없습니다.")
 		@Size(max = 100, message = "쿠폰 이름은 100자 이하여야 합니다.")
 		String name,
 

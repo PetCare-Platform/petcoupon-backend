@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.controller;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -203,6 +205,41 @@ class AdminCouponControllerTest {
 					.content("""
 							{
 							  "totalQuantity": 0
+							}
+							"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COMMON400-1"));
+
+		verifyNoInteractions(couponService);
+	}
+
+	// 공백 검증에 쓰는 정규식이 줄바꿈까지 막아버리지 않는지 확인한다. (?s)가 빠지면
+	// '.'이 \n에 매칭되지 않아 이 멀쩡한 이름이 400으로 거부된다.
+	@Test
+	void updateCouponAcceptsNameContainingNewline() throws Exception {
+		when(couponService.updateCoupon(eq(EVENT_ID), eq(COUPON_ID), any(CouponUpdateRequest.class)))
+				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
+
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "name": "가을\\n쿠폰"
+							}
+							"""))
+				.andExpect(status().isOk());
+	}
+
+	// 생성 API의 @NotBlank와 대응. name을 아예 안 보내는 건 허용되지만(생략 = 기존값 유지),
+	// 보냈는데 전부 공백이면 거부한다.
+	@Test
+	void updateCouponReturnsValidationErrorWhenNameIsBlank() throws Exception {
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "name": "   "
 							}
 							"""))
 				.andExpect(status().isBadRequest())
