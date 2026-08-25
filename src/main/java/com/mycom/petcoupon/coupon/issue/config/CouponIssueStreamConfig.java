@@ -46,8 +46,7 @@ public class CouponIssueStreamConfig {
 	private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
 
 	// TaskScheduler 빈이 여러 개(couponExpireBatchTaskScheduler 등)라
-	// @Qualifier로 Redis Stream 복구 전용 스케줄러를 명시해야 함 — Lombok의
-	// @RequiredArgsConstructor는 필드의 @Qualifier를 생성자 파라미터로 안 옮겨주므로 직접 작성함
+	// @Qualifier로 Redis Stream 복구 전용 스케줄러를 명시해야 함
 	public CouponIssueStreamConfig(
 			CouponIssueStreamProperties properties,
 			StringRedisTemplate redisTemplate,
