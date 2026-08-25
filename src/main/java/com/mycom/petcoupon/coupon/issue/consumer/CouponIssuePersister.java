@@ -64,6 +64,9 @@ public class CouponIssuePersister {
 				.build()
 		);
 
-		log.info("[ISSUE] 저장완료 requestId={} couponIssueId={}", event.requestId(), couponIssue.getCouponIssueId());
+		log.info(
+			"[CouponIssueEvent] 저장완료 requestId={} couponIssueId={} sequenceNo={}",
+			event.requestId(), couponIssue.getCouponIssueId(), event.sequenceNo()
+		);
 	}
 }
