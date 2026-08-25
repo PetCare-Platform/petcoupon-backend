@@ -8,7 +8,10 @@ import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueMessage;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.messaging.service.CouponIssueOutboxService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +25,9 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 	
 	private final StringRedisTemplate redisTemplate;
 	private final CouponIssueStreamProperties properties;
+	
+	private final CouponIssueLuaService couponIssueLuaService;
+	private final CouponIssueOutboxService couponIssueOutboxService;
 
 	@Override
 	public void onMessage(MapRecord<String, String, String> message) {
@@ -43,17 +49,46 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				issueMessage.userId()
 			);
 
-			// TODO: 추후 Redis Lua Script 기반 CouponIssueProcedure 호출
-			process(issueMessage);
-
-			// 처리 성공 시에만 ACK
-			// 추후 Lua Script 결과가 중복 처리 또는 품절인 경우에도 재처리할 필요가 없으므로 ACK 하도록 분기함 
-			redisTemplate.opsForStream().acknowledge(
-				properties.getKey(),
-				properties.getGroup(),
-				message.getId()
+			CouponIssueLuaResult luaResult = couponIssueLuaService.issue(
+				issueMessage.couponId(),
+				issueMessage.userId(),
+				issueMessage.requestId()
 			);
+			
+			log.info(
+				    "[ISSUE] Lua 처리 결과 requestId={} status={} sequenceNo={}",
+				    issueMessage.requestId(),
+				    luaResult.status(),
+				    luaResult.sequenceNo()
+			);
+			
+			switch (luaResult.status()) {
+				case SUCCESS, SAME_REQUEST_RETRY -> {
+					log.info(
+						"[ISSUE] 선점 requestId={} sequenceNo={}", issueMessage.requestId(), luaResult.sequenceNo()
+				    );
+					
+					couponIssueOutboxService.saveIfAbsent(issueMessage.couponId(), issueMessage.userId(), issueMessage.requestId(), luaResult.sequenceNo());
 
+					// Lua 성공은 Redis 재고 선점일 뿐, 아직 Kafka의 최종 DB 발급이 완료된 것은 아니므로 IN_PROGRESS 상태로 유지 
+					acknowledge(message);
+				}
+
+				case ALREADY_APPLIED -> {
+					// TODO: idempotency_key에 ALREADY_APPLIED 결과 저장 후 ACK
+					acknowledge(message);
+				}
+				
+				case SOLD_OUT -> {
+					// TODO: idempotency_key에 SOLD_OUT 결과 저장 후 ACK 
+					acknowledge(message);
+				}
+
+				case STOCK_NOT_INITIALIZED, SEQUENCE_NOT_FOUND ->
+					throw new IllegalStateException("쿠폰 발급 Redis 상태가 정상적이지 않습니다."+ "requestId=" + issueMessage.requestId() + "status=" + luaResult.status());
+				
+			}
+			
 			log.info("쿠폰 신청 메시지 처리 및 ACK 완료. messageId={}", message.getId());
 
 		} catch (Exception e) {
@@ -64,17 +99,18 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 			);
 		}
 	}
-
-	// 쿠폰 발급 처리 메서드 
-	// 현재는 기본 처리 흐름만 구현하며, 추후 Redis Lua Script 기반 CouponIssueProcedure 를 호출함 
-	private void process(CouponIssueMessage message) {
+	
+	// 처리 성공 시에만 ACK
+	// 추후 Lua Script 결과가 중복 처리 또는 품절인 경우에도 재처리할 필요가 없으므로 ACK 하도록 분기함 
+	private void acknowledge(MapRecord<String, String, String> message) {
+		Long acknowledgedCount = redisTemplate.opsForStream().acknowledge(
+	        properties.getKey(),
+	        properties.getGroup(),
+	        message.getId()
+	    );
 		
-		// TODO: Redis Lua Script 기반 재고 차감 및 중복 발급 방지 로직 구현
-		log.info(
-			"쿠폰 발급 처리 임시 수행. requestId={}, couponId={}, userId={}",
-			message.requestId(),
-			message.couponId(),
-			message.userId()
-		);
+		if (acknowledgedCount == null || acknowledgedCount == 0) {
+	        throw new IllegalStateException("Redis Stream ACK에 실패했습니다. messageId = " + message.getId());
+	    }
 	}
 }

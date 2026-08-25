@@ -6,6 +6,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 
 import jakarta.persistence.Column;
@@ -17,6 +18,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -29,6 +31,12 @@ import lombok.NoArgsConstructor;
 @Getter 
 @Table(
 	name = "issue_message",
+	indexes = {
+		@Index( 
+			name = "idx_issue_message_publish", 
+			columnList = "status, retry_count, message_id"
+		)
+	},
 	uniqueConstraints = {
 		@UniqueConstraint(
 			name = "uk_message_key_topic",
@@ -84,4 +92,25 @@ public class IssueMessage {
 	
 	@Column(name = "processed_at") 
 	private LocalDateTime processedAt;
+	
+	public static IssueMessage pending(
+	        Coupon coupon,
+	        long userId,
+	        long sequenceNo,
+	        String requestId,
+	        String payload
+	) {
+	    IssueMessage issueMessage = new IssueMessage();
+
+	    issueMessage.coupon = coupon;
+	    issueMessage.userId = userId;
+	    issueMessage.sequenceNo = sequenceNo;
+	    issueMessage.messageKey = requestId;
+	    issueMessage.topic = KafkaTopics.COUPON_ISSUE_EVENT;
+	    issueMessage.payload = payload;
+	    issueMessage.status = IssueMessageStatus.PENDING;
+	    issueMessage.retryCount = 0;
+
+	    return issueMessage;
+	}
 }
