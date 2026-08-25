@@ -70,16 +70,24 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 					
 					couponIssueOutboxService.saveIfAbsent(issueMessage.couponId(), issueMessage.userId(), issueMessage.requestId(), luaResult.sequenceNo());
 
+					// Lua 성공은 Redis 재고 선점일 뿐, 아직 Kafka의 최종 DB 발급이 완료된 것은 아니므로 IN_PROGRESS 상태로 유지 
 					acknowledge(message);
 				}
 
-				case ALREADY_APPLIED, SOLD_OUT -> {
+				case ALREADY_APPLIED -> {
+					// TODO: idempotency_key에 ALREADY_APPLIED 결과 저장 후 ACK
+					acknowledge(message);
+				}
+				
+				case SOLD_OUT -> {
+					// TODO: idempotency_key에 SOLD_OUT 결과 저장 후 ACK 
 					acknowledge(message);
 				}
 
 				case STOCK_NOT_INITIALIZED, SEQUENCE_NOT_FOUND ->
-					throw new IllegalStateException("쿠폰 발급 Redis 상태가 정상적이지 않습니다. status=" + luaResult.status());
-				}
+					throw new IllegalStateException("쿠폰 발급 Redis 상태가 정상적이지 않습니다."+ "requestId=" + issueMessage.requestId() + "status=" + luaResult.status());
+				
+			}
 			
 			log.info("쿠폰 신청 메시지 처리 및 ACK 완료. messageId={}", message.getId());
 
