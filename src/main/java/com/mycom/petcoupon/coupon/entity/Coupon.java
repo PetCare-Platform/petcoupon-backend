@@ -93,4 +93,24 @@ public class Coupon extends BaseEntity {
 		this.issueEndAt = issueEndAt;
 		this.validDays = validDays;
 	}
+
+	public void updatePolicy(
+			String name,
+			DiscountType discountType,
+			int discountValue,
+			int minOrderAmount,
+			Integer maxDiscountAmount,
+			LocalDateTime issueStartAt,
+			LocalDateTime issueEndAt,
+			int validDays
+	) {
+		this.name = name;
+		this.discountType = discountType;
+		this.discountValue = discountValue;
+		this.minOrderAmount = minOrderAmount;
+		this.maxDiscountAmount = maxDiscountAmount;
+		this.issueStartAt = issueStartAt;
+		this.issueEndAt = issueEndAt;
+		this.validDays = validDays;
+	}
 }

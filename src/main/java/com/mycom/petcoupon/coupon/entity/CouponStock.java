@@ -55,4 +55,9 @@ public class CouponStock {
 		this.issuedQuantity = 0;
 		this.remainingQuantity = totalQuantity;
 	}
+
+	public void updateTotalQuantity(int totalQuantity) {
+		this.totalQuantity = totalQuantity;
+		this.remainingQuantity = totalQuantity - this.issuedQuantity;
+	}
 }

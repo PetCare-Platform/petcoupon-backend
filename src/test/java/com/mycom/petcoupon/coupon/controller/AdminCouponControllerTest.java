@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.controller;
 
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -18,7 +19,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
+import com.mycom.petcoupon.coupon.dto.req.CouponUpdateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -31,6 +34,7 @@ import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 class AdminCouponControllerTest {
 
 	private static final Long EVENT_ID = 1L;
+	private static final Long COUPON_ID = 10L;
 
 	@Mock
 	private CouponService couponService;
@@ -156,6 +160,107 @@ class AdminCouponControllerTest {
 				.andExpect(jsonPath("$.isSuccess").value(false))
 				.andExpect(jsonPath("$.code").value("COUPON400-4"))
 				.andExpect(jsonPath("$.message").value("정률 할인 정책이 올바르지 않습니다."))
+				.andExpect(jsonPath("$.result").doesNotExist());
+	}
+
+	@Test
+	void updateCouponReturnsSuccessResponse() throws Exception {
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+		CouponUpdateResponse response = CouponUpdateResponse.builder()
+				.couponId(COUPON_ID)
+				.eventId(EVENT_ID)
+				.name("가을 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(LocalDateTime.of(2026, 8, 21, 9, 0))
+				.issueEndAt(LocalDateTime.of(2026, 8, 30, 23, 59))
+				.validDays(7)
+				.totalQuantity(100)
+				.status(CouponStatus.READY)
+				.build();
+		when(couponService.updateCoupon(EVENT_ID, COUPON_ID, request)).thenReturn(response);
+
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "name": "가을 정률 쿠폰"
+							}
+							"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.code").value("200"))
+				.andExpect(jsonPath("$.result.couponId").value(COUPON_ID))
+				.andExpect(jsonPath("$.result.name").value("가을 정률 쿠폰"));
+	}
+
+	@Test
+	void updateCouponReturnsValidationErrorWhenTotalQuantityIsNotPositive() throws Exception {
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "totalQuantity": 0
+							}
+							"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COMMON400-1"));
+
+		verifyNoInteractions(couponService);
+	}
+
+	@Test
+	void updateCouponReturnsEmptyUpdateRequestError() throws Exception {
+		when(couponService.updateCoupon(EVENT_ID, COUPON_ID, CouponUpdateRequest.builder().build()))
+				.thenThrow(new GeneralException(CouponErrorCode.EMPTY_UPDATE_REQUEST));
+
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("{}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COUPON400-8"))
+				.andExpect(jsonPath("$.result").doesNotExist());
+	}
+
+	@Test
+	void updateCouponReturnsCouponNotFound() throws Exception {
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+		when(couponService.updateCoupon(EVENT_ID, COUPON_ID, request))
+				.thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "name": "가을 정률 쿠폰"
+							}
+							"""))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COUPON404-0"))
+				.andExpect(jsonPath("$.result").doesNotExist());
+	}
+
+	@Test
+	void updateCouponReturnsInvalidCouponStatusForUpdate() throws Exception {
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+		when(couponService.updateCoupon(EVENT_ID, COUPON_ID, request))
+				.thenThrow(new GeneralException(CouponErrorCode.INVALID_COUPON_STATUS_FOR_UPDATE));
+
+		mockMvc.perform(patch("/admin/events/{eventId}/coupons/{couponId}", EVENT_ID, COUPON_ID)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("""
+							{
+							  "name": "가을 정률 쿠폰"
+							}
+							"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COUPON400-7"))
 				.andExpect(jsonPath("$.result").doesNotExist());
 	}
 
