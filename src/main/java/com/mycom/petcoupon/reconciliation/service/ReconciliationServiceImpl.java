@@ -2,6 +2,8 @@ package com.mycom.petcoupon.reconciliation.service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,6 +54,11 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .distinct()
                 .count();
 
+        Map<String, Long> statusCounts = countByStatus(couponId);
+        long dbActiveCount = statusCounts.getOrDefault("ISSUED", 0L) + statusCounts.getOrDefault("USED", 0L);
+        long dbCanceledCount = statusCounts.getOrDefault("CANCELED", 0L);
+        long dbExpiredCount = statusCounts.getOrDefault("EXPIRED", 0L);
+
         ReconciliationReport report = ReconciliationReport.builder()
                 .coupon(coupon)
                 .asOfAt(asOfAt)
@@ -60,13 +67,13 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .totalCount(totalCount)
                 .successCount(totalCount - distinctErrorIssueCount)
                 .errorCount(distinctErrorIssueCount)
-                .stockTotal(0)
-                .stockIssued(0)
-                .stockRemaining(0)
-                .dbActiveCount(0)
-                .dbCanceledCount(0)
-                .dbExpiredCount(0)
-                .dbDlqCount(0)
+                .stockTotal(null)
+                .stockIssued(null)
+                .stockRemaining(null)
+                .dbActiveCount(dbActiveCount)
+                .dbCanceledCount(dbCanceledCount)
+                .dbExpiredCount(dbExpiredCount)
+                .dbDlqCount(null)
                 .maxSequenceNo(null)
                 .redisRemaining(null)
                 .result(details.isEmpty() ? ReconciliationResult.MATCHED : ReconciliationResult.MISMATCHED)
@@ -81,6 +88,19 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 "SELECT COUNT(*) FROM coupon_issue WHERE coupon_id = :couponId")
                 .setParameter("couponId", couponId)
                 .getSingleResult()).longValue();
+    }
+
+    private Map<String, Long> countByStatus(Long couponId) {
+        List<Tuple> rows = entityManager.createNativeQuery("""
+                SELECT status, COUNT(*) FROM coupon_issue WHERE coupon_id = :couponId GROUP BY status
+                """, Tuple.class)
+                .setParameter("couponId", couponId)
+                .getResultList();
+
+        return rows.stream().collect(Collectors.toMap(
+                row -> (String) row.get(0),
+                row -> ((Number) row.get(1)).longValue()
+        ));
     }
 
     // HISTORY_MISMATCH: 현재 status가 가장 최근 이력의 to_status와 다른 건

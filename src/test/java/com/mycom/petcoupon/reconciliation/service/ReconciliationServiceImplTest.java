@@ -49,6 +49,7 @@ class ReconciliationServiceImplTest {
     private ReconciliationReportRepository reconciliationReportRepository;
 
     private Coupon coupon;
+    private int sequenceCounter = 0;
 
     @BeforeEach
     void setUp() {
@@ -85,6 +86,23 @@ class ReconciliationServiceImplTest {
         assertThat(report.getResult()).isEqualTo(ReconciliationResult.MATCHED);
         assertThat(report.getErrorCount()).isZero();
         assertThat(report.getSuccessCount()).isEqualTo(1L);
+    }
+
+    @Test
+    void 상태별_건수를_실제로_집계한다() {
+        createIssueWithHistory(IssueStatus.ISSUED, "ACTIVE-1", "NONE", "ISSUED");
+        createIssueWithHistory(IssueStatus.ISSUED, "ACTIVE-2", "NONE", "ISSUED");
+        createIssueWithHistory(IssueStatus.USED, "USED-1", "ISSUED", "USED");
+        createIssueWithHistory(IssueStatus.EXPIRED, "EXPIRED-1", "ISSUED", "EXPIRED");
+
+        reconciliationService.reconcile(coupon.getCouponId());
+
+        ReconciliationReport report = latestReport();
+        assertThat(report.getDbActiveCount()).isEqualTo(3L); // ISSUED 2건 + USED 1건
+        assertThat(report.getDbCanceledCount()).isEqualTo(0L);
+        assertThat(report.getDbExpiredCount()).isEqualTo(1L);
+        assertThat(report.getDbDlqCount()).isNull();
+        assertThat(report.getStockTotal()).isNull();
     }
 
     @Test
@@ -146,13 +164,15 @@ class ReconciliationServiceImplTest {
     }
 
     private CouponIssue createIssueWithoutHistory(IssueStatus status, String couponCode) {
+        sequenceCounter++;
+
         AppUser user = AppUser.builder()
                 .name("유저-" + couponCode).email(couponCode + "@test.com").phone("010-1111-1111")
                 .role(UserRole.ROLE_MEMBER).build();
         entityManager.persist(user);
 
         CouponIssue issue = CouponIssue.builder()
-                .coupon(coupon).user(user).sequenceNo(1)
+                .coupon(coupon).user(user).sequenceNo(sequenceCounter)
                 .couponCode(couponCode).requestId("req-" + couponCode)
                 .status(status)
                 .usedAt(status == IssueStatus.USED ? LocalDateTime.now() : null)
