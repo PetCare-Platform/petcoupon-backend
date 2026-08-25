@@ -5,6 +5,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.service.CouponStatusSchedulerService;
@@ -21,6 +22,18 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 @Component
+// 앱 전체를 띄우는 테스트에서 이 스케줄러를 끌 수 있게 한다.
+// 켜져 있으면 테스트가 도는 동안에도 쿠폰 상태를 READY -> ACTIVE로 바꿔서
+// 다른 테스트가 잡아둔 전제를 깨뜨린다.
+// 키를 coupon.status.enabled로 둔 건 짝이 되는
+// coupon.status.interval-seconds와 접두사를 맞추기 위함이다.
+// 기본값은 켜짐이므로 운영 동작은 그대로다.
+@ConditionalOnProperty(
+	prefix = "coupon.status",
+	name = "enabled",
+	havingValue = "true",
+	matchIfMissing = true
+)
 public class CouponStatusSchedulerRegistrar {
 
     private final CouponStatusSchedulerService couponStatusSchedulerService;
