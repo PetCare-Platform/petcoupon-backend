@@ -35,7 +35,8 @@ import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 @SpringBootTest(properties = { 
 	"coupon.issue.stream.enabled=true", "coupon.issue.outbox.enabled=true",
-	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10" 
+	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10",
+	"spring.kafka.consumer.auto-offset-reset=earliest"
 })
 class CouponIssuePipelineIntegrationTest {
 

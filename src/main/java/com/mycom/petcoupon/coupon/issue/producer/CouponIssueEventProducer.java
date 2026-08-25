@@ -59,6 +59,12 @@ public class CouponIssueEventProducer {
 						return null;
 						
 					} catch (RuntimeException callbackException) {
+
+						// Kafka 발행 실패를 Publisher에 알리기 위해 의도적으로 던진 예외는 이미 위에서 발행 실패 로그를 남겼으므로 중복 로그를 남기지 않음
+						if (callbackException instanceof CompletionException) {
+					        throw callbackException;
+					    }
+
 						log.error(
 							"[CouponIssueEvent] 발행 완료 콜백 처리 중 예외 발생, 수동 확인 필요: messageId={}, requestId={}",
 							issueMessage.getMessageId(), parsedEvent.requestId(), callbackException
