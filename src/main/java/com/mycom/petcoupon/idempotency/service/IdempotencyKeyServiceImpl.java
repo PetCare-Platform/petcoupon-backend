@@ -31,6 +31,11 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
     // IN_PROGRESS 상태가 이 시간을 넘기면 죽은 시도로 간주하고 재처리를 허용한다.
     private static final Duration TTL = Duration.ofSeconds(30);
 
+    // 상태와 무관하게, 생성된 지 이만큼 지난 행은 재현(REPLAY)될 일이 없다고 보고 정리 대상으로 삼는다.
+    // TTL(30초)과 달리 SUCCEEDED/FAILED 행은 완료 후에도 재요청 재현을 위해 한동안 남아있어야 하므로
+    // expires_at이 아니라 created_at 기준으로 훨씬 긴 보관기간을 둔다.
+    private static final Duration RETENTION = Duration.ofDays(7);
+
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final IdempotencyKeyCreator idempotencyKeyCreator;
 
@@ -105,6 +110,12 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
     public void failWithoutBody(Long recordId) {
         idempotencyKeyRepository.findById(recordId)
                 .ifPresent(record -> record.complete(IdempotencyStatus.FAILED, null, null));
+    }
+
+    @Override
+    @Transactional
+    public int cleanupExpiredRecords() {
+        return idempotencyKeyRepository.deleteByCreatedAtBefore(LocalDateTime.now().minus(RETENTION));
     }
 
     // 요청을 식별하는 해시 — 지금은 (couponId, userId) 조합만 넣는다.

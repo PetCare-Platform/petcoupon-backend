@@ -1,5 +1,10 @@
 package com.mycom.petcoupon.messaging.repository;
 
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -43,4 +48,45 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("status") IssueMessageStatus status,
 			@Param("lastError") String lastError
 	);
+	
+	
+	boolean existsByTopicAndMessageKey(String topic, String messageKey);
+	
+	List<IssueMessage> findByStatusInAndRetryCountLessThan(
+		Collection<IssueMessageStatus> statuses,
+		int retryCount,
+		Pageable pageable
+	);
+
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+		UPDATE IssueMessage im
+			SET im.status = :status,
+				im.processedAt = :processedAt,
+				im.lastError = null
+		WHERE im.messageId = :messageId
+	""")
+	int markSent(
+		@Param("messageId") Long messageId, 
+		@Param("status") IssueMessageStatus status,
+		@Param("processedAt") LocalDateTime processedAt
+	);
+	
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+	    UPDATE IssueMessage im
+	       SET im.status = :status,
+	           im.retryCount = im.retryCount + 1,
+	           im.lastError = :lastError
+	     WHERE im.messageId = :messageId
+	""")
+	int markPublishFailed(
+	    @Param("messageId") Long messageId,
+	    @Param("status") IssueMessageStatus status,
+	    @Param("lastError") String lastError
+	);
+
+	List<IssueMessage> findAllByStatusOrderByCreatedAtAsc(IssueMessageStatus status);
 }

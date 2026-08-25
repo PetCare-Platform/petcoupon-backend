@@ -17,5 +17,6 @@ class CouponIssueConverterTest {
 
         assertThat(response.couponId()).isEqualTo(10L);
         assertThat(response.userId()).isEqualTo(20L);
+        assertThat(response.status()).isEqualTo("WAITING");
     }
 }

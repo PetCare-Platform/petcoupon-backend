@@ -1,5 +1,8 @@
 package com.mycom.petcoupon.coupon.issue.producer;
 
+import java.time.LocalDateTime;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,6 +24,8 @@ import tools.jackson.databind.json.JsonMapper;
 @RequiredArgsConstructor
 public class CouponIssueEventProducer {
 
+	private static final int LAST_ERROR_MAX_LENGTH = 500;
+	
 	private final KafkaTemplate<String, Object> kafkaTemplate;
 	private final IssueMessageRepository issueMessageRepository;
 	private final JsonMapper jsonMapper;
@@ -30,64 +35,81 @@ public class CouponIssueEventProducer {
 	@Qualifier("kafkaCallbackExecutor")
 	private final Executor kafkaCallbackExecutor;
 
-	public void publish(IssueMessage issueMessage) {
-		CouponIssueEvent event = null;
+	public CompletableFuture<Void> publish(IssueMessage issueMessage) {
 
 		try {
 			final CouponIssueEvent parsedEvent = jsonMapper.readValue(issueMessage.getPayload(), CouponIssueEvent.class);
-			event = parsedEvent;
 
-			// whenComplete는 기본적으로 Kafka producer I/O 스레드에서 실행되므로,
-			// 그 안의 블로킹 DB 호출이 발행 파이프라인을 지연시키지 않도록 별도 executor로 뺌
-			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, parsedEvent.requestId(), parsedEvent)
-				.whenCompleteAsync((result, ex) -> {
-					// whenCompleteAsync가 반환하는 새 Future를 아무도 지켜보지 않으므로,
-					// 콜백 내부(markSent/markFailed의 DB 호출 등)에서 예외가 나면 로그도 없이 그냥 사라짐 — 직접 잡아서 남김
+			// Kafka 발행 완료 후 수행하는 DB 상태 갱신 작업을
+			// Kafka Producer I/O 스레드와 분리하기 위해 별도 Executor에서 처리
+			// 파티션 키는 requestId(요청 단위)가 아니라 couponId여야 함 — 같은 쿠폰의 이벤트가
+			// 항상 같은 파티션으로 가야 sequenceNo 순서가 컨슈머 처리 순서와 일치함(Kafka는 파티션 내에서만 순서 보장)
+			return kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, String.valueOf(parsedEvent.couponId()), parsedEvent)
+				.<Void>handleAsync((result, ex) -> {
+					// 콜백 내부 상태 갱신 예외도 Future에 전파하여 Outbox Publisher가 발행 실패로 인식하도록 처리
 					try {
 						if (ex != null) {
 							log.error("[CouponIssueEvent] 발행 실패: requestId={}", parsedEvent.requestId(), ex);
-							markFailed(issueMessage, parsedEvent, ex);
-						} else {
-							log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
-							markSent(issueMessage);
+							markFailed(issueMessage, ex);
+							
+							// Publisher가 발행 실패를 인식하도록 Future를 예외 완료 상태로 만듦
+							throw new CompletionException(ex);
 						}
-					} catch (Exception callbackException) {
+						
+						log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
+						markSent(issueMessage);
+						return null;
+						
+					} catch (RuntimeException callbackException) {
+						
+						// Kafka 발행 실패를 Publisher에 알리기 위해 의도적으로 던진 예외는 이미 위에서 발행 실패 로그를 남겼으므로 중복 로그를 남기지 않음
+						if (callbackException instanceof CompletionException) {
+					        throw callbackException;
+					    }
+						
 						log.error(
 							"[CouponIssueEvent] 발행 완료 콜백 처리 중 예외 발생, 수동 확인 필요: messageId={}, requestId={}",
 							issueMessage.getMessageId(), parsedEvent.requestId(), callbackException
 						);
+						
+						// 예외를 삼키지 않고 Publisher까지 전달
+                        throw callbackException;
 					}
 				}, kafkaCallbackExecutor);
+			
 		} catch (RuntimeException e) {
-			// payload 파싱 실패(event==null) 또는 send()가 Future를 반환하기 전 동기 예외로 실패한 경우 —
-			// 어느 쪽이든 issue_message는 FAILED로 남겨야 하고, 호출자가 WAITING 상태를 유지하지 않도록 예외를 그대로 전파
+			// payload 파싱 실패 또는 send()가 Future를 반환하기 전 동기 예외가 발생한 경우
+			// issue_message를 FAILED 상태로 변경하고 Publisher에 실패를 전파
 			log.error("[CouponIssueEvent] 발행 처리 실패: messageId={}", issueMessage.getMessageId(), e);
-			if (event != null) {
-				restoreStock(event);
-			}
-			issueMessageRepository.updateStatusWithError(
-				issueMessage.getMessageId(), IssueMessageStatus.FAILED, e.getMessage()
-			);
-			throw e;
+			
+			markFailed(issueMessage, e);
+			
+			// Publisher의 exceptionally()에서 실패를 처리할 수 있도록 반환
+			return CompletableFuture.failedFuture(e);
 		}
 	}
 
 	private void markSent(IssueMessage issueMessage) {
-		issueMessageRepository.updateStatus(issueMessage.getMessageId(), IssueMessageStatus.SENT);
+		issueMessageRepository.markSent(issueMessage.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
 	}
 
-	private void markFailed(IssueMessage issueMessage, CouponIssueEvent event, Throwable ex) {
-		restoreStock(event);
-		issueMessageRepository.updateStatusWithError(
-			issueMessage.getMessageId(), IssueMessageStatus.FAILED, ex.getMessage()
-		);
+	private void markFailed(IssueMessage issueMessage, Throwable ex) {
+		issueMessageRepository.markPublishFailed(issueMessage.getMessageId(), IssueMessageStatus.FAILED, errorMessage(ex));
 	}
 
-	// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
-	private void restoreStock(CouponIssueEvent event) {
-		log.warn(
-			"[CouponIssueEvent] 발행 실패로 재고 보상이 필요하지만 아직 구현되지 않음. couponId={}, userId={}, requestId={}",
-			event.couponId(), event.userId(), event.requestId()
-		);
+	// TODO: 최대 재시도 초과 Outbox 메시지의 DLQ 처리 및 Redis 재고 보상/정합성 보정 정책 구현
+	
+	private String errorMessage(Throwable throwable) {
+	    String message = throwable.getMessage();
+
+	    if (message == null || message.isBlank()) {
+	        message = throwable.getClass().getSimpleName();
+	    }
+
+	    if (message.length() <= LAST_ERROR_MAX_LENGTH) {
+	        return message;
+	    }
+
+	    return message.substring(0, LAST_ERROR_MAX_LENGTH);
 	}
 }
