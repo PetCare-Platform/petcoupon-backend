@@ -20,4 +20,7 @@ public interface IdempotencyKeyService {
 
     // Redis 등 인프라 예외로 본처리가 끊겼을 때 호출 — 응답 없이 FAILED 처리해서 재시도를 허용한다.
     void failWithoutBody(Long recordId);
+
+    // 보관기간이 지난 행(상태 무관)을 정리한다. 삭제된 개수를 반환한다.
+    int cleanupExpiredRecords();
 }
