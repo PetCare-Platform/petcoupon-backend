@@ -158,9 +158,11 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-71 | Consumer 정상 처리 | 발급 10건 접수 후 대기 | Consumer Lag 0, `coupon_issue` 10건 전건 ISSUED | 정자비 |
 | TC-72 | Consumer 일시 실패 후 재시도 | DB 연결을 잠시 끊고 접수 → 복구 | 재시도 후 정상 저장. 중복 저장 없음 | 정자비 |
 | TC-73 | 재시도 최종 실패 → 재고 보상 | Consumer가 계속 실패하도록 유도 | DLQ 적재 + Redis 재고 원복. 재고 누수 0 | 정자비 |
-| TC-74 | Kafka 발행 자체 실패 | Kafka 중단 상태에서 신청 | 재고 즉시 보상, WAITING 응답 미발생 | 정자비 |
+| TC-74 | Kafka 발행 자체 실패 | Kafka 중단 상태에서 신청 — 발행이 계속 실패하도록 유도 | WAITING 응답은 정상적으로 나감(발행 실패가 응답에 영향 없음). `issue_message`가 FAILED로 남고 재시도 대상에 들어감 | 정자비 |
 | TC-75 | Consumer 중복 전달 (멱등) | 동일 메시지 2회 전달 | `coupon_issue` 1건만. 유니크 위반이 500으로 새지 않음 | 정자비 |
 | TC-76 | Consumer 중단 중 접수 | Consumer만 내리고 10건 접수 → 기동 | 기동 후 밀린 10건 전부 처리. 유실 0 | 정자비 |
+
+> 발행이 실패해도 즉시 재고를 되돌리지 않고 Outbox 재시도로 넘기는 구조라, **재고 보상 검증은 재시도가 모두 소진된 뒤인 TC-73에서만 다룬다.** TC-74는 "발행이 실패해도 응답과 재시도 적재가 정상인가"까지만 본다.
 
 ### F. 대량 데이터 · 개인정보 — TC-80 ~ TC-85
 
