@@ -38,7 +38,7 @@
 | 담당 | 시나리오 | 개수 |
 | --- | --- | --- |
 | 전송흔 | TC-01 ~ 06, TC-20 ~ 29 | 16 |
-| 박신형 | TC-11 ~ 12, TC-34 ~ 37, TC-45 ~ 46, TC-50 ~ 54, TC-57 ~ 66 | 23 |
+| 박신형 | TC-11 ~ 12, TC-34 ~ 37, TC-45 ~ 46, TC-50 ~ 54, TC-57 ~ 66, TC-85 | 24 |
 | 박수빈 | TC-31 ~ 32, TC-40 ~ 42, TC-44, TC-90 ~ 91, TC-93 ~ 94 | 10 |
 | 이성집 | TC-07 ~ 10, TC-30, TC-33, TC-38, TC-43 | 8 |
 | 정자비 | TC-70 ~ 76 | 7 |
@@ -162,7 +162,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-75 | Consumer 중복 전달 (멱등) | 동일 메시지 2회 전달 | `coupon_issue` 1건만. 유니크 위반이 500으로 새지 않음 | 정자비 |
 | TC-76 | Consumer 중단 중 접수 | Consumer만 내리고 10건 접수 → 기동 | 기동 후 밀린 10건 전부 처리. 유실 0 | 정자비 |
 
-### F. 대량 데이터 · 개인정보 — TC-80 ~ TC-84
+### F. 대량 데이터 · 개인정보 — TC-80 ~ TC-85
 
 > 소규모에서는 드러나지 않고 실제 데이터 규모에서만 나타나는 문제를 잡는 구간이다.
 
@@ -173,6 +173,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-82 | 발급 이력 300만 건 상태에서 만료 배치 | 배치 수동 실행 | 청크 단위로 완주, 락 대기로 발급 API가 막히지 않음 | 함세연 |
 | TC-83 | 대량 상태에서 초기화 API | `POST /internal/coupons/{id}/reset` | 정상 완료, 타임아웃 없음 | 함세연 |
 | TC-84 | 개인정보 마스킹 | 발급·조회 API 호출 후 로그·응답 확인 | 이메일·전화번호가 평문으로 남지 않음 | 함세연 |
+| TC-85 | 발급 이력 300만 건 상태에서 정합성 검증 배치 | `reconcile()` 수동 실행 | 타임아웃 없이 완주, 청크/전수 스캔 방식에 따라 소요 시간 기록 | 박신형 |
 
 ### G. 선착순 순서 보장 — TC-90 ~ TC-94
 
@@ -311,7 +312,7 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 | Redis 재고 보상(restore) | 미구현 | TC-73, TC-74 |
 | 초기화 API의 Redis 키 삭제 | 미구현 — DB만 초기화한다. 반복 실행 시 2회차부터 전건 실패 | TC-40 ~ TC-44, TC-55 |
 | 개인정보 마스킹 | 미착수 | TC-84 |
-| 발급 이력 300만 더미데이터 | 미작성 | TC-81 ~ TC-83 |
+| 발급 이력 300만 더미데이터 | 미작성 | TC-81 ~ TC-83, TC-85 |
 | **요청 도착 로그** | **미구현** — 신청 API 경로에 로그가 없어 도착 순서를 확인할 수 없다 | TC-90 ~ TC-92 |
 | 발급 요청 큐 배치 확정 (Redis Stream 위치) | 미결정 | TC-07 응답 형태(202 WAITING vs 즉시 품절 판정)가 여기서 갈림 |
 | 정합성 검증 2단계<br>- STOCK_MISMATCH<br>- DUPLICATE_CONSUME<br>- SEQUENCE_GAP<br>- STOCK_NOT_RESTORED | 미구현 | TC-62 ~ TC-65 |
