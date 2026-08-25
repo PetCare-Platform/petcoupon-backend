@@ -152,6 +152,18 @@ class CouponControllerTest {
     }
 
     @Test
+    void Idempotency_Key가_64자를_초과하면_400을_반환한다() throws Exception {
+        String tooLong = "a".repeat(65);
+
+        mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
+                        .header(IDEMPOTENCY_HEADER, tooLong)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
+    @Test
     void 존재하지_않는_쿠폰이면_멱등성_레코드_생성_전에_404를_반환한다() throws Exception {
         when(couponRepository.existsById(5L)).thenReturn(false);
 
@@ -205,8 +217,23 @@ class CouponControllerTest {
     }
 
     @Test
+    void Idempotency_Key_대신_recordId_기반_requestId를_전달한다() throws Exception {
+        when(idempotencyKeyService.begin(any(), any(), any())).thenReturn(IdempotencyDecision.proceed(42L));
+        when(couponIssueService.issue(eq(5L), any(), any()))
+                .thenReturn(CouponIssueCreateResponse.builder().couponId(5L).userId(1L).build());
+
+        mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
+                        .header(IDEMPOTENCY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(couponIssueService).issue(eq(5L), any(), eq("issue:42"));
+    }
+
+    @Test
     void 정상_요청이면_200과_응답값을_반환하고_성공을_기록한다() throws Exception {
-        when(couponIssueService.issue(eq(5L), any()))
+        when(couponIssueService.issue(eq(5L), any(), any()))
                 .thenReturn(CouponIssueCreateResponse.builder()
                         .couponId(5L)
                         .userId(1L)
@@ -226,7 +253,7 @@ class CouponControllerTest {
 
     @Test
     void Redis_예외가_터지면_바디없이_FAILED로_기록하고_500을_반환한다() throws Exception {
-        when(couponIssueService.issue(eq(5L), any())).thenThrow(new RuntimeException("redis down"));
+        when(couponIssueService.issue(eq(5L), any(), any())).thenThrow(new RuntimeException("redis down"));
 
         mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
                         .header(IDEMPOTENCY_HEADER, KEY)
