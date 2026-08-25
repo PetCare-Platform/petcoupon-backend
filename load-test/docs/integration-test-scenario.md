@@ -129,7 +129,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | ID | 시나리오 | 실행 | 기대 결과 | 담당 |
 | --- | --- | --- | --- | --- |
 | TC-50 | 쿠폰 만료 배치 | 기한 지난 ISSUED 건 준비 후 수동 실행 | 대상만 EXPIRED, 이력에 ISSUED→EXPIRED 기록 | 박신형 |
-| TC-51 | 만료 대상이 아닌 건은 미변경 | USED·CANCELED·기한 미도래 건 혼재 | 해당 건들 상태 유지 | 박신형 |
+| TC-51 | 만료 대상이 아닌 건은 미변경 | USED·기한 미도래 건 혼재 | 해당 건들 상태 유지 | 박신형 |
 | TC-52 | 청크 경계 처리 | 대상 2,500건 (chunk-size 1000) | 전건 EXPIRED, 이력 2,500건. 누락 없음 | 박신형 |
 | TC-53 | 배치 재실행 | TC-50 직후 다시 실행 | 대상 0건, 이력 중복 없음 | 박신형 |
 | TC-54 | Redis ↔ DB 재고 정합성 | TC-41 직후 양쪽 조회 | Redis 잔여 + DB 발급 건수 = 총 재고 | 박신형 |
