@@ -61,7 +61,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
 		producer.publish(issueMessage);
@@ -78,7 +78,7 @@ class CouponIssueEventProducerTest {
 		CompletableFuture<SendResult<String, Object>> failed = new CompletableFuture<>();
 		failed.completeExceptionally(new RuntimeException("kafka down"));
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(failed);
 
 		producer.publish(issueMessage);
@@ -92,7 +92,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenThrow(new RuntimeException("sync failure"));
 
 		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
@@ -122,7 +122,7 @@ class CouponIssueEventProducerTest {
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
-		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(EVENT.requestId()), eq(EVENT)))
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
 		when(issueMessageRepository.updateStatus(1L, IssueMessageStatus.SENT))

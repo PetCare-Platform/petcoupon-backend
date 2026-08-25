@@ -39,7 +39,9 @@ public class CouponIssueEventProducer {
 
 			// whenComplete는 기본적으로 Kafka producer I/O 스레드에서 실행되므로,
 			// 그 안의 블로킹 DB 호출이 발행 파이프라인을 지연시키지 않도록 별도 executor로 뺌
-			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, parsedEvent.requestId(), parsedEvent)
+			// 파티션 키는 requestId(요청 단위)가 아니라 couponId여야 함 — 같은 쿠폰의 이벤트가
+			// 항상 같은 파티션으로 가야 sequenceNo 순서가 컨슈머 처리 순서와 일치함(Kafka는 파티션 내에서만 순서 보장)
+			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT, String.valueOf(parsedEvent.couponId()), parsedEvent)
 				.whenCompleteAsync((result, ex) -> {
 					// whenCompleteAsync가 반환하는 새 Future를 아무도 지켜보지 않으므로,
 					// 콜백 내부(markSent/markFailed의 DB 호출 등)에서 예외가 나면 로그도 없이 그냥 사라짐 — 직접 잡아서 남김
