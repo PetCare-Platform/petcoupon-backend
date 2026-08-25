@@ -88,5 +88,32 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	    @Param("lastError") String lastError
 	);
 
-	List<IssueMessage> findAllByStatusOrderByCreatedAtAsc(IssueMessageStatus status);
+	// 목록 조회용 — 재고 조회(findByStatusInAndRetryCountLessThan)와 동일하게 Pageable로 크기 제한.
+	// coupon은 LAZY라 findAllByUserIdOrderByCreatedAtDesc와 같은 이유로 JOIN FETCH를 붙임.
+	// (컨버터가 couponId만 읽어서 실측해보니 이 케이스는 지연로딩이어도 추가 쿼리/예외가 없었지만,
+	// 나중에 컨버터가 coupon의 다른 필드를 읽게 되면 그때는 N+1/예외가 실제로 날 수 있어 방어적으로 유지)
+	@Query("""
+			SELECT im FROM IssueMessage im
+			JOIN FETCH im.coupon
+			WHERE im.status = :status
+			ORDER BY im.createdAt ASC
+			""")
+	List<IssueMessage> findByStatus(@Param("status") IssueMessageStatus status, Pageable pageable);
+
+	// 관리자가 동시에(또는 중복 클릭으로) 같은 메시지를 재처리 요청해도 한 번만 Kafka로 재발행되도록,
+	// retryCount를 낙관적 락처럼 사용해 선점함 — status는 DLQ로 그대로 둬서 Outbox 발행 poller
+	// (findByStatusInAndRetryCountLessThan이 PENDING/FAILED만 봄)가 이 행을 건드리지 않게 함.
+	// 영향받은 행이 0이면 DLQ가 아니거나, 그 사이 다른 요청이 먼저 선점한 것으로 판단
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+			UPDATE IssueMessage im
+			   SET im.retryCount = im.retryCount + 1
+			 WHERE im.messageId = :messageId AND im.status = :expectedStatus AND im.retryCount = :expectedRetryCount
+			""")
+	int claimForReprocess(
+			@Param("messageId") Long messageId,
+			@Param("expectedStatus") IssueMessageStatus expectedStatus,
+			@Param("expectedRetryCount") int expectedRetryCount
+	);
 }
