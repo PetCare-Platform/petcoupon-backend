@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.event.repository;
 
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -27,4 +29,10 @@ public interface EventRepository extends JpaRepository<Event, Long> {
 			@Param("fromStatus") EventStatus fromStatus,
 			@Param("toStatus") EventStatus toStatus
 	);
+
+	// 오픈 시각(openAt)이 지났는데도 여전히 SCHEDULED인 이벤트 (스케줄러가 OPEN으로 전환할 대상)
+	List<Event> findByStatusAndOpenAtLessThanEqual(EventStatus status, LocalDateTime now);
+
+	// 종료 시각(closeAt)이 지났는데도 여전히 OPEN인 이벤트 (스케줄러가 CLOSED로 전환할 대상)
+	List<Event> findByStatusAndCloseAtLessThanEqual(EventStatus status, LocalDateTime now);
 }
