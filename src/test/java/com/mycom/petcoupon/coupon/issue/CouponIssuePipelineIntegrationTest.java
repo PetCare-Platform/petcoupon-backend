@@ -27,6 +27,7 @@ import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.repository.EventRepository;
+import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
@@ -36,7 +37,10 @@ import com.mycom.petcoupon.user.repository.AppUserRepository;
 @SpringBootTest(properties = { 
 	"coupon.issue.stream.enabled=true", "coupon.issue.outbox.enabled=true",
 	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10",
-	"spring.kafka.consumer.auto-offset-reset=earliest"
+	"spring.kafka.consumer.auto-offset-reset=earliest",
+	
+	// 테스트 수행 중 실행되지 않는 유효한 Cron
+	"event.status.scheduler.cron=0 0 0 1 1 *"
 })
 class CouponIssuePipelineIntegrationTest {
 
@@ -55,6 +59,9 @@ class CouponIssuePipelineIntegrationTest {
 
 	@Autowired
 	private EventRepository eventRepository;
+	
+	@Autowired
+	private EventStatusHistoryRepository eventStatusHistoryRepository;
 
 	@Autowired
 	private CouponRepository couponRepository;
@@ -70,7 +77,7 @@ class CouponIssuePipelineIntegrationTest {
 
 	@Autowired
 	private IssueMessageRepository issueMessageRepository;
-
+	
 	private Long couponId;
 	private Long userId;
 	private String requestId;
@@ -108,13 +115,17 @@ class CouponIssuePipelineIntegrationTest {
 		}
 
 		// FK 역순으로 삭제
-		couponIssueHistoryRepository.deleteAll();
-		couponIssueRepository.deleteAll();
-		issueMessageRepository.deleteAll();
-		couponStockRepository.deleteAll();
-		couponRepository.deleteAll();
-		eventRepository.deleteAll();
-		appUserRepository.deleteAll();
+	    couponIssueHistoryRepository.deleteAll();
+	    couponIssueRepository.deleteAll();
+	    issueMessageRepository.deleteAll();
+	    couponStockRepository.deleteAll();
+	    couponRepository.deleteAll();
+
+	    // event를 참조하는 상태 변경 이력을 먼저 삭제
+	    eventStatusHistoryRepository.deleteAll();
+	    eventRepository.deleteAll();
+
+	    appUserRepository.deleteAll();
 	}
 
 	@Test
