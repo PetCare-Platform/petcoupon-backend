@@ -70,7 +70,6 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .stockIssued(null)
                 .stockRemaining(null)
                 .dbActiveCount(dbActiveCount)
-                .dbCanceledCount(0L) // CANCELED 상태 자체가 없어져서 항상 0
                 .dbExpiredCount(dbExpiredCount)
                 .dbDlqCount(null)
                 .maxSequenceNo(null)
