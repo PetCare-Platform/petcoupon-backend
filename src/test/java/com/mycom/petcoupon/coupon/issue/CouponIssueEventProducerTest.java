@@ -4,11 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -64,9 +66,13 @@ class CouponIssueEventProducerTest {
 		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
-		producer.publish(issueMessage);
+		producer.publish(issueMessage).join();
 
-		verify(issueMessageRepository).updateStatus(1L, IssueMessageStatus.SENT);
+		verify(issueMessageRepository).markSent(
+			eq(1L),
+			eq(IssueMessageStatus.SENT),
+			any(LocalDateTime.class)
+	    );
 	}
 
 	@Test
@@ -81,9 +87,11 @@ class CouponIssueEventProducerTest {
 		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(failed);
 
-		producer.publish(issueMessage);
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
+		
+		assertThat(thrown).isInstanceOf(CompletionException.class);
 
-		verify(issueMessageRepository).updateStatusWithError(eq(1L), eq(IssueMessageStatus.FAILED), any());
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"));
 	}
 
 	@Test
@@ -95,10 +103,11 @@ class CouponIssueEventProducerTest {
 		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenThrow(new RuntimeException("sync failure"));
 
-		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
 
-		assertThat(thrown).isInstanceOf(RuntimeException.class);
-		verify(issueMessageRepository).updateStatusWithError(eq(1L), eq(IssueMessageStatus.FAILED), any());
+		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
+
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("sync failure"));
 	}
 
 	@Test
@@ -108,16 +117,18 @@ class CouponIssueEventProducerTest {
 		when(jsonMapper.readValue("not-json", CouponIssueEvent.class))
 			.thenThrow(new RuntimeException("malformed json"));
 
-		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
 
-		assertThat(thrown).isInstanceOf(RuntimeException.class);
-		verify(issueMessageRepository).updateStatusWithError(eq(1L), eq(IssueMessageStatus.FAILED), any());
-		verify(kafkaTemplate, org.mockito.Mockito.never())
+		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
+		
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("malformed json"));
+		
+		verify(kafkaTemplate, never())
 			.send(any(String.class), any(), any());
 	}
 
 	@Test
-	void 발행_성공_콜백에서_상태갱신_자체가_실패해도_예외가_밖으로_새지_않는다() {
+	void 발행_성공_후_상태_갱신이_실패하면_Future가_실패한다() {
 		when(issueMessage.getMessageId()).thenReturn(1L);
 		when(issueMessage.getPayload()).thenReturn("{}");
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
@@ -125,11 +136,15 @@ class CouponIssueEventProducerTest {
 		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
 			.thenReturn(CompletableFuture.completedFuture(null));
 
-		when(issueMessageRepository.updateStatus(1L, IssueMessageStatus.SENT))
+		when(issueMessageRepository.markSent(eq(1L), eq(IssueMessageStatus.SENT), any(LocalDateTime.class)))
 			.thenThrow(new RuntimeException("db down"));
 
-		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage));
+		Throwable thrown = catchThrowable(() -> producer.publish(issueMessage).join());
 
-		assertThat(thrown).isNull();
+		assertThat(thrown)
+			.isInstanceOf(CompletionException.class)
+	        .hasCauseInstanceOf(RuntimeException.class);
+		
+		verify(issueMessageRepository).markSent(eq(1L), eq(IssueMessageStatus.SENT), any(LocalDateTime.class));
 	}
 }
