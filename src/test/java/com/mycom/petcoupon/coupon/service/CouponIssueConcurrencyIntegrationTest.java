@@ -45,7 +45,10 @@ import jakarta.persistence.PersistenceContext;
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+	// 테스트 수행 중 실행되지 않는 유효한 Cron — event.status.scheduler와의 경합 자체를 차단
+	"event.status.scheduler.cron=0 0 0 1 1 *"
+})
 class CouponIssueConcurrencyIntegrationTest {
 
 	@PersistenceContext
