@@ -11,10 +11,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
-import com.mycom.petcoupon.event.dto.req.EventDescriptionUpdateRequest;
-import com.mycom.petcoupon.event.dto.req.EventNameUpdateRequest;
-import com.mycom.petcoupon.event.dto.req.EventPeriodUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
+import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
@@ -55,32 +53,12 @@ public class AdminEventController {
 		return CustomResponse.onSuccess(response);
 	}
 
-	@PatchMapping("/{eventId}/name")
-	public CustomResponse<EventUpdateResponse> updateEventName(
+	@PatchMapping("/{eventId}")
+	public CustomResponse<EventUpdateResponse> updateEvent(
 			@PathVariable("eventId") Long eventId,
-			@Valid @RequestBody EventNameUpdateRequest request
+			@Valid @RequestBody EventUpdateRequest request
 	) {
-		EventUpdateResponse response = eventService.updateEventName(eventId, request);
-
-		return CustomResponse.onSuccess(response);
-	}
-
-	@PatchMapping("/{eventId}/period")
-	public CustomResponse<EventUpdateResponse> updateEventPeriod(
-			@PathVariable("eventId") Long eventId,
-			@Valid @RequestBody EventPeriodUpdateRequest request
-	) {
-		EventUpdateResponse response = eventService.updateEventPeriod(eventId, request);
-
-		return CustomResponse.onSuccess(response);
-	}
-
-	@PatchMapping("/{eventId}/description")
-	public CustomResponse<EventUpdateResponse> updateEventDescription(
-			@PathVariable("eventId") Long eventId,
-			@Valid @RequestBody EventDescriptionUpdateRequest request
-	) {
-		EventUpdateResponse response = eventService.updateEventDescription(eventId, request);
+		EventUpdateResponse response = eventService.updateEvent(eventId, request);
 
 		return CustomResponse.onSuccess(response);
 	}
