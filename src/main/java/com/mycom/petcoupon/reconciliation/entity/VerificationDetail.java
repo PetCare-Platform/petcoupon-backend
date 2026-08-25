@@ -20,6 +20,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -59,6 +60,25 @@ public class VerificationDetail {
 	private String message; 
 	
 	@CreatedDate
-	@Column(name = "created_at", nullable = false, updatable = false) 
+	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
+
+	public void assignReport(ReconciliationReport report) {
+	    this.report = report;
+	    report.getVerificationDetails().add(this);
+	}
+	
+	@Builder
+	private VerificationDetail(
+			ReconciliationReport report, VerificationErrorType errorType,
+			Long couponIssueId, Long userId, String expectedValue, String actualValue, String message
+	) {
+		this.report = report;
+		this.errorType = errorType;
+		this.couponIssueId = couponIssueId;
+		this.userId = userId;
+		this.expectedValue = expectedValue;
+		this.actualValue = actualValue;
+		this.message = message;
+	}
 }
