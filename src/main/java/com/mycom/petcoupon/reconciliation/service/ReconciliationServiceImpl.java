@@ -88,14 +88,14 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         List<Tuple> rows = entityManager.createNativeQuery("""
                 SELECT ci.coupon_issue_id, ci.user_id, ci.status, h.to_status
                   FROM coupon_issue ci
-                  JOIN coupon_issue_history h
+                  LEFT JOIN coupon_issue_history h
                     ON h.history_id = (
                          SELECT MAX(h2.history_id)
                            FROM coupon_issue_history h2
                           WHERE h2.coupon_issue_id = ci.coupon_issue_id
                        )
                  WHERE ci.coupon_id = :couponId
-                   AND ci.status <> h.to_status
+                   AND (h.to_status IS NULL OR ci.status <> h.to_status)
                 """, Tuple.class)
                 .setParameter("couponId", couponId)
                 .getResultList();
@@ -105,9 +105,9 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                         .errorType(VerificationErrorType.HISTORY_MISMATCH)
                         .couponIssueId(((Number) row.get(0)).longValue())
                         .userId(((Number) row.get(1)).longValue())
-                        .expectedValue(row.get(3).toString())
+                        .expectedValue(row.get(3) == null ? "이력 없음" : row.get(3).toString())
                         .actualValue(row.get(2).toString())
-                        .message("현재 상태와 최종 이력의 to_status가 다릅니다")
+                        .message(row.get(3) == null ? "발급 이력이 없습니다" : "현재 상태와 최종 이력의 to_status가 다릅니다")
                         .build())
                 .toList();
     }

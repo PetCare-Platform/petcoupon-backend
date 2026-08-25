@@ -101,6 +101,19 @@ class ReconciliationServiceImplTest {
     }
 
     @Test
+    void 발급_이력이_아예_없으면_HISTORY_MISMATCH를_탐지한다() {
+        createIssueWithoutHistory(IssueStatus.ISSUED, "NO-HISTORY-1");
+
+        reconciliationService.reconcile(coupon.getCouponId());
+
+        ReconciliationReport report = latestReport();
+        assertThat(report.getResult()).isEqualTo(ReconciliationResult.MISMATCHED);
+        assertThat(report.getVerificationDetails())
+                .anyMatch(d -> d.getErrorType() == VerificationErrorType.HISTORY_MISMATCH
+                        && "이력 없음".equals(d.getExpectedValue()));
+    }
+
+    @Test
     void 허용되지_않은_상태_전이_이력이면_INVALID_STATUS를_탐지한다() {
         CouponIssue issue = createIssueWithHistory(IssueStatus.EXPIRED, "INVALID-1", "NONE", "ISSUED");
         // 화이트리스트에 없는 전이(EXPIRED -> USED)를 추가로 남김
@@ -122,6 +135,12 @@ class ReconciliationServiceImplTest {
     }
 
     private CouponIssue createIssueWithHistory(IssueStatus status, String couponCode, String from, String to) {
+        CouponIssue issue = createIssueWithoutHistory(status, couponCode);
+        insertHistory(issue, from, to);
+        return issue;
+    }
+
+    private CouponIssue createIssueWithoutHistory(IssueStatus status, String couponCode) {
         AppUser user = AppUser.builder()
                 .name("유저-" + couponCode).email(couponCode + "@test.com").phone("010-1111-1111")
                 .role(UserRole.ROLE_MEMBER).build();
@@ -136,8 +155,6 @@ class ReconciliationServiceImplTest {
                 .build();
         entityManager.persist(issue);
         entityManager.flush();
-
-        insertHistory(issue, from, to);
         return issue;
     }
 
