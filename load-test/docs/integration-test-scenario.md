@@ -314,5 +314,5 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 | 발급 이력 300만 더미데이터 | 미작성 | TC-81 ~ TC-83 |
 | **요청 도착 로그** | **미구현** — 신청 API 경로에 로그가 없어 도착 순서를 확인할 수 없다 | TC-90 ~ TC-92 |
 | 발급 요청 큐 배치 확정 (Redis Stream 위치) | 미결정 | TC-07 응답 형태(202 WAITING vs 즉시 품절 판정)가 여기서 갈림 |
-| 정합성 검증 2단계 (STOCK_MISMATCH·DUPLICATE_CONSUME·SEQUENCE_GAP·STOCK_NOT_RESTORED) | 미구현 | TC-62 ~ TC-65 |
+| 정합성 검증 2단계<br>- STOCK_MISMATCH<br>- DUPLICATE_CONSUME<br>- SEQUENCE_GAP<br>- STOCK_NOT_RESTORED | 미구현 | TC-62 ~ TC-65 |
 | 정합성 검증 배치 트리거 (스케줄러/관리자 API) | 미구현 | TC-66 |
