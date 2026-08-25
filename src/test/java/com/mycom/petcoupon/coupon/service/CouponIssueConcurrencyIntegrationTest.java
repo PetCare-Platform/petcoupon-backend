@@ -144,6 +144,9 @@ class CouponIssueConcurrencyIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
 				.setParameter("couponId", coupon.getCouponId())
 				.executeUpdate();
+		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
+				.setParameter("eventId", event.getEventId())
+				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
 				.setParameter("eventId", event.getEventId())
 				.executeUpdate();
