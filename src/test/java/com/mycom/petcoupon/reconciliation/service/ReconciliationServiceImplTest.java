@@ -99,7 +99,6 @@ class ReconciliationServiceImplTest {
 
         ReconciliationReport report = latestReport();
         assertThat(report.getDbActiveCount()).isEqualTo(3L); // ISSUED 2건 + USED 1건
-        assertThat(report.getDbCanceledCount()).isEqualTo(0L);
         assertThat(report.getDbExpiredCount()).isEqualTo(1L);
         assertThat(report.getDbDlqCount()).isNull();
         assertThat(report.getStockTotal()).isNull();

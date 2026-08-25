@@ -166,7 +166,6 @@ class CouponIssueQueryServiceImplTest {
                 .status("ISSUED")
                 .issuedAt(couponIssue.getCreatedAt())
                 .usedAt(couponIssue.getUsedAt())
-                .canceledAt(couponIssue.getCanceledAt())
                 .expiresAt(couponIssue.getExpiresAt())
                 .build();
 

@@ -56,7 +56,6 @@ public class ReconciliationServiceImpl implements ReconciliationService {
 
         Map<String, Long> statusCounts = countByStatus(couponId);
         long dbActiveCount = statusCounts.getOrDefault("ISSUED", 0L) + statusCounts.getOrDefault("USED", 0L);
-        long dbCanceledCount = statusCounts.getOrDefault("CANCELED", 0L);
         long dbExpiredCount = statusCounts.getOrDefault("EXPIRED", 0L);
 
         ReconciliationReport report = ReconciliationReport.builder()
@@ -71,7 +70,6 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .stockIssued(null)
                 .stockRemaining(null)
                 .dbActiveCount(dbActiveCount)
-                .dbCanceledCount(dbCanceledCount)
                 .dbExpiredCount(dbExpiredCount)
                 .dbDlqCount(null)
                 .maxSequenceNo(null)
@@ -142,7 +140,6 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                    AND NOT (
                        (h.from_status = 'NONE'   AND h.to_status = 'ISSUED')  OR
                        (h.from_status = 'ISSUED' AND h.to_status = 'USED')    OR
-                       (h.from_status = 'ISSUED' AND h.to_status = 'CANCELED') OR
                        (h.from_status = 'ISSUED' AND h.to_status = 'EXPIRED') OR
                        (h.from_status = 'USED'   AND h.to_status = 'ISSUED')
                    )

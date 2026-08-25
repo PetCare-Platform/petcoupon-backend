@@ -13,7 +13,6 @@ public record CouponIssueRequestResponse(
     String status,
     LocalDateTime issuedAt,
     LocalDateTime usedAt,
-    LocalDateTime canceledAt,
     LocalDateTime expiresAt
 ) {
 }
