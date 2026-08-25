@@ -81,9 +81,6 @@ public class ReconciliationReport {
 	@Column(name = "db_active_count", nullable = false)
 	private long dbActiveCount;
 
-	@Column(name = "db_canceled_count", nullable = false)
-	private long dbCanceledCount;
-
 	@Column(name = "db_expired_count", nullable = false)
 	private long dbExpiredCount;
 
@@ -112,7 +109,7 @@ public class ReconciliationReport {
 			Coupon coupon, LocalDateTime asOfAt, LocalDateTime startedAt, LocalDateTime finishedAt,
 			long totalCount, long successCount, long errorCount,
 			Integer stockTotal, Integer stockIssued, Integer stockRemaining,
-			long dbActiveCount, long dbCanceledCount, long dbExpiredCount, Long dbDlqCount,
+			long dbActiveCount, long dbExpiredCount, Long dbDlqCount,
 			Long maxSequenceNo, Integer redisRemaining, ReconciliationResult result
 	) {
 		this.coupon = coupon;
@@ -126,7 +123,6 @@ public class ReconciliationReport {
 		this.stockIssued = stockIssued;
 		this.stockRemaining = stockRemaining;
 		this.dbActiveCount = dbActiveCount;
-		this.dbCanceledCount = dbCanceledCount;
 		this.dbExpiredCount = dbExpiredCount;
 		this.dbDlqCount = dbDlqCount;
 		this.maxSequenceNo = maxSequenceNo;

@@ -291,11 +291,11 @@ class InternalCouponResetServiceImplTest {
 						       (coupon_id, as_of_at, started_at, finished_at,
 						        total_count, success_count, error_count, result,
 						        stock_total, stock_issued, stock_remaining,
-						        db_active_count, db_canceled_count, db_expired_count, db_dlq_count)
+						        db_active_count, db_expired_count, db_dlq_count)
 						VALUES (:couponId, NOW(6), NOW(6), NOW(6),
 						        10, 10, 0, 'MATCHED',
 						        100, 10, 90,
-						        10, 0, 0, 0)
+						        10, 0, 0)
 						""")
 				.setParameter("couponId", coupon.getCouponId())
 				.executeUpdate();

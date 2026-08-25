@@ -56,7 +56,6 @@ public class CouponIssueConverter {
                 .status(couponIssue.getStatus().name())
                 .issuedAt(couponIssue.getCreatedAt())
                 .usedAt(couponIssue.getUsedAt())
-                .canceledAt(couponIssue.getCanceledAt())
                 .expiresAt(couponIssue.getExpiresAt())
                 .build();
     }

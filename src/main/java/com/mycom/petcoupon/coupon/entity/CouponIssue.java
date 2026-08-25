@@ -71,18 +71,15 @@ public class CouponIssue extends BaseEntity {
 	@Column(nullable = false, length = 20) 
 	private IssueStatus status = IssueStatus.ISSUED;
 	
-	@Column(name = "used_at") 
-	private LocalDateTime usedAt; 
-	
-	@Column(name = "canceled_at") 
-	private LocalDateTime canceledAt;
-	
-	@Column(name = "expires_at", nullable = false) 
-	private LocalDateTime expiresAt; 
-	
+	@Column(name = "used_at")
+	private LocalDateTime usedAt;
+
+	@Column(name = "expires_at", nullable = false)
+	private LocalDateTime expiresAt;
+
 	@Builder
 	private CouponIssue(Coupon coupon, AppUser user, long sequenceNo, String couponCode,
-			String requestId, IssueStatus status, LocalDateTime usedAt, LocalDateTime canceledAt,
+			String requestId, IssueStatus status, LocalDateTime usedAt,
 			LocalDateTime expiresAt) {
 		this.coupon = coupon;
 		this.user = user;
@@ -91,7 +88,6 @@ public class CouponIssue extends BaseEntity {
 		this.requestId = requestId;
 		this.status = status == null ? IssueStatus.ISSUED : status;
 		this.usedAt = usedAt;
-		this.canceledAt = canceledAt;
 		this.expiresAt = expiresAt;
 	}
 }
