@@ -82,3 +82,29 @@ export const RUN_ID = __ENV.RUN_ID || 'local';
 // setup 에서 초기화 API 를 호출할지.
 // 이미 초기화한 상태에서 여러 대로 나눠 쏠 때는 1번 기기만 true 로 둔다.
 export const RESET = bool('RESET', true);
+
+// 값을 안 주면 null. 부하 측정에는 쓰지 않고 통합 테스트 전용 모드를 켜는 스위치라,
+// "기본값"이 아니라 "꺼짐"이 필요하기 때문에 num()/bool() 과 다르게 처리한다.
+function optionalNum(name) {
+	const raw = __ENV[name];
+	if (raw === undefined || raw === '') {
+		return null;
+	}
+	return num(name, null);
+}
+
+// ---------------------------------------------------------------------
+// 통합 테스트 C 구간 전용 모드 (TC-42 · TC-43)
+//
+// 부하 측정은 "요청마다 다른 회원 · 다른 멱등키"가 전제다. 아래 두 값은 그 전제를
+// 일부러 깨서 중복 요청 처리를 검증하는 용도이므로, 부하 측정에서는 절대 주지 않는다.
+// ---------------------------------------------------------------------
+
+// TC-42: 같은 사용자가 동시에 여러 번 신청. 모든 요청이 이 회원으로 나간다.
+// 기대 결과는 발급 1건뿐이고 나머지는 Lua 판정에서 ALREADY_APPLIED 로 걸러진다.
+export const FIXED_USER_ID = optionalNum('FIXED_USER_ID');
+
+// TC-43: 동일 멱등키 재전송. 모든 요청이 이 키를 쓴다.
+// 기대 결과는 발급 1건 · 재고 1 차감이며, 두 번째부터는 처리중(409-5)이거나
+// 최초 응답이 그대로 재현된다(202).
+export const FIXED_IDEMPOTENCY_KEY = __ENV.FIXED_IDEMPOTENCY_KEY || null;

@@ -9,8 +9,9 @@ load-test/
 │   ├── issue-coupon.js    발급 API 부하 스크립트
 │   └── members.csv        회원 ID 목록 (DB 에서 만들어 씀, 커밋하지 않음)
 └── sql/
-    ├── seed_users.sql            더미 회원 100만 명 생성
-    └── verify_issue_result.sql   부하 종료 후 정합성 검증
+    ├── seed_users.sql              더미 회원 100만 명 생성
+    ├── verify_issue_result.sql     부하 종료 후 정합성 검증
+    └── verify_order_inversion.sql  선착순 순서 역전율 (TC-91 · TC-93)
 ```
 
 ---
@@ -127,6 +128,10 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | `RESET` | `true` | `setup`에서 초기화 API 호출 여부 |
 | `INSTANCE_INDEX` | `0` | k6를 여러 대로 돌릴 때 기기 번호 |
 | `INSTANCE_STRIDE` | `100000` | 기기별 회원 구간 폭. **회원 목록 크기에 맞춰 줄여야 합니다** |
+| `FIXED_USER_ID` | 없음 | **통합 테스트 전용.** 모든 요청을 이 회원으로 보냅니다 (TC-42) |
+| `FIXED_IDEMPOTENCY_KEY` | 없음 | **통합 테스트 전용.** 모든 요청이 이 멱등키를 씁니다 (TC-43) |
+
+> 마지막 두 개는 **부하 측정에서는 절대 주지 마세요.** 부하 측정은 "요청마다 다른 회원·다른 멱등키"가 전제인데, 이 값들은 그 전제를 일부러 깨서 중복 요청 처리를 검증하는 용도입니다.
 
 ---
 
@@ -278,6 +283,104 @@ docker exec petcoupon-redis redis-cli XGROUP CREATE coupon:issue:stream coupon-i
 `MKSTREAM` 없이 실행하면 키가 없다며 실패합니다. 그룹을 다시 만들지 않으면 다음 신청부터 Consumer가 `NOGROUP`으로 멈춥니다.
 
 > `issue_message` 테이블로는 이 확인(Redis Stream에 남은 미배달분)을 대신할 수 없습니다. Outbox에 행이 생기는 건 Stream Consumer가 판정을 끝낸 뒤라, 아직 Stream에 남아 있는 요청은 이 테이블에 아예 나타나지 않습니다.
+
+---
+
+## 통합 테스트 C·G 구간 실행
+
+`load-test/docs/integration-test-scenario.md`의 C 구간(경계·동시성)과 G 구간(선착순 순서 보장)을 이 스크립트로 실행합니다. 부하 측정과 달리 **규모가 작고 재고를 일부러 부족하게 잡습니다.**
+
+### 공통 준비
+
+> ⚠️ **TC-41·TC-91·TC-94는 앱을 부하 테스트 설정으로 띄워야 합니다.** 동시 150~200건이라 기본 커넥션 풀(10)로는 감당이 안 됩니다. 실측에서 기본 설정으로 TC-41을 돌렸더니 **200건 중 191건이 500**이었고 응답이 평균 30초였습니다. 커넥션 대기 타임아웃입니다.
+>
+> ```bash
+> DB_POOL_SIZE=100 TOMCAT_MAX_THREADS=400 ./gradlew bootRun
+> ```
+>
+> TC-40·42·43·90은 동시 5건 이하라 기본 설정으로 됩니다.
+
+대상 쿠폰에 **`coupon_stock` 행이 있어야 합니다.** 없으면 초기화 API가 `COUPON404-0`으로 거절합니다(쿠폰 행만 있는 것으로는 부족합니다). 준비 방법은 위 "5. 대상 쿠폰 준비" 참고.
+
+회원 목록이 필요합니다. 요청 수보다 많으면 되므로 200명이면 충분합니다.
+
+```bash
+docker exec petcoupon-mysql mysql -uroot -proot petcoupon --batch --skip-column-names -e "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id LIMIT 200" > load-test/k6/members.csv
+```
+
+각 TC는 **직전 TC의 데이터가 남아 있으면 안 됩니다.** 아래 명령은 모두 `RESET=true`(기본값)라 실행할 때마다 초기화됩니다. `RUN_ID`도 TC마다 다르게 주세요.
+
+### TC별 실행 명령
+
+모두 `load-test/k6` 디렉터리에서 실행합니다.
+
+| TC | 시나리오 | 명령 | 확인 |
+|---|---|---|---|
+| TC-40 | 재고 1, 동시 2명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=2 -e TOTAL_QUANTITY=1 -e RUN_ID=tc40` | SQL 1번 = 1건 |
+| TC-41 | 재고 100, 동시 200명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=200 -e TOTAL_QUANTITY=100 -e RUN_ID=tc41` | SQL 1번 = **정확히 100건**, 12번 잔여 0 |
+| TC-42 | 같은 회원 동시 5회 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=5 -e TOTAL_QUANTITY=100 -e FIXED_USER_ID=<회원ID> -e RUN_ID=tc42` | SQL 1번 = 1건, 2번 PASS |
+| TC-43 | 동일 멱등키 재전송 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=3 -e TOTAL_QUANTITY=100 -e FIXED_USER_ID=<회원ID> -e FIXED_IDEMPOTENCY_KEY=tc43-key -e RUN_ID=tc43` | 발급 1건, 재고 1 차감 |
+| TC-44 | 재고 0, 동시 50명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=50 -e TOTAL_QUANTITY=1 -e RUN_ID=tc44a` 로 소진시킨 뒤 `-e RESET=false -e RUN_ID=tc44b` 로 재실행 | 발급 증가 없음, 재고 음수 아님 |
+| TC-90 | 순차 100건 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=1 -e ITERATIONS_PER_VU=100 -e TOTAL_QUANTITY=100 -e RUN_ID=tc90` | 도착 순서와 `sequence_no` 완전 일치 |
+| TC-91 | 동시 200건 순서 역전율 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=200 -e TOTAL_QUANTITY=100 -e RUN_ID=tc91` | 로그 도착 시각 ↔ `sequence_no` 대조 |
+| TC-93 | 저장 순서 역전 확인 | TC-91 직후 SQL 조회만 | `created_at` 순서 ≠ `sequence_no` 순서여도 정상. SQL 3·4번은 PASS |
+| TC-94 | 재고 100, 요청 150 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=150 -e TOTAL_QUANTITY=100 -e RUN_ID=tc94` | SQL 1번 = 100건, 4번 순번 1..100 |
+
+> **TC-45·TC-46**은 `CouponIssueConcurrencyIntegrationTest`(#59)에서 이미 검증돼 k6 대상이 아닙니다.
+> **TC-92**는 부하가 아니라 로그 조회라 k6를 쓰지 않습니다.
+
+### TC-42·TC-43은 k6 요약만으로 판정하지 마세요
+
+발급 API는 비동기라 **중복 신청도 일단 202로 접수됩니다.** 탈락 판정은 그 뒤 Lua가 합니다.
+
+- **TC-42**: k6에는 5건 모두 202로 찍힙니다. 실제로 1건만 발급됐는지는 SQL 1번으로 봅니다.
+- **TC-43**: 서버가 최초 응답을 그대로 재현하면 202, 아직 처리 중이면 409(`COUPON409-5`)입니다. **둘 중 뭐가 나올지는 타이밍에 달렸습니다.** 그래서 이 모드에서는 `issue_accept_rate`와 `issue_conflict` 임계값이 자동으로 해제됩니다. 판정은 발급 건수로만 합니다.
+
+> ⚠️ **`FIXED_IDEMPOTENCY_KEY`는 `FIXED_USER_ID`와 반드시 같이 주세요.** 멱등키 유니크 제약이 `(user_id, idempotency_key)`라서, 키만 고정하고 회원이 다르면 서버가 서로 다른 요청으로 보고 **전건을 발급합니다.** 실제로 회원 없이 3건을 쐈더니 발급이 3건 나왔습니다. 지금은 둘 중 하나만 주면 `setup()`에서 중단됩니다.
+
+### 확인된 것 (로컬, 2026-08-27)
+
+아래 명령을 실제로 돌려 나온 결과입니다. 앱은 `DB_POOL_SIZE=100 TOMCAT_MAX_THREADS=400`으로 띄웠습니다.
+
+| TC | 조건 | 발급 | 순번 | 회원 | 잔여 |
+|---|---|---|---|---|---|
+| TC-40 | 재고 1, 동시 2 | 1 | 1..1 | 1 | 0 |
+| TC-41 | 재고 100, 동시 200 | **100** | 1..100 | 100 | 0 |
+| TC-42 | 같은 회원 동시 5 | **1** | — | 1 | — |
+| TC-43 | 같은 회원+같은 키 3 | **1** | — | 1 | 99 |
+| TC-90 | 재고 100, 순차 100 | 100 | 1..100 | 100 | 0 |
+| TC-94 | 재고 100, 요청 150 | **100** | 1..100 | 100 | 0 |
+
+**초과 발급 0건, 순번 빠짐·중복 0건.** TC-42는 멱등키가 `SUCCEEDED 1 / FAILED 4`로 갈렸습니다.
+
+TC-41 기준 접수 처리량은 초당 약 67건이었고 500은 0건이었습니다.
+
+### TC-91 · TC-93 순서 역전율 측정
+
+부하를 쏜 뒤 아래 SQL을 돌리면 역전 건수와 비율이 나옵니다.
+
+```bash
+docker cp load-test/sql/verify_order_inversion.sql petcoupon-mysql:/tmp/
+docker exec petcoupon-mysql mysql -uroot -proot --default-character-set=utf8mb4 petcoupon -e "source /tmp/verify_order_inversion.sql"
+```
+
+**로그를 볼 필요가 없습니다.** 시나리오 문서는 "서버 도착 로그"라고 적고 있지만 컨트롤러에는 진입 로그가 없습니다. 대신 `request_id`가 그 역할을 합니다 — `issue:{idempotency_id}` 형식인데, 이 번호는 컨트롤러가 `begin()`으로 행을 만들 때 받는 `AUTO_INCREMENT`라 **서버가 요청을 받아들인 순서 그 자체**입니다.
+
+실측 예시 (재고 100, 동시 200건):
+
+```
+발급 건수          100
+비교 쌍            4950
+역전 쌍            1023
+역전율(%)          20.67
+순번 1..N 무결성   PASS
+```
+
+> **역전율은 판정 대상이 아닙니다.** 동시 요청은 도착 순서 자체가 확정적이지 않아 기준값이 없습니다(시나리오 문서 G 구간). 기록만 하면 됩니다.
+>
+> **반드시 지켜져야 하는 건 `순번 1..N 무결성` 하나입니다.** Lua가 순번을 내줬는데 DB에 반영되지 않은 건이 있으면 여기서 FAIL이 납니다.
+
+TC-93(저장 순서 역전)은 같은 데이터로 확인합니다. `created_at` 순서가 `sequence_no`와 달라도 정상이며, 비동기 구조에서 당연한 결과입니다.
 
 ---
 

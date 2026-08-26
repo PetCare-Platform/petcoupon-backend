@@ -128,26 +128,36 @@ if (!scenario) {
 	);
 }
 
+const thresholds = {
+	// 404 는 쿠폰 ID 나 회원 목록이 잘못된 것 — 측정이 아니라 설정 문제다.
+	issue_not_found: ['count==0'],
+	issue_bad_request: ['count==0'],
+	issue_server_error: ['count==0'],
+	issue_request_error: ['count==0'],
+	// VU가 부족해 목표 RATE를 못 맞추면 성공으로 오독하지 않고 테스트를 실패시킨다.
+	dropped_iterations: ['count==0'],
+	// check() 는 요약에만 찍히고 종료 코드에 반영되지 않는다. 임계값을 걸어야
+	// 응답 계약이 깨졌을 때 k6 가 실패로 끝난다. 접수 성공률과 달리 한 건도 허용하지 않는다.
+	// 접수(202)된 응답만 세므로 409 가 섞여도 이 지표는 흔들리지 않는다.
+	issue_contract_ok: ['rate==1'],
+	'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
+};
+
+// TC-43(동일 멱등키 재전송)에서는 409 와 비-202 가 기대 결과다.
+//   두 번째 요청부터 서버는 "처리 중"(COUPON409-5)을 주거나 최초 응답을 그대로 재현한다.
+// 그래서 아래 두 임계값을 그대로 두면 성공 시나리오가 실패로 판정된다.
+// 대신 발급이 1건인지는 k6 가 아니라 verify_issue_result.sql 1번 항목으로 확인한다.
+if (cfg.FIXED_IDEMPOTENCY_KEY === null) {
+	// 접수 자체가 실패하면 그 뒤 정합성 검증이 의미가 없다.
+	thresholds.issue_accept_rate = ['rate>0.99'];
+	// 409 는 멱등키가 겹쳤다는 뜻이다. 요청마다 고유한 키를 만드는 이상 나올 수 없고,
+	// 나왔다면 키 생성 규칙이 깨진 것이라 그 회차 측정은 믿을 수 없다.
+	thresholds.issue_conflict = ['count==0'];
+}
+
 export const options = {
 	scenarios: { [cfg.SCENARIO]: scenario },
-	thresholds: {
-		// 접수 자체가 실패하면 그 뒤 정합성 검증이 의미가 없다.
-		issue_accept_rate: ['rate>0.99'],
-		// 404 는 쿠폰 ID 나 회원 목록이 잘못된 것 — 측정이 아니라 설정 문제다.
-		issue_not_found: ['count==0'],
-		issue_bad_request: ['count==0'],
-		issue_server_error: ['count==0'],
-		issue_request_error: ['count==0'],
-		// 409 는 멱등키가 겹쳤다는 뜻이다. 요청마다 고유한 키를 만드는 이상 나올 수 없고,
-		// 나왔다면 키 생성 규칙이 깨진 것이라 그 회차 측정은 믿을 수 없다.
-		issue_conflict: ['count==0'],
-		// VU가 부족해 목표 RATE를 못 맞추면 성공으로 오독하지 않고 테스트를 실패시킨다.
-		dropped_iterations: ['count==0'],
-		// check() 는 요약에만 찍히고 종료 코드에 반영되지 않는다. 임계값을 걸어야
-		// 응답 계약이 깨졌을 때 k6 가 실패로 끝난다. 접수 성공률과 달리 한 건도 허용하지 않는다.
-		issue_contract_ok: ['rate==1'],
-		'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
-	},
+	thresholds: thresholds,
 };
 
 export function setup() {
@@ -159,10 +169,33 @@ export function setup() {
 		);
 	}
 
+	// 멱등키 유니크 제약은 (user_id, idempotency_key) 다. 키만 고정하고 회원이 제각각이면
+	// 서버는 서로 다른 요청으로 보고 전건을 발급한다 — 실측으로 확인했다(키 고정 3건 → 발급 3건,
+	// idempotency_key 에 같은 키가 3행). TC-43 은 "같은 요청의 재전송"이므로 회원도 같아야 한다.
+	// 그냥 두면 통과한 것처럼 보이는 잘못된 결과가 나오므로 여기서 막는다.
+	if (cfg.FIXED_IDEMPOTENCY_KEY !== null && cfg.FIXED_USER_ID === null) {
+		throw new Error(
+			'FIXED_IDEMPOTENCY_KEY 는 FIXED_USER_ID 와 함께 줘야 합니다.\n' +
+				'멱등키는 (user_id, idempotency_key) 로만 유니크해서, 회원이 다르면 같은 키를 써도\n' +
+				'서로 다른 요청으로 처리돼 전건이 발급됩니다. 재전송 검증이 되지 않습니다.\n' +
+				'예: -e FIXED_USER_ID=878 -e FIXED_IDEMPOTENCY_KEY=tc43-key',
+		);
+	}
+
 	// 시나리오마다 보낼 요청 수. rate 는 초당 요청 수 × 지속 시간으로 계산한다.
 	const requiredMembers = cfg.SCENARIO === 'rate'
 		? cfg.RATE * durationToSeconds(cfg.DURATION)
 		: scenario.vus * scenario.iterations;
+
+	// TC-42 는 "같은 회원이 동시에 여러 번 신청하면 1건만 발급되는가" 를 보는 시나리오라,
+	// 회원 재사용이 결함이 아니라 검증 대상 그 자체다. 아래 두 검사는 회원을 돌려쓰는 걸
+	// 막으려고 둔 것이므로 이 모드에서는 건너뛴다. 그대로 두면 시나리오를 실행할 수 없다.
+	if (cfg.FIXED_USER_ID !== null) {
+		console.log(
+			'[TC-42 모드] 모든 요청을 userId=' + cfg.FIXED_USER_ID + ' 로 보냅니다. ' +
+				'회원 수 검사를 건너뜁니다 — 발급은 1건만 나와야 정상입니다.',
+		);
+	} else {
 
 	// 인스턴스별 오프셋은 INSTANCE_STRIDE 단위로 나뉘므로, 한 인스턴스가 그보다 많은 회원을
 	// 사용하면 다음 인스턴스의 구간과 겹친다. 같은 회원이 재사용되면 1인 1매 제약으로
@@ -187,9 +220,14 @@ export function setup() {
 		);
 	}
 
+	}
+
 	// 서버가 Idempotency-Key 를 64자로 제한한다. 넘으면 400 인데, 부하 중에 전건 400 이 뜨면
 	// 원인을 찾느라 회차를 통째로 버리게 된다. 가장 긴 키를 미리 만들어 여기서 막는다.
-	const longestKey = buildIdempotencyKey(offset + Math.max(requiredMembers, 1) - 1);
+	// 고정 키 모드(TC-43)에서는 그 키 자체가 유일하게 쓰이는 키다.
+	const longestKey = cfg.FIXED_IDEMPOTENCY_KEY !== null
+		? cfg.FIXED_IDEMPOTENCY_KEY
+		: buildIdempotencyKey(offset + Math.max(requiredMembers, 1) - 1);
 	if (longestKey.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
 		throw new Error(
 			'Idempotency-Key 가 서버 제한(' + IDEMPOTENCY_KEY_MAX_LENGTH + '자)을 넘습니다. ' +
@@ -267,12 +305,20 @@ export default function () {
 	// 여기까지 왔다면 목록을 넘어서는 일은 없다. % 는 그 검사가 뚫렸을 때 배열 밖 접근으로
 	// undefined 를 보내는 대신 조용히 앞으로 돌아오게 하는 안전망일 뿐, 회원 재사용은 의도가 아니다.
 	// 회원을 돌려쓰면 1인 1매에 걸려 발급 경로를 타지 않고, 그만큼 처리량이 실제보다 높게 나온다.
-	const userId = MEMBERS[index % MEMBERS.length];
+	//
+	// FIXED_USER_ID 가 있으면 그 회원으로만 보낸다(TC-42) — 재사용이 곧 검증 대상이다.
+	const userId = cfg.FIXED_USER_ID !== null
+		? cfg.FIXED_USER_ID
+		: MEMBERS[index % MEMBERS.length];
 
 	// Idempotency-Key 는 (user_id, idempotency_key) 로만 유니크하지만,
 	// 회차가 겹쳐 재현 응답이 나오는 사고를 막으려고 요청마다 전역 유일하게 만든다.
 	// 64자 제한은 setup 에서 이미 검사했다.
-	const idempotencyKey = buildIdempotencyKey(index);
+	//
+	// FIXED_IDEMPOTENCY_KEY 가 있으면 모든 요청이 같은 키를 쓴다(TC-43) — 재전송 검증용이다.
+	const idempotencyKey = cfg.FIXED_IDEMPOTENCY_KEY !== null
+		? cfg.FIXED_IDEMPOTENCY_KEY
+		: buildIdempotencyKey(index);
 
 	const res = http.post(
 		cfg.BASE_URL + '/coupons/' + cfg.COUPON_ID + '/issues',
