@@ -119,6 +119,18 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 *
 	 * <p>실제 잔여 판단 기준(어떤 상태를 왜 막는지)은 {@link CouponIssuePipelineDrainChecker} 참고.
 	 * 여기서는 그 결과(검사 실패 포함)를 받아 무조건 거절만 한다 — 강행이 필요하면 {@code force} 로 넘긴다.
+	 *
+	 * <p><b>알려진 한계 — 체크와 리셋 사이에 락이 없다.</b> 여기서 드레인 여부를 확인한 시점과
+	 * 실제 DELETE 가 실행되는 시점 사이에는 아무 락도 없다. 그 사이에 새 발급 요청이 들어오면
+	 * 지워지는 중인(또는 막 지워진) 데이터에 반영되거나, 리셋 직후의 새 회차 재고를 이전 요청이
+	 * 갉아먹을 수 있다. 완전히 막으려면 발급 API({@code CouponController.issue()} 또는 그 안의
+	 * Lua) 자체가 "정비 중" 락을 확인하도록 발급 hot path 를 건드려야 하는데, 이 초기화 API 하나의
+	 * 스코프를 넘는 변경이라 여기서는 하지 않는다.
+	 *
+	 * <p>고치지 않는 이유 — 이 API 는 부하테스트 전용({@code /internal/...}) 이고 통제된 세션에서
+	 * 전용 테스트 쿠폰({@code SEED-*})에만 쓴다. 실제 발급 트래픽과 같은 쿠폰에 동시에 겹칠 상황이
+	 * 실무에서 거의 없고, 겹치더라도 영향 범위가 그 테스트 회차 데이터로 한정돼 프로덕션 데이터엔
+	 * 닿지 않는다.
 	 */
 	private void validatePipelineDrained(Long couponId) {
 		PipelineDrainStatus status = pipelineDrainChecker.check(couponId);
