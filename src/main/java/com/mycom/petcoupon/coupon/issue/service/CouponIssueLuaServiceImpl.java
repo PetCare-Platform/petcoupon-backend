@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
@@ -146,6 +147,29 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
         }
     }
-    
-    
+
+    // 실시간(=Redis 기준) 잔여 재고·발급 완료 수 조회. 둘 다 Lua 스크립트가 관리하는
+    // 같은 키(stock/sequence)를 GET만 하는 읽기 전용 조회라 Lua가 필요 없다.
+    // 키가 아직 초기화 안 됐으면(첫 조회 등) 0으로 취급한다.
+    @Override
+    public CouponIssueRealtimeStock getRealtimeStock(Long couponId) {
+        validateCouponId(couponId);
+
+        try {
+            String stockValue = redisTemplate.opsForValue().get(issueKey("stock", couponId));
+            String sequenceValue = redisTemplate.opsForValue().get(issueKey("sequence", couponId));
+
+            return CouponIssueRealtimeStock.builder()
+                    .remainingStock(parseOrZero(stockValue))
+                    .issuedCount(parseOrZero(sequenceValue))
+                    .build();
+        } catch (DataAccessException e) {
+            log.error("쿠폰 실시간 재고 조회 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
+        }
+    }
+
+    private int parseOrZero(String value) {
+        return value == null ? 0 : Integer.parseInt(value);
+    }
 }

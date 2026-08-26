@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -22,8 +23,12 @@ import org.springframework.web.context.support.AnnotationConfigWebApplicationCon
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.service.CouponIssueService;
+import com.mycom.petcoupon.coupon.service.CouponRealtimeStatusService;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 import com.mycom.petcoupon.idempotency.service.IdempotencyDecision;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
@@ -46,6 +51,7 @@ class CouponControllerTest {
     private IdempotencyKeyService idempotencyKeyService;
     private CouponRepository couponRepository;
     private AppUserRepository appUserRepository;
+    private CouponRealtimeStatusService couponRealtimeStatusService;
     private MockMvc mockMvc;
 
     @Configuration
@@ -72,6 +78,11 @@ class CouponControllerTest {
         }
 
         @Bean
+        CouponRealtimeStatusService couponRealtimeStatusService() {
+            return mock(CouponRealtimeStatusService.class);
+        }
+
+        @Bean
         ObjectMapper objectMapper() {
             return new ObjectMapper();
         }
@@ -82,8 +93,11 @@ class CouponControllerTest {
                 IdempotencyKeyService idempotencyKeyService,
                 CouponRepository couponRepository,
                 AppUserRepository appUserRepository,
+                CouponRealtimeStatusService couponRealtimeStatusService,
                 ObjectMapper objectMapper) {
-            return new CouponController(service, idempotencyKeyService, couponRepository, appUserRepository, objectMapper);
+            return new CouponController(
+                    service, idempotencyKeyService, couponRepository, appUserRepository,
+                    couponRealtimeStatusService, objectMapper);
         }
 
         @Bean
@@ -115,6 +129,7 @@ class CouponControllerTest {
         idempotencyKeyService = webCtx.getBean(IdempotencyKeyService.class);
         couponRepository = webCtx.getBean(CouponRepository.class);
         appUserRepository = webCtx.getBean(AppUserRepository.class);
+        couponRealtimeStatusService = webCtx.getBean(CouponRealtimeStatusService.class);
         mockMvc = MockMvcBuilders.webAppContextSetup(webCtx).build();
 
         when(couponRepository.existsById(any())).thenReturn(true);
@@ -262,5 +277,41 @@ class CouponControllerTest {
                 .andExpect(status().isInternalServerError());
 
         org.mockito.Mockito.verify(idempotencyKeyService).failWithoutBody(1L);
+    }
+
+    @Test
+    void 실시간_현황_조회에_성공하면_200과_응답값을_반환한다() throws Exception {
+        CouponRealtimeStatusResponse response = CouponRealtimeStatusResponse.builder()
+                .couponId(5L)
+                .totalQuantity(100)
+                .remainingQuantity(60)
+                .issuedQuantity(40)
+                .build();
+
+        when(couponRealtimeStatusService.getRealtimeStatus(5L)).thenReturn(response);
+
+        mockMvc.perform(get("/coupons/{couponId}/status", 5L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.couponId").value(5))
+                .andExpect(jsonPath("$.result.totalQuantity").value(100))
+                .andExpect(jsonPath("$.result.remainingQuantity").value(60))
+                .andExpect(jsonPath("$.result.issuedQuantity").value(40));
+    }
+
+    @Test
+    void 실시간_현황_조회에서_couponId가_0이면_400을_반환한다() throws Exception {
+        mockMvc.perform(get("/coupons/{couponId}/status", 0L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
+    @Test
+    void 실시간_현황_조회에서_존재하지_않는_쿠폰이면_404를_반환한다() throws Exception {
+        when(couponRealtimeStatusService.getRealtimeStatus(5L))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/coupons/{couponId}/status", 5L))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
     }
 }

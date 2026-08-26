@@ -4,8 +4,10 @@ import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.event.entity.Event;
 
 @Component
@@ -46,6 +48,16 @@ public class CouponConverter {
 				.validDays(coupon.getValidDays())
 				.totalQuantity(couponStock.getTotalQuantity())
 				.status(coupon.getStatus())
+				.build();
+	}
+
+	public CouponRealtimeStatusResponse toRealtimeStatusResponse(
+			Coupon coupon, CouponStock couponStock, CouponIssueRealtimeStock realtimeStock) {
+		return CouponRealtimeStatusResponse.builder()
+				.couponId(coupon.getCouponId())
+				.totalQuantity(couponStock.getTotalQuantity())
+				.remainingQuantity(realtimeStock.remainingStock())
+				.issuedQuantity(realtimeStock.issuedCount())
 				.build();
 	}
 }
