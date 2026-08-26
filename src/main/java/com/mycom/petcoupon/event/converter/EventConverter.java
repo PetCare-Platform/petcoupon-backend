@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.event.converter;
 
+import java.time.LocalDateTime;
+
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
@@ -26,47 +28,19 @@ public class EventConverter {
 	}
 
 	public EventCreateResponse toCreateResponse(Event event) {
-		return EventCreateResponse.builder()
-				.eventId(event.getEventId())
-				.name(event.getName())
-				.description(event.getDescription())
-				.openAt(event.getOpenAt())
-				.closeAt(event.getCloseAt())
-				.status(event.getStatus())
-				.build();
+		return toEventResponse(event, EventCreateResponse::new);
 	}
 
 	public EventDetailResponse toDetailResponse(Event event) {
-		return EventDetailResponse.builder()
-				.eventId(event.getEventId())
-				.name(event.getName())
-				.description(event.getDescription())
-				.openAt(event.getOpenAt())
-				.closeAt(event.getCloseAt())
-				.status(event.getStatus())
-				.build();
+		return toEventResponse(event, EventDetailResponse::new);
 	}
 
-    public EventListResponse toListResponse(Event event) {
-        return EventListResponse.builder()
-                .eventId(event.getEventId())
-                .name(event.getName())
-                .description(event.getDescription())
-                .openAt(event.getOpenAt())
-                .closeAt(event.getCloseAt())
-                .status(event.getStatus())
-                .build();
-    }
+	public EventListResponse toListResponse(Event event) {
+		return toEventResponse(event, EventListResponse::new);
+	}
 
 	public EventUpdateResponse toUpdateResponse(Event event) {
-		return EventUpdateResponse.builder()
-				.eventId(event.getEventId())
-				.name(event.getName())
-				.description(event.getDescription())
-				.openAt(event.getOpenAt())
-				.closeAt(event.getCloseAt())
-				.status(event.getStatus())
-				.build();
+		return toEventResponse(event, EventUpdateResponse::new);
 	}
 
 	public EventStatusResponse toStatusResponse(Long eventId, EventStatus status) {
@@ -74,5 +48,28 @@ public class EventConverter {
 				.eventId(eventId)
 				.status(status)
 				.build();
+	}
+
+	private <T> T toEventResponse(Event event, EventResponseFactory<T> factory) {
+		return factory.create(
+				event.getEventId(),
+				event.getName(),
+				event.getDescription(),
+				event.getOpenAt(),
+				event.getCloseAt(),
+				event.getStatus()
+		);
+	}
+
+	@FunctionalInterface
+	private interface EventResponseFactory<T> {
+		T create(
+				Long eventId,
+				String name,
+				String description,
+				LocalDateTime openAt,
+				LocalDateTime closeAt,
+				EventStatus status
+		);
 	}
 }
