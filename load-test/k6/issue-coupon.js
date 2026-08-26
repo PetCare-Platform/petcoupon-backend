@@ -86,8 +86,8 @@ const SCENARIOS = {
 		rate: cfg.RATE,
 		timeUnit: '1s',
 		duration: cfg.DURATION,
-		preAllocatedVUs: cfg.VUS,
-		maxVUs: cfg.VUS,
+		preAllocatedVUs: cfg.RATE_PRE_ALLOCATED_VUS,
+		maxVUs: cfg.RATE_MAX_VUS,
 	},
 };
 
@@ -99,17 +99,23 @@ function buildIdempotencyKey(seq) {
 	return cfg.RUN_ID + '-' + cfg.INSTANCE_INDEX + '-' + seq;
 }
 
-// k6 duration 표기('30s', '2m', '1h')를 초로 바꾼다. rate 시나리오의 필요 회원 수 계산에 쓴다.
+// k6 duration 표기('30s', '1h30m', '500ms')를 초로 바꾼다. rate 시나리오의 필요 회원 수 계산에 쓴다.
 function durationToSeconds(duration) {
-	const matched = /^(\d+)(ms|s|m|h)$/.exec(String(duration).trim());
-	if (!matched) {
-		throw new Error('DURATION 형식이 올바르지 않습니다. 예: 30s, 2m, 1h. 받은 값: ' + duration);
+	const raw = String(duration).trim();
+	const tokenPattern = /(\d+(?:\.\d+)?)(ms|s|m|h)/g;
+	const unitSeconds = { ms: 0.001, s: 1, m: 60, h: 3600 };
+	let seconds = 0;
+	let consumed = '';
+	let matched;
+
+	while ((matched = tokenPattern.exec(raw)) !== null) {
+		consumed += matched[0];
+		seconds += Number(matched[1]) * unitSeconds[matched[2]];
 	}
-
-	const value = Number(matched[1]);
-	const unit = { ms: 0.001, s: 1, m: 60, h: 3600 }[matched[2]];
-
-	return Math.ceil(value * unit);
+	if (consumed !== raw || seconds <= 0) {
+		throw new Error('DURATION 형식이 올바르지 않습니다. 예: 30s, 1h30m, 500ms. 받은 값: ' + duration);
+	}
+	return Math.ceil(seconds);
 }
 
 const scenario = SCENARIOS[cfg.SCENARIO];
@@ -132,12 +138,20 @@ export const options = {
 		// 409 는 멱등키가 겹쳤다는 뜻이다. 요청마다 고유한 키를 만드는 이상 나올 수 없고,
 		// 나왔다면 키 생성 규칙이 깨진 것이라 그 회차 측정은 믿을 수 없다.
 		issue_conflict: ['count==0'],
+		// VU가 부족해 목표 RATE를 못 맞추면 성공으로 오독하지 않고 테스트를 실패시킨다.
+		dropped_iterations: ['count==0'],
 		'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
 	},
 };
 
 export function setup() {
 	const offset = cfg.INSTANCE_INDEX * cfg.INSTANCE_STRIDE;
+	if (cfg.SCENARIO === 'rate' && cfg.RATE_MAX_VUS < cfg.RATE_PRE_ALLOCATED_VUS) {
+		throw new Error(
+			'RATE_MAX_VUS는 RATE_PRE_ALLOCATED_VUS 이상이어야 합니다. ' +
+				'preAllocated=' + cfg.RATE_PRE_ALLOCATED_VUS + ' max=' + cfg.RATE_MAX_VUS,
+		);
+	}
 
 	// 시나리오마다 보낼 요청 수. rate 는 초당 요청 수 × 지속 시간으로 계산한다.
 	const requiredMembers = cfg.SCENARIO === 'rate'

@@ -22,7 +22,14 @@ function bool(name, fallback) {
 	if (raw === undefined || raw === '') {
 		return fallback;
 	}
-	return raw === 'true' || raw === '1';
+	const normalized = String(raw).trim().toLowerCase();
+	if (normalized === 'true' || normalized === '1') {
+		return true;
+	}
+	if (normalized === 'false' || normalized === '0') {
+		return false;
+	}
+	throw new Error(`${name} 는 true/false 또는 1/0 이어야 합니다. 받은 값: ${raw}`);
 }
 
 // 끝의 슬래시를 떼지 않으면 요청 경로에 // 가 생겨 404 가 난다.
@@ -49,6 +56,9 @@ export const MAX_DURATION = __ENV.MAX_DURATION || '10m';
 // rate 시나리오용
 export const RATE = num('RATE', 1000);
 export const DURATION = __ENV.DURATION || '30s';
+// arrival-rate 실행에 필요한 VU 용량. RATE와 분리해 응답 지연에 맞춰 조정한다.
+export const RATE_PRE_ALLOCATED_VUS = num('RATE_PRE_ALLOCATED_VUS', RATE);
+export const RATE_MAX_VUS = num('RATE_MAX_VUS', Math.max(RATE_PRE_ALLOCATED_VUS, VUS));
 
 // 요청마다 서로 다른 회원을 쓴다.
 // uk_issue_coupon_user(coupon_id, user_id) 때문에 같은 회원의 두 번째 신청은 발급되지 않는다.

@@ -119,7 +119,9 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | `SCENARIO` | `smoke` | `smoke` / `burst` / `rate` |
 | `VUS` | `20000` | 동시 사용자 수 |
 | `ITERATIONS_PER_VU` | `1` | VU당 요청 수 (총 요청 = VUS × 이 값) |
-| `RATE`, `DURATION` | `1000`, `30s` | `rate` 시나리오 전용 |
+| `RATE`, `DURATION` | `1000`, `30s` | `rate` 시나리오의 목표 초당 요청 수와 지속 시간 |
+| `RATE_PRE_ALLOCATED_VUS` | `RATE` 값 | `rate` 시작 시 미리 할당할 VU 수 |
+| `RATE_MAX_VUS` | `max(RATE_PRE_ALLOCATED_VUS, VUS)` | 응답 지연 시 늘어날 수 있는 최대 VU 수 |
 | `MEMBER_IDS_FILE` | `./members.csv` | 회원 ID 목록 |
 | `RUN_ID` | `local` | 멱등키 접두사. 회차마다 바꿉니다 |
 | `RESET` | `true` | `setup`에서 초기화 API 호출 여부 |

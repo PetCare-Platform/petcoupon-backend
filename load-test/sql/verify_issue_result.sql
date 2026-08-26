@@ -23,12 +23,18 @@ SET @coupon_id = 1;
 --    남은 건수가 0 이 될 때까지 이 블록만 반복 실행한 뒤 1번으로 내려간다.
 -- ---------------------------------------------------------------------
 SELECT '0. 처리 대기 중인 Outbox' AS 확인,
-       SUM(status = 'PENDING')                    AS 대기,
-       SUM(status = 'FAILED')                     AS 재시도대기,
-       SUM(status = 'DLQ')                        AS 처리포기,
-       SUM(status IN ('SENT', 'CONSUMED'))        AS 발행완료
+	   COALESCE(SUM(status = 'PENDING'), 0)                    AS 대기,
+	   COALESCE(SUM(status = 'FAILED'), 0)                     AS 재시도대기,
+	   COALESCE(SUM(status = 'DLQ'), 0)                        AS 처리포기,
+	   COALESCE(SUM(status IN ('SENT', 'CONSUMED')), 0)        AS 발행완료
   FROM issue_message
  WHERE coupon_id = @coupon_id;
+
+-- coupon_id를 잘못 지정했을 때 아래 CROSS JOIN 항목이 조용히 사라지는 것을 막는다.
+SELECT '0-1. 검증 대상 쿠폰/재고 존재' AS 확인,
+	   CAST(@coupon_id AS CHAR) AS coupon_id,
+	   IF(EXISTS(SELECT 1 FROM coupon WHERE coupon_id = @coupon_id)
+		  AND EXISTS(SELECT 1 FROM coupon_stock WHERE coupon_id = @coupon_id), 'PASS', 'FAIL') AS 결과;
 
 -- ---------------------------------------------------------------------
 -- 1. 본 검증 — 전부 PASS 여야 한다
