@@ -20,13 +20,13 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
+import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationJobTriggerService;
 import com.mycom.petcoupon.reconciliation.converter.ReconciliationConverter;
 import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationTriggerResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.VerificationDetailResponse;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.enums.ReconciliationResult;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
-import com.mycom.petcoupon.reconciliation.service.ReconciliationService;
 
 @ExtendWith(MockitoExtension.class)
 class AdminReconciliationControllerTest {
@@ -34,7 +34,7 @@ class AdminReconciliationControllerTest {
     private static final Long COUPON_ID = 1L;
 
     @Mock
-    private ReconciliationService reconciliationService;
+    private ReconciliationJobTriggerService reconciliationJobTriggerService;
 
     @Mock
     private ReconciliationConverter reconciliationConverter;
@@ -44,7 +44,7 @@ class AdminReconciliationControllerTest {
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new AdminReconciliationController(reconciliationService, reconciliationConverter))
+                .standaloneSetup(new AdminReconciliationController(reconciliationJobTriggerService, reconciliationConverter))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
     }
@@ -69,7 +69,7 @@ class AdminReconciliationControllerTest {
                 .verificationDetails(List.of())
                 .build();
 
-        when(reconciliationService.reconcile(COUPON_ID)).thenReturn(report);
+        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(report);
         when(reconciliationConverter.toTriggerResponse(report)).thenReturn(response);
 
         mockMvc.perform(post("/admin/coupons/{couponId}/reconcile", COUPON_ID))
@@ -111,7 +111,7 @@ class AdminReconciliationControllerTest {
                         .build()))
                 .build();
 
-        when(reconciliationService.reconcile(COUPON_ID)).thenReturn(report);
+        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(report);
         when(reconciliationConverter.toTriggerResponse(report)).thenReturn(response);
 
         mockMvc.perform(post("/admin/coupons/{couponId}/reconcile", COUPON_ID))
@@ -124,7 +124,7 @@ class AdminReconciliationControllerTest {
 
     @Test
     void reconcileReturnsCouponNotFound() throws Exception {
-        when(reconciliationService.reconcile(COUPON_ID))
+        when(reconciliationJobTriggerService.reconcile(COUPON_ID))
                 .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
         mockMvc.perform(post("/admin/coupons/{couponId}/reconcile", COUPON_ID))
