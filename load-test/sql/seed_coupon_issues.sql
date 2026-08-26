@@ -136,6 +136,24 @@ SELECT ROW_NUMBER() OVER (ORDER BY user_id), user_id
   FROM app_user
  WHERE role = 'ROLE_MEMBER';
 
+-- 회원이 부족하면 뒤쪽 범위의 INSERT가 조용히 적은 건수로 끝나므로 여기서 즉시 중단한다.
+DROP PROCEDURE IF EXISTS assert_seed_member_count;
+DELIMITER //
+CREATE PROCEDURE assert_seed_member_count()
+BEGIN
+    DECLARE v_member_count BIGINT;
+    SELECT COUNT(*) INTO v_member_count FROM seed_member_seq;
+
+    IF v_member_count < 1000000 THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'SEED 중단: ROLE_MEMBER 회원이 최소 1,000,000명이어야 합니다.';
+    END IF;
+END//
+DELIMITER ;
+
+CALL assert_seed_member_count();
+DROP PROCEDURE assert_seed_member_count;
+
 
 -- ---------------------------------------------------------------------
 -- 4. 발급 이력 300만 건
@@ -152,7 +170,7 @@ SELECT ROW_NUMBER() OVER (ORDER BY user_id), user_id
 --    유니크 값은 전부 순번에서 파생시킨다. 랜덤을 쓰면 충돌 검사가 필요하지만
 --    순번 기반이면 중복이 구조적으로 불가능하다.
 --      sequence_no   쿠폰 안에서 1부터 (uk_issue_sequence)
---      coupon_code   'SEED' + 쿠폰id + 순번 (전역 유니크, 32자 이내)
+--      coupon_code   'SEED' + 쿠폰id의 16자리 HEX + 순번 (전역 유니크, 30자)
 --      request_id    'seed-' + 쿠폰id + '-' + 순번 (전역 유니크)
 --
 --    status 는 (회원 순번 + 쿠폰 ID) 끝자리로 나눈다 — ISSUED 70% / USED 20% / EXPIRED 10%.
@@ -164,132 +182,60 @@ SELECT ROW_NUMBER() OVER (ORDER BY user_id), user_id
 --    이 더미를 EXPIRED 로 바꿔버려서 기준선이 흔들린다.
 --
 --    쿠폰 하나씩 6번 나눠 실행한다. 300만 건을 한 트랜잭션에 넣으면 느리고,
---    중간에 끊기면 처음부터다. 나눠 넣으면 실패한 쿠폰만 다시 하면 된다.
---    아래 블록의 @c / @from / @to 만 바꿔가며 6번 실행한다.
+--    중간에 끊기면 처음부터다. 공통 프로시저에 쿠폰 번호와 회원 범위만 전달해
+--    중복 코드를 없애면서도 쿠폰별 INSERT 단위는 유지한다.
 -- ---------------------------------------------------------------------
 
--- ---- 쿠폰 1 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-1');
-SET @from = 1;        SET @to = 500000;
+DROP PROCEDURE IF EXISTS insert_seed_coupon_issues;
+DELIMITER //
+CREATE PROCEDURE insert_seed_coupon_issues(
+    IN p_coupon_no INT,
+    IN p_from BIGINT,
+    IN p_to BIGINT
+)
+BEGIN
+    DECLARE v_coupon_id BIGINT;
 
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c,
-       m.user_id,
-       m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY,
-       NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
+    SELECT coupon_id INTO v_coupon_id
+      FROM coupon
+     WHERE name = CONCAT('SEED-쿠폰-', p_coupon_no);
 
--- ---- 쿠폰 2 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-2');
-SET @from = 100001;   SET @to = 600000;
+    IF v_coupon_id IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'SEED 중단: 대상 쿠폰을 찾을 수 없습니다.';
+    END IF;
 
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c, m.user_id, m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
+    INSERT INTO coupon_issue
+        (coupon_id, user_id, sequence_no, coupon_code, request_id,
+         status, used_at, expires_at, created_at, updated_at)
+    SELECT v_coupon_id,
+           m.user_id,
+           m.n - p_from + 1,
+           -- BIGINT 쿠폰 ID를 16자리 16진수로 표현하면 잘림 없이 coupon_code 32자 제한 안에 들어간다.
+           CONCAT('SEED', LPAD(HEX(v_coupon_id), 16, '0'), LPAD(m.n, 10, '0')),
+           CONCAT('seed-', v_coupon_id, '-', m.n),
+           CASE WHEN (m.n + v_coupon_id) % 10 = 9 THEN 'EXPIRED'
+                WHEN (m.n + v_coupon_id) % 10 >= 7 THEN 'USED'
+                ELSE 'ISSUED' END,
+           CASE WHEN (m.n + v_coupon_id) % 10 BETWEEN 7 AND 8
+                THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+           CASE WHEN (m.n + v_coupon_id) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+                ELSE NOW(6) + INTERVAL 365 DAY END,
+           NOW(6) - INTERVAL 30 DAY,
+           NOW(6) - INTERVAL 30 DAY
+      FROM seed_member_seq m
+     WHERE m.n BETWEEN p_from AND p_to;
+END//
+DELIMITER ;
 
--- ---- 쿠폰 3 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-3');
-SET @from = 200001;   SET @to = 700000;
+CALL insert_seed_coupon_issues(1,      1,  500000);
+CALL insert_seed_coupon_issues(2, 100001,  600000);
+CALL insert_seed_coupon_issues(3, 200001,  700000);
+CALL insert_seed_coupon_issues(4, 300001,  800000);
+CALL insert_seed_coupon_issues(5, 400001,  900000);
+CALL insert_seed_coupon_issues(6, 500001, 1000000);
 
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c, m.user_id, m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
-
--- ---- 쿠폰 4 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-4');
-SET @from = 300001;   SET @to = 800000;
-
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c, m.user_id, m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
-
--- ---- 쿠폰 5 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-5');
-SET @from = 400001;   SET @to = 900000;
-
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c, m.user_id, m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
-
--- ---- 쿠폰 6 ----
-SET @c = (SELECT coupon_id FROM coupon WHERE name = 'SEED-쿠폰-6');
-SET @from = 500001;   SET @to = 1000000;
-
-INSERT INTO coupon_issue
-    (coupon_id, user_id, sequence_no, coupon_code, request_id,
-     status, used_at, expires_at, created_at, updated_at)
-SELECT @c, m.user_id, m.n - @from + 1,
-       CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
-       CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
-            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
-            ELSE 'ISSUED' END,
-       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
-            ELSE NOW(6) + INTERVAL 365 DAY END,
-       NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
-  FROM seed_member_seq m
- WHERE m.n BETWEEN @from AND @to;
+DROP PROCEDURE insert_seed_coupon_issues;
 
 
 -- ---------------------------------------------------------------------
