@@ -13,6 +13,7 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
 
+import com.mycom.petcoupon.coupon.config.CouponBatchSchedulerConfig;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
@@ -34,7 +35,7 @@ import jakarta.persistence.PersistenceContext;
  */
 @DataJpaTest(properties = "coupon.expire.chunk-size=3")
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import(CouponExpireBatchServiceImpl.class)
+@Import({CouponExpireBatchServiceImpl.class, CouponBatchSchedulerConfig.class})
 class CouponExpireBatchServiceImplTest {
 
 	@PersistenceContext

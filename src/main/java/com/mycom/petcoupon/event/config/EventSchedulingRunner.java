@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.event.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,16 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+// 앱 전체를 띄우는 테스트에서 이 스케줄러를 끌 수 있게 한다.
+// 켜져 있으면 테스트가 도는 동안에도 매분 event_status_history를 써서,
+// 같은 DB를 쓰는 다른 테스트의 event 삭제가 외래키에 걸린다.
+// 기본값은 켜짐이므로 운영 동작은 그대로다.
+@ConditionalOnProperty(
+	prefix = "event.status.scheduler",
+	name = "enabled",
+	havingValue = "true",
+	matchIfMissing = true
+)
 public class EventSchedulingRunner {
 
 	private final EventStatusSchedulerService eventStatusSchedulerService;

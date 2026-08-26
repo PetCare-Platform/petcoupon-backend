@@ -41,7 +41,7 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
     private record ChunkResult(int fetchedCount, int expiredCount) {}
 
     @Override
-    @Scheduled(cron = "0 0 1 * * *") // 매일 새벽 1시에 실행
+    @Scheduled(cron = "0 0 1 * * *", scheduler = "couponExpireBatchTaskScheduler") // 매일 새벽 1시에 실행
     public void expireOverdueCoupons() {
         LocalDateTime now = LocalDateTime.now();
         int totalExpired = 0;
