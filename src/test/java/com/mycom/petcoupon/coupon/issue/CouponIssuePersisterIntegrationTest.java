@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.issue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -191,6 +192,87 @@ class CouponIssuePersisterIntegrationTest {
 		entityManager.clear();
 
 		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
+	}
+
+	@Test
+	void recordNotification_단독_호출은_예외를_전파하지만_Consumer_호출부에서는_새지_않는다() {
+		// phone null인 유저 2명 — 하나는 persister.recordNotification()을 직접 호출하는 회귀 가드용,
+		// 하나는 실제 진입점인 consumer.consume()을 통한 end-to-end 검증용이다. 같은 유저로 같은
+		// 쿠폰에 두 번 발급하면 uk_issue_coupon_user(coupon_id, user_id) 위반이라 유저를 나눈다.
+		AppUser directCallUser = AppUser.builder()
+				.name("phone 없는 사용자(직접호출)")
+				.email("no-phone-direct-" + UUID.randomUUID() + "@test.com")
+				.phone(null)
+				.build();
+		AppUser consumerCallUser = AppUser.builder()
+				.name("phone 없는 사용자(Consumer)")
+				.email("no-phone-consumer-" + UUID.randomUUID() + "@test.com")
+				.phone(null)
+				.build();
+		transactionTemplate.executeWithoutResult(status -> {
+			entityManager.persist(directCallUser);
+			entityManager.persist(consumerCallUser);
+		});
+
+		String directRequestId = "no-phone-direct-" + UUID.randomUUID();
+		CouponIssueEvent directEvent = new CouponIssueEvent(
+			couponId, directCallUser.getUserId(), directRequestId, 1L,
+			"CODE-1-" + shortSuffix(), LocalDateTime.now().plusDays(7)
+		);
+
+		CouponIssue directCouponIssue = persister.persist(directEvent);
+
+		entityManager.clear();
+
+		// 발급 자체는 정상 커밋됐다 — phone null로 인한 알림 저장 실패가 여기까지 영향을 주지 않는다
+		assertThat(couponIssueRepository.existsByRequestId(directRequestId)).isTrue();
+
+		// recordNotification()을 단독 호출하면 예외가 그대로 전파된다 — notificationLogRepository.save()가
+		// 실패하는 순간 JPA 스펙상 트랜잭션이 rollback-only로 마킹되고, @Transactional 프록시가 메서드
+		// 반환 후 커밋을 시도하다가 실패해 예외를 던진다(실측: UnexpectedRollbackException). 메서드 안에서
+		// 삼키려 해도 이 커밋 실패는 메서드 몸통 바깥이라 못 막는다 — CouponIssuePersister.recordNotification()
+		// 주석 참고. 이 단언은 "내부 try/catch로 다시 삼키려는 시도"가 재발하면 실패하도록 남겨둔 회귀 가드다.
+		assertThatThrownBy(() -> persister.recordNotification(directCouponIssue))
+				.isInstanceOfAny(
+						org.springframework.dao.DataIntegrityViolationException.class,
+						org.springframework.transaction.UnexpectedRollbackException.class
+				);
+
+		entityManager.clear();
+		assertThat(notificationCountOf(couponId)).isZero();
+
+		// 실제 안전장치는 호출부(CouponIssueEventConsumer)에 있다 — 이게 진짜 프로덕션 진입점이고,
+		// Kafka 리스너까지 예외가 새지 않아야 무한 재시도로 이어지지 않는다.
+		String consumerRequestId = "no-phone-consumer-" + UUID.randomUUID();
+		CouponIssueEvent consumerEvent = new CouponIssueEvent(
+			couponId, consumerCallUser.getUserId(), consumerRequestId, 2L,
+			"CODE-2-" + shortSuffix(), LocalDateTime.now().plusDays(7)
+		);
+
+		Throwable thrownFromConsumer = catchThrowable(() -> consumer.consume(consumerEvent));
+
+		assertThat(thrownFromConsumer).isNull();
+
+		entityManager.clear();
+
+		// 발급은 그대로 남아있고, 알림 로그만 안 남아야 한다
+		assertThat(couponIssueRepository.existsByRequestId(consumerRequestId)).isTrue();
+		assertThat(notificationCountOf(couponId)).isZero();
+
+		// tearDownData()가 couponId 기준으로 coupon_issue를 지우기 전에, 이 유저들을 참조하는
+		// coupon_issue_history/coupon_issue를 먼저 지워야 app_user 삭제가 FK 위반 없이 끝난다
+		transactionTemplate.executeWithoutResult(status -> {
+			entityManager.createNativeQuery(
+					"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.request_id IN :requestIds")
+					.setParameter("requestIds", List.of(directRequestId, consumerRequestId))
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE request_id IN :requestIds")
+					.setParameter("requestIds", List.of(directRequestId, consumerRequestId))
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id IN :userIds")
+					.setParameter("userIds", List.of(directCallUser.getUserId(), consumerCallUser.getUserId()))
+					.executeUpdate();
+		});
 	}
 
 	@Test

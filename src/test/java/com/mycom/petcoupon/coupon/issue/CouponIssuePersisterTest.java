@@ -158,7 +158,7 @@ class CouponIssuePersisterTest {
 	}
 
 	@Test
-	void recordNotification_저장이_실패해도_예외를_던지지_않는다() {
+	void recordNotification_저장이_실패하면_예외를_그대로_전파한다() {
 		AppUser user = mock(AppUser.class);
 		when(user.getPhone()).thenReturn(null);
 
@@ -170,10 +170,14 @@ class CouponIssuePersisterTest {
 		when(notificationLogRepository.save(any(NotificationLog.class)))
 			.thenThrow(new org.springframework.dao.DataIntegrityViolationException("recipient_masked cannot be null"));
 
-		// persist()를 부르는 호출부가 각자 try/catch를 안 만들어도 되도록, 실패를 여기서 삼킨다
+		// 예전엔 여기서 삼키려 했으나, 실측(CouponIssuePersisterIntegrationTest)으로 확인해보니
+		// save() 실패 시점에 JPA 스펙상 트랜잭션이 이미 rollback-only로 마킹돼 메서드 안에서 삼켜도
+		// @Transactional 프록시의 커밋 시도가 UnexpectedRollbackException을 새로 던진다. 그래서
+		// 이 메서드는 삼키지 않고 그대로 던지며, 실패를 흡수하는 책임은 호출부(CouponIssueEventConsumer)에
+		// 있다 — 이 Mockito 테스트는 실제 트랜잭션 커밋을 재현하지 못해 그 부분은 검증할 수 없다.
 		Throwable thrown = catchThrowable(() -> persister.recordNotification(couponIssue));
 
-		assertThat(thrown).isNull();
+		assertThat(thrown).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 	}
 
 	@Test
