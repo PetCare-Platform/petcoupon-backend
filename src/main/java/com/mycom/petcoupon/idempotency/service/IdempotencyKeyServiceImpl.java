@@ -9,6 +9,7 @@ import java.util.HexFormat;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -103,7 +104,17 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
     @Transactional
     public void succeed(Long recordId, int responseStatus, String responseBody) {
         idempotencyKeyRepository.findById(recordId)
-                .ifPresent(record -> record.complete(IdempotencyStatus.SUCCEEDED, responseStatus, responseBody));
+                .ifPresent(record -> {
+                    // 비동기 파이프라인(Kafka Consumer/Stream Consumer)이 먼저 최종 성공(200 OK) 또는
+                    // 실패(FAILED)로 확정한 경우, HTTP 스레드의 뒤늦은 202 ACCEPTED(WAITING) 접수 응답이
+                    // 최종 결과를 덮어쓰지 않도록 방어한다.
+                    if (responseStatus == HttpStatus.ACCEPTED.value()
+                            && (record.getStatus() == IdempotencyStatus.FAILED
+                            || (record.getResponseStatus() != null && record.getResponseStatus() == HttpStatus.OK.value()))) {
+                        return;
+                    }
+                    record.complete(IdempotencyStatus.SUCCEEDED, responseStatus, responseBody);
+                });
     }
 
     @Override

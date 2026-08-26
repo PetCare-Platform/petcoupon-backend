@@ -213,13 +213,41 @@ class IdempotencyKeyServiceImplTest {
     }
 
     @Test
-    void findStatus_응답없는_FAILED면_아직_최종결과_없는_것으로_보고_IN_PROGRESS를_반환한다() {
-        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
-                .thenReturn(Optional.of(existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), null, null)));
+    void succeed_정상_호출시_상태와_응답을_SUCCEEDED로_완료한다() {
+        IdempotencyKey record = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
+        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
 
-        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+        idempotencyKeyService.succeed(10L, 200, "{\"isSuccess\":true}");
 
-        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
+        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED);
+        assertThat(record.getResponseStatus()).isEqualTo(200);
+        assertThat(record.getResponseBody()).isEqualTo("{\"isSuccess\":true}");
+    }
+
+    @Test
+    void succeed_이미_200_OK로_완료된_레코드에_뒤늦은_202_접수응답이_오면_덮어쓰지_않는다() {
+        IdempotencyKey record = existing(IdempotencyStatus.SUCCEEDED, LocalDateTime.now().plusSeconds(30), 200, "{\"code\":\"200\"}");
+        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
+
+        idempotencyKeyService.succeed(10L, 202, "{\"code\":\"202\",\"status\":\"WAITING\"}");
+
+        // 200 응답이 유지되어야 함
+        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED);
+        assertThat(record.getResponseStatus()).isEqualTo(200);
+        assertThat(record.getResponseBody()).isEqualTo("{\"code\":\"200\"}");
+    }
+
+    @Test
+    void succeed_이미_FAILED로_완료된_레코드에_뒤늦은_202_접수응답이_오면_덮어쓰지_않는다() {
+        IdempotencyKey record = existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), 409, "{\"code\":\"409\"}");
+        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
+
+        idempotencyKeyService.succeed(10L, 202, "{\"code\":\"202\",\"status\":\"WAITING\"}");
+
+        // FAILED 상태와 409 응답이 유지되어야 함
+        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.FAILED);
+        assertThat(record.getResponseStatus()).isEqualTo(409);
+        assertThat(record.getResponseBody()).isEqualTo("{\"code\":\"409\"}");
     }
 
     // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로
