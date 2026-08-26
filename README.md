@@ -377,8 +377,6 @@ CustomResponse.onFailure(errorCode);                  // 에러 코드 기반
 void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 ```
 
-파트별 미해결 논의는 [멘토링 질문](docs/mentoring-questions.md)에 정리돼 있다.
-
 ---
 
 ## 협업 규칙
