@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
@@ -21,26 +23,29 @@ import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
-import com.mycom.petcoupon.coupon.repository.CouponIssueHistoryRepository;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.repository.EventRepository;
-import com.mycom.petcoupon.event.repository.EventStatusHistoryRepository;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+
+
 @SpringBootTest(properties = { 
 	"coupon.issue.stream.enabled=true", "coupon.issue.outbox.enabled=true",
 	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10",
 	"spring.kafka.consumer.auto-offset-reset=earliest",
 	
-	// 테스트 수행 중 실행되지 않는 유효한 Cron
-	"event.status.scheduler.cron=0 0 0 1 1 *"
+	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서 경합 자체를 차단
+	"event.status.scheduler.enabled=false",
+	"coupon.status.enabled=false"
 })
 class CouponIssuePipelineIntegrationTest {
 
@@ -59,9 +64,6 @@ class CouponIssuePipelineIntegrationTest {
 
 	@Autowired
 	private EventRepository eventRepository;
-	
-	@Autowired
-	private EventStatusHistoryRepository eventStatusHistoryRepository;
 
 	@Autowired
 	private CouponRepository couponRepository;
@@ -71,36 +73,47 @@ class CouponIssuePipelineIntegrationTest {
 
 	@Autowired
 	private CouponIssueRepository couponIssueRepository;
-
-	@Autowired
-	private CouponIssueHistoryRepository couponIssueHistoryRepository;
-
+	
 	@Autowired
 	private IssueMessageRepository issueMessageRepository;
 	
-	private Long couponId;
+	@PersistenceContext
+	private EntityManager entityManager;
+
+	private TransactionTemplate transactionTemplate;
+
+	@Autowired
+	private PlatformTransactionManager transactionManager;
+	
+	private Long couponId;	
+	private Long eventId;
 	private Long userId;
 	private String requestId;
 
 	@BeforeEach
 	void setUp() {
+		transactionTemplate = new TransactionTemplate(transactionManager);
 		LocalDateTime now = LocalDateTime.now();
 
 		AppUser user = appUserRepository.saveAndFlush(AppUser.builder().name("통합 테스트 사용자")
 			.email("pipeline-" + UUID.randomUUID() + "@test.com").phone("01012345678").build());
 
+		userId = user.getUserId();
+		
 		Event event = eventRepository.saveAndFlush(Event.builder().createdBy(user).name("통합 테스트 이벤트")
 			.description("쿠폰 발급 파이프라인 테스트").openAt(now.minusHours(1)).closeAt(now.plusDays(1)).build());
 
+		eventId = event.getEventId();
+		
 		Coupon coupon = couponRepository
 			.saveAndFlush(Coupon.builder().event(event).name("통합 테스트 쿠폰").discountType(DiscountType.values()[0])
 				.discountValue(1_000).minOrderAmount(10_000).maxDiscountAmount(null)
 				.issueStartAt(now.minusMinutes(10)).issueEndAt(now.plusHours(1)).validDays(7).build());
 
-		couponStockRepository.saveAndFlush(CouponStock.builder().coupon(coupon).totalQuantity(INITIAL_STOCK).build());
-
 		couponId = coupon.getCouponId();
-		userId = user.getUserId();
+		
+		couponStockRepository.saveAndFlush(CouponStock.builder().coupon(coupon).totalQuantity(INITIAL_STOCK).build());
+		
 		requestId = "pipeline-" + UUID.randomUUID();
 
 		redisTemplate.delete(List.of(stockKey(), applicantsKey(), sequenceKey(), requestSequenceKey()));
@@ -110,22 +123,61 @@ class CouponIssuePipelineIntegrationTest {
 
 	@AfterEach
 	void tearDown() {
+		
 		if (couponId != null) {
 			redisTemplate.delete(List.of(stockKey(), applicantsKey(), sequenceKey(), requestSequenceKey()));
 		}
 
-		// FK 역순으로 삭제
-	    couponIssueHistoryRepository.deleteAll();
-	    couponIssueRepository.deleteAll();
-	    issueMessageRepository.deleteAll();
-	    couponStockRepository.deleteAll();
-	    couponRepository.deleteAll();
+		transactionTemplate.executeWithoutResult(status -> {
+			if (couponId != null) {
+				// coupon_issue를 참조하는 이력을 먼저 삭제
+				entityManager.createNativeQuery("""
+						DELETE FROM coupon_issue_history
+						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
 
-	    // event를 참조하는 상태 변경 이력을 먼저 삭제
-	    eventStatusHistoryRepository.deleteAll();
-	    eventRepository.deleteAll();
+				entityManager.createNativeQuery("""
+						DELETE FROM coupon_issue
+						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
 
-	    appUserRepository.deleteAll();
+				entityManager.createNativeQuery("""
+						DELETE FROM issue_message
+						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
+
+				entityManager.createNativeQuery("""
+						DELETE FROM coupon_stock
+						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
+
+				entityManager.createNativeQuery("""
+						DELETE FROM coupon
+						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
+			}
+
+			if (eventId != null) {
+				entityManager.createNativeQuery("""
+						DELETE FROM event_status_history
+						 WHERE event_id = :eventId
+						""").setParameter("eventId", eventId).executeUpdate();
+
+				entityManager.createNativeQuery("""
+						DELETE FROM event
+						 WHERE event_id = :eventId
+						""").setParameter("eventId", eventId).executeUpdate();
+			}
+
+			if (userId != null) {
+				entityManager.createNativeQuery("""
+						DELETE FROM app_user
+						 WHERE user_id = :userId
+						""").setParameter("userId", userId).executeUpdate();
+			}
+
+			entityManager.clear();
+		});
 	}
 
 	@Test
