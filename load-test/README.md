@@ -17,7 +17,7 @@ load-test/
 
 ## 이 테스트가 재는 것
 
-발급 API는 비동기입니다. 요청은 Redis Stream에 적재되고 당첨 여부는 Consumer가 나중에 판정하므로, **응답은 재고가 남았든 소진됐든 항상 `200 + status="WAITING"`** 입니다.
+발급 API는 비동기입니다. 요청은 Redis Stream에 적재되고 당첨 여부는 Consumer가 나중에 판정하므로, **응답은 재고가 남았든 소진됐든 항상 `202 Accepted + status="WAITING"`** 입니다. `202`는 "접수했다"는 뜻이지 "발급됐다"가 아닙니다.
 
 | | 무엇을 보나 | 어디서 보나 |
 |---|---|---|
@@ -278,6 +278,7 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --default-character-se
 | `issue_accepted_duration` | 접수 응답 시간. 당첨 여부와 무관한 값 |
 | `issue_conflict` | 409. 정상 부하에서는 0이어야 하고, 크면 멱등키 규칙을 의심 |
 | `issue_not_found` | 404. 쿠폰 ID나 회원 목록이 잘못된 것 (측정 문제가 아니라 설정 문제) |
+| `issue_bad_request` | 400. 요청이 잘못된 것 — `Idempotency-Key` 누락·64자 초과 등. 서버 문제가 아닙니다 |
 | `issue_server_error` | 5xx. 서버가 응답은 했지만 처리에 실패한 것 |
 | `issue_request_error` | 응답을 아예 못 받음(연결 거절 · 리셋 · 타임아웃). 서버 로그에 아무것도 안 남으면 부하 생성기 쪽 한계입니다 |
 

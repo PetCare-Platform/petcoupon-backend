@@ -30,6 +30,8 @@ import * as cfg from './config.js';
 const accepted = new Counter('issue_accepted');
 const conflict = new Counter('issue_conflict');
 const notFound = new Counter('issue_not_found');
+// 400. 서버가 아니라 요청이 잘못된 것 — 멱등키 누락·길이 초과 등 스크립트 설정 문제라 따로 센다.
+const badRequest = new Counter('issue_bad_request');
 const serverError = new Counter('issue_server_error');
 // 응답을 아예 못 받은 요청(연결 거절 · 리셋 · 타임아웃). k6 는 이때 status 를 0 으로 준다.
 // 서버가 500 을 돌려준 것과 원인이 완전히 다르므로 따로 센다.
@@ -89,6 +91,14 @@ const SCENARIOS = {
 	},
 };
 
+// 서버의 @Size(max = 64) 와 같은 값. 넘으면 400 이라 setup 에서 미리 막는다.
+const IDEMPOTENCY_KEY_MAX_LENGTH = 64;
+
+// 키 생성 규칙을 한곳에 둔다. setup 의 길이 검사와 실제 요청이 같은 규칙을 써야 검사가 의미를 갖는다.
+function buildIdempotencyKey(seq) {
+	return cfg.RUN_ID + '-' + cfg.INSTANCE_INDEX + '-' + seq;
+}
+
 const scenario = SCENARIOS[cfg.SCENARIO];
 if (!scenario) {
 	throw new Error(
@@ -103,6 +113,7 @@ export const options = {
 		issue_accept_rate: ['rate>0.99'],
 		// 404 는 쿠폰 ID 나 회원 목록이 잘못된 것 — 측정이 아니라 설정 문제다.
 		issue_not_found: ['count==0'],
+		issue_bad_request: ['count==0'],
 		issue_server_error: ['count==0'],
 		issue_request_error: ['count==0'],
 		'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
@@ -116,6 +127,17 @@ export function setup() {
 		throw new Error(
 			'회원이 모자랍니다. 필요=' + (offset + cfg.TOTAL_REQUESTS) + ' 보유=' + MEMBERS.length + '\n' +
 				'회원이 재사용되면 1인 1매 제약에 걸려 측정이 왜곡됩니다.',
+		);
+	}
+
+	// 서버가 Idempotency-Key 를 64자로 제한한다. 넘으면 400 인데, 부하 중에 전건 400 이 뜨면
+	// 원인을 찾느라 회차를 통째로 버리게 된다. 가장 긴 키를 미리 만들어 여기서 막는다.
+	const longestKey = buildIdempotencyKey(offset + Math.max(cfg.TOTAL_REQUESTS, 1) - 1);
+	if (longestKey.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
+		throw new Error(
+			'Idempotency-Key 가 서버 제한(' + IDEMPOTENCY_KEY_MAX_LENGTH + '자)을 넘습니다. ' +
+				'길이=' + longestKey.length + ' 예시="' + longestKey + '"\n' +
+				'RUN_ID 를 짧게 줄이세요.',
 		);
 	}
 
@@ -189,8 +211,9 @@ export default function () {
 	const userId = MEMBERS[index % MEMBERS.length];
 
 	// Idempotency-Key 는 (user_id, idempotency_key) 로만 유니크하지만,
-	// 회차가 겹쳐 재현 응답이 나오는 사고를 막으려고 요청마다 전역 유일하게 만든다. (64자 제한)
-	const idempotencyKey = cfg.RUN_ID + '-' + cfg.INSTANCE_INDEX + '-' + seq;
+	// 회차가 겹쳐 재현 응답이 나오는 사고를 막으려고 요청마다 전역 유일하게 만든다.
+	// 64자 제한은 setup 에서 이미 검사했다.
+	const idempotencyKey = buildIdempotencyKey(index);
 
 	const res = http.post(
 		cfg.BASE_URL + '/coupons/' + cfg.COUPON_ID + '/issues',
@@ -206,12 +229,17 @@ export default function () {
 		},
 	);
 
-	const ok = res.status === 200;
+	// 접수 성공은 202 다. 신청이 큐에 실렸다는 뜻이고, 발급 여부는 아직 정해지지 않았다.
+	const ok = res.status === 202;
 	acceptRate.add(ok);
 
 	if (ok) {
 		accepted.add(1);
 		acceptedDuration.add(res.timings.duration);
+	} else if (res.status === 400) {
+		// 요청 자체가 거절됐다. Idempotency-Key 누락·64자 초과, userId 형식 오류 등.
+		// 서버 문제가 아니라 스크립트 설정 문제이므로 5xx 와 섞지 않는다.
+		badRequest.add(1);
 	} else if (res.status === 409) {
 		// 처리 중(COUPON409-5) 또는 멱등키 재사용(COUPON409-6).
 		// 정상 부하에서는 0 이어야 하고, 값이 크면 키 생성 규칙을 의심한다.
@@ -227,7 +255,7 @@ export default function () {
 	}
 
 	check(res, {
-		'접수 200': () => ok,
+		'접수 202': () => ok,
 		// 비동기라 이 시점에 당첨 · 품절을 알 수 없다. WAITING 이 아니면 API 계약이 바뀐 것이다.
 		'status=WAITING': () => !ok || (res.body !== null && res.body.indexOf('"WAITING"') !== -1),
 	});
