@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueRedisKeys;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -22,11 +23,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 
 	private final StringRedisTemplate redisTemplate;
     private final DefaultRedisScript<List> couponIssueLuaScript;
- 
-    private String issueKey(String suffix, Long couponId) {
-        return "coupon:issue:" + suffix + ":{" + couponId + "}";
-    }
-    
+
     @Override
     public CouponIssueLuaResult issue(Long couponId, Long userId, String requestId) {
     	validate(couponId, userId, requestId);
@@ -37,10 +34,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		luaResult = redisTemplate.execute(
     	    	couponIssueLuaScript,
     	    	List.of(
-    	    		issueKey("stock", couponId), 
-    	    		issueKey("applicants", couponId),
-    	    	    issueKey("sequence", couponId),
-    	    	    issueKey("request-sequence", couponId)
+    	    		CouponIssueRedisKeys.stock(couponId),
+    	    		CouponIssueRedisKeys.applicants(couponId),
+    	    	    CouponIssueRedisKeys.sequence(couponId),
+    	    	    CouponIssueRedisKeys.requestSequence(couponId)
     	    	),
     	    	userId.toString(),
     	    	requestId
@@ -124,10 +121,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     	
     	try {
     		redisTemplate.delete(List.of(
-    			issueKey("stock", couponId),  
-    			issueKey("applicants", couponId), 
-    			issueKey("sequence", couponId),
-    			issueKey("request-sequence", couponId)
+    			CouponIssueRedisKeys.stock(couponId),
+    			CouponIssueRedisKeys.applicants(couponId),
+    			CouponIssueRedisKeys.sequence(couponId),
+    			CouponIssueRedisKeys.requestSequence(couponId)
     		));
     		
     	} catch (DataAccessException e) {
