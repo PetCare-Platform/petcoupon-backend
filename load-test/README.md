@@ -277,13 +277,15 @@ docker exec petcoupon-redis redis-cli XGROUP CREATE coupon:issue:stream coupon-i
 
 `MKSTREAM` 없이 실행하면 키가 없다며 실패합니다. 그룹을 다시 만들지 않으면 다음 신청부터 Consumer가 `NOGROUP`으로 멈춥니다.
 
-> `issue_message` 테이블로는 이 확인을 대신할 수 없습니다. 상태가 `SENT`에서 멈추고 `CONSUMED`로 바꾸는 코드가 없어서, "Kafka에 넣었다"까지만 알 수 있고 처리 여부는 알 수 없습니다.
+> `issue_message` 테이블로는 이 확인(Redis Stream에 남은 미배달분)을 대신할 수 없습니다. Outbox에 행이 생기는 건 Stream Consumer가 판정을 끝낸 뒤라, 아직 Stream에 남아 있는 요청은 이 테이블에 아예 나타나지 않습니다.
 
 ---
 
 ## 결과 확인
 
-부하가 끝나도 **확정은 아직 밀려 있을 수 있습니다.** 검증 SQL의 0번 블록(미처리 Outbox)이 0이 될 때까지 기다린 뒤 본 검증을 읽습니다.
+부하가 끝나도 **확정은 아직 밀려 있을 수 있습니다.** 검증 SQL의 0번 블록에서 `대기`·`재시도대기`·`발행중`이 **모두 0**이 될 때까지 기다린 뒤 본 검증을 읽습니다.
+
+`발행중`은 Kafka에 넣기만 하고 아직 DB 저장이 안 끝난 건입니다. 이게 남아 있는데 본 검증을 읽으면 발급 건수와 순번이 실제보다 적게 나와 없는 문제를 만들어냅니다.
 
 ```bash
 docker cp load-test/sql/verify_issue_result.sql petcoupon-mysql:/tmp/
@@ -296,7 +298,7 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --default-character-se
 
 | # | 항목 | 깨졌다면 |
 |---|---|---|
-| 1 | 발급 건수 = 총재고 | 재고 판정이 새거나 확정이 유실됨 |
+| 1 | 발급 건수 = MIN(접수 요청, 총재고) | 재고 판정이 새거나 확정이 유실됨 |
 | 2 | 1인 2매 이상 발급 | 중복 판정 실패 |
 | 3~4 | 순번 중복 · 연속 | 판정은 났는데 DB 확정이 빠짐 |
 | 5~6 | 쿠폰코드 · request_id 중복 | 같은 요청이 두 번 확정됨 |

@@ -7,7 +7,10 @@
 --
 -- 실행
 --   docker cp load-test/sql/verify_issue_result.sql petcoupon-mysql:/tmp/
---   docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "source /tmp/verify_issue_result.sql"
+--   docker exec petcoupon-mysql mysql -uroot -proot --default-character-set=utf8mb4 petcoupon -e "source /tmp/verify_issue_result.sql"
+--
+-- --default-character-set=utf8mb4 를 빼면 안 된다. mysql 클라이언트가 컨테이너 로케일을 따라
+-- latin1 로 읽어서 한글 컬럼 별칭이 깨지고 "You have an error in your SQL syntax" 로 끝난다.
 --
 -- 대상 쿠폰이 1번이 아니면 아래 SET 을 바꾼다.
 -- =====================================================================
@@ -20,13 +23,17 @@ SET @coupon_id = 1;
 --    발급 확정은 Outbox -> Kafka -> Consumer 로 이어지는 비동기 경로다.
 --    부하 종료 직후에는 아직 밀려 있을 수 있고, 그 상태로 아래 검증을 읽으면
 --    "발급 건수가 재고보다 적다"는 잘못된 FAIL 이 나온다.
---    남은 건수가 0 이 될 때까지 이 블록만 반복 실행한 뒤 1번으로 내려간다.
+--
+--    SENT 는 Kafka 발행까지만 끝난 상태다. DB 저장이 끝나야 CONSUMED 가 되므로
+--    (CouponIssuePersister.markConsumed), 둘을 묶어서 보면 아직 처리 중인 건을 놓친다.
+--    대기 · 재시도대기 · 발행중 이 모두 0 이 될 때까지 이 블록만 반복 실행한 뒤 1번으로 내려간다.
 -- ---------------------------------------------------------------------
 SELECT '0. 처리 대기 중인 Outbox' AS 확인,
 	   COALESCE(SUM(status = 'PENDING'), 0)                    AS 대기,
 	   COALESCE(SUM(status = 'FAILED'), 0)                     AS 재시도대기,
 	   COALESCE(SUM(status = 'DLQ'), 0)                        AS 처리포기,
-	   COALESCE(SUM(status IN ('SENT', 'CONSUMED')), 0)        AS 발행완료
+	   COALESCE(SUM(status = 'SENT'), 0)                       AS 발행중,
+	   COALESCE(SUM(status = 'CONSUMED'), 0)                   AS 확정완료
   FROM issue_message
  WHERE coupon_id = @coupon_id;
 
@@ -39,12 +46,17 @@ SELECT '0-1. 검증 대상 쿠폰/재고 존재' AS 확인,
 -- ---------------------------------------------------------------------
 -- 1. 본 검증 — 전부 PASS 여야 한다
 -- ---------------------------------------------------------------------
-SELECT '1. 발급 건수 = 총재고' AS 검증항목,
-       CAST(s.total_quantity AS CHAR) AS 기대,
-       CAST(i.cnt AS CHAR)            AS 실제,
-       IF(i.cnt = s.total_quantity, 'PASS', 'FAIL') AS 결과
+-- 재고보다 적게 쏜 회차에서는 발급 건수도 그만큼만 나오는 게 정상이다. 총재고를 그대로
+-- 기대값으로 두면 그런 회차가 전부 FAIL 로 나온다. 접수된 요청 수와 총재고 중 작은 쪽을
+-- 기대값으로 잡아 과발급 회차와 소량 회차를 같은 쿼리로 본다.
+-- 접수 수는 idempotency_key 행 수로 센다 — 초기화 API 가 쿠폰별로 지우므로 이번 회차 값만 남는다.
+SELECT '1. 발급 건수 = MIN(접수 요청, 총재고)' AS 검증항목,
+       CAST(LEAST(r.accepted, s.total_quantity) AS CHAR) AS 기대,
+       CAST(i.cnt AS CHAR)                               AS 실제,
+       IF(i.cnt = LEAST(r.accepted, s.total_quantity), 'PASS', 'FAIL') AS 결과
   FROM (SELECT total_quantity FROM coupon_stock WHERE coupon_id = @coupon_id) s
  CROSS JOIN (SELECT COUNT(*) AS cnt FROM coupon_issue WHERE coupon_id = @coupon_id) i
+ CROSS JOIN (SELECT COUNT(*) AS accepted FROM idempotency_key WHERE coupon_id = @coupon_id) r
 
 UNION ALL
 -- uk_issue_coupon_user 가 막아주지만, 제약이 빠졌을 때를 대비해 실제 데이터로도 본다.

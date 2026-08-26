@@ -7,7 +7,7 @@
 // -------------------------------------------------------------------
 // 발급 API 는 비동기다. 요청은 Redis Stream 에 적재되고, 당첨 여부는
 // Consumer 가 나중에 판정한다. 그래서 응답은 재고가 남았든 소진됐든
-// 항상 200 + status="WAITING" 이다.
+// 항상 202 Accepted + status="WAITING" 이다.
 //
 //   k6 가 재는 것  : 접수 성공률, 접수 응답 시간, 타임아웃 · 5xx 발생 여부
 //   k6 가 못 재는 것: 누가 당첨됐는지, 발급이 재고를 넘지 않았는지
@@ -37,6 +37,9 @@ const serverError = new Counter('issue_server_error');
 // 서버가 500 을 돌려준 것과 원인이 완전히 다르므로 따로 센다.
 const requestError = new Counter('issue_request_error');
 const acceptRate = new Rate('issue_accept_rate');
+// 접수된 응답이 API 계약(status="WAITING")을 지켰는지만 따로 센다. 접수 성공률과 분리하는 이유는
+// 접수는 1% 실패를 허용하지만(issue_accept_rate) 계약 위반은 한 건도 허용하지 않기 때문이다.
+const contractRate = new Rate('issue_contract_ok');
 const acceptedDuration = new Trend('issue_accepted_duration', true);
 
 // 실제로 존재하는 회원 ID 목록.
@@ -140,6 +143,9 @@ export const options = {
 		issue_conflict: ['count==0'],
 		// VU가 부족해 목표 RATE를 못 맞추면 성공으로 오독하지 않고 테스트를 실패시킨다.
 		dropped_iterations: ['count==0'],
+		// check() 는 요약에만 찍히고 종료 코드에 반영되지 않는다. 임계값을 걸어야
+		// 응답 계약이 깨졌을 때 k6 가 실패로 끝난다. 접수 성공률과 달리 한 건도 허용하지 않는다.
+		issue_contract_ok: ['rate==1'],
 		'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
 	},
 };
@@ -305,9 +311,14 @@ export default function () {
 		serverError.add(1, { status: String(res.status) });
 	}
 
+	// 비동기라 이 시점에 당첨 · 품절을 알 수 없다. WAITING 이 아니면 API 계약이 바뀐 것이다.
+	// 접수에 실패한 응답은 계약을 따질 대상이 아니라 집계에서 뺀다.
+	if (ok) {
+		contractRate.add(res.body !== null && res.body.indexOf('"WAITING"') !== -1);
+	}
+
 	check(res, {
 		'접수 202': () => ok,
-		// 비동기라 이 시점에 당첨 · 품절을 알 수 없다. WAITING 이 아니면 API 계약이 바뀐 것이다.
 		'status=WAITING': () => !ok || (res.body !== null && res.body.indexOf('"WAITING"') !== -1),
 	});
 }
