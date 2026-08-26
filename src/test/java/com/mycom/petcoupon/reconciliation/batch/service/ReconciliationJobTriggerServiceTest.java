@@ -178,4 +178,103 @@ class ReconciliationJobTriggerServiceTest {
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
     }
+
+    // asOfAt을 매번 LocalDateTime.now()로만 새로 만들면 JobParameters가 절대 안 겹쳐서
+    // Spring Batch의 재시작/중복실행 방지가 실제 API 경로에서는 전혀 동작하지 않는다 — 그래서
+    // ReconciliationJobStateLookup으로 트리거 전에 상태를 직접 확인하도록 바꿨다. 이 두 테스트는
+    // 그 판단 분기(COMPLETED면 새 실행 / RUNNING이면 즉시 거절)가 트리거 서비스 레벨에서
+    // 실제로 동작하는지 확인한다. FAILED면 재시작(체크포인트 이어받기)하는 것 자체는
+    // ReconciliationJobStateLookupTest(상태 판단)와 ReconciliationJobRestartTest(실제 이어받기)가
+    // 이미 각각 검증한다.
+
+    @Test
+    void 이미_완료된_쿠폰을_다시_트리거하면_새_리포트로_새_실행이_생긴다() {
+        ReconciliationBatchResult first = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+        ReconciliationBatchResult second = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+
+        assertThat(second.report().getReportId()).isNotEqualTo(first.report().getReportId());
+        assertThat(second.report().getAsOfAt()).isAfter(first.report().getAsOfAt());
+    }
+
+    @Test
+    void 이미_실행_중인_쿠폰에_트리거하면_Job을_시작하지_않고_바로_거절한다() {
+        long plantedExecutionId = plantRunningExecution(endedCoupon.getCouponId());
+
+        try {
+            assertThatThrownBy(() -> reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId()))
+                    .isInstanceOf(GeneralException.class)
+                    .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                    .isEqualTo(CouponErrorCode.REQUEST_IN_PROGRESS);
+
+            // 거절이 jobOperator.start() 이전에 일어나므로, reconciliation_report가 새로 생기지 않아야 한다.
+            entityManager.clear();
+            long reportCount = ((Number) entityManager.createNativeQuery(
+                    "SELECT COUNT(*) FROM reconciliation_report WHERE coupon_id = :couponId")
+                    .setParameter("couponId", endedCoupon.getCouponId())
+                    .getSingleResult()).longValue();
+            assertThat(reportCount).isZero();
+        } finally {
+            removeBatchExecution(plantedExecutionId);
+        }
+    }
+
+    // ReconciliationJobStateLookupTest와 같은 방식으로 BATCH_JOB_* 테이블에 STARTED 상태인
+    // 실행을 직접 심는다 — 실제로 Job이 도는 중인 상황을 흉내 낸다.
+    private long plantRunningExecution(Long couponId) {
+        return transactionTemplate.execute(status -> {
+            long instanceId = nextBatchId("BATCH_JOB_INSTANCE_SEQ");
+            long executionId = nextBatchId("BATCH_JOB_EXECUTION_SEQ");
+
+            entityManager.createNativeQuery(
+                    "INSERT INTO BATCH_JOB_INSTANCE (JOB_INSTANCE_ID, VERSION, JOB_NAME, JOB_KEY) "
+                            + "VALUES (:id, 0, 'reconciliationJob', :key)")
+                    .setParameter("id", instanceId)
+                    .setParameter("key", "trigger-svc-running-" + executionId)
+                    .executeUpdate();
+
+            entityManager.createNativeQuery(
+                    "INSERT INTO BATCH_JOB_EXECUTION (JOB_EXECUTION_ID, VERSION, JOB_INSTANCE_ID, CREATE_TIME, STATUS) "
+                            + "VALUES (:id, 0, :instanceId, NOW(6), 'STARTED')")
+                    .setParameter("id", executionId)
+                    .setParameter("instanceId", instanceId)
+                    .executeUpdate();
+
+            entityManager.createNativeQuery(
+                    "INSERT INTO BATCH_JOB_EXECUTION_PARAMS (JOB_EXECUTION_ID, PARAMETER_NAME, PARAMETER_TYPE, PARAMETER_VALUE, IDENTIFYING) "
+                            + "VALUES (:id, 'couponId', 'java.lang.Long', :couponId, 'Y')")
+                    .setParameter("id", executionId)
+                    .setParameter("couponId", String.valueOf(couponId))
+                    .executeUpdate();
+
+            entityManager.createNativeQuery(
+                    "INSERT INTO BATCH_JOB_EXECUTION_PARAMS (JOB_EXECUTION_ID, PARAMETER_NAME, PARAMETER_TYPE, PARAMETER_VALUE, IDENTIFYING) "
+                            + "VALUES (:id, 'asOfAt', 'java.time.LocalDateTime', :asOfAt, 'Y')")
+                    .setParameter("id", executionId)
+                    .setParameter("asOfAt", LocalDateTime.now().toString())
+                    .executeUpdate();
+
+            return executionId;
+        });
+    }
+
+    private void removeBatchExecution(long executionId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            Number instanceId = (Number) entityManager.createNativeQuery(
+                    "SELECT JOB_INSTANCE_ID FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = :id")
+                    .setParameter("id", executionId)
+                    .getSingleResult();
+
+            entityManager.createNativeQuery("DELETE FROM BATCH_JOB_EXECUTION_PARAMS WHERE JOB_EXECUTION_ID = :id")
+                    .setParameter("id", executionId).executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM BATCH_JOB_EXECUTION WHERE JOB_EXECUTION_ID = :id")
+                    .setParameter("id", executionId).executeUpdate();
+            entityManager.createNativeQuery("DELETE FROM BATCH_JOB_INSTANCE WHERE JOB_INSTANCE_ID = :id")
+                    .setParameter("id", instanceId.longValue()).executeUpdate();
+        });
+    }
+
+    private long nextBatchId(String seqTable) {
+        entityManager.createNativeQuery("UPDATE " + seqTable + " SET ID = ID + 1").executeUpdate();
+        return ((Number) entityManager.createNativeQuery("SELECT ID FROM " + seqTable).getSingleResult()).longValue();
+    }
 }

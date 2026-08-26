@@ -3,6 +3,7 @@ package com.mycom.petcoupon.reconciliation.batch.service;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.springframework.batch.core.BatchStatus;
@@ -41,21 +42,21 @@ public class ReconciliationJobTriggerService {
 
     private final JobOperator jobOperator;
     private final Job reconciliationJob;
+    private final ReconciliationJobStateLookup jobStateLookup;
     private final ReconciliationReportRepository reconciliationReportRepository;
     private final VerificationDetailRepository verificationDetailRepository;
     private final ReconciliationBatchExecutionLogger batchExecutionLogger;
 
     public ReconciliationBatchResult reconcile(Long couponId) {
-        JobParameters jobParameters = new JobParametersBuilder()
-                .addLong("couponId", couponId)
-                .addLocalDateTime("asOfAt", LocalDateTime.now())
-                .toJobParameters();
+        JobParameters jobParameters = resolveJobParameters(couponId);
 
         JobExecution execution;
         try {
             execution = jobOperator.start(reconciliationJob, jobParameters);
         } catch (JobInstanceAlreadyCompleteException | JobExecutionAlreadyRunningException e) {
-            // 같은 couponId로 같은 밀리초에 asOfAt이 겹치는 경우 — 사실상 동시 중복 요청이다.
+            // resolveJobParameters가 RUNNING은 미리 걸러내고 RESTART는 실패했던 실행의 asOfAt을
+            // 그대로 재사용하므로, 정상 경로에서는 사실상 여기 안 걸린다 — 조회와 start() 사이의
+            // 순간적인 경쟁(동시에 둘 다 조회를 통과한 경우)에 대한 마지막 방어선으로만 남겨둔다.
             throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
         } catch (InvalidJobParametersException | JobRestartException e) {
             // JobParametersValidator나 non-restartable Step을 안 쓰는 지금 구성에선 실질적으로
@@ -73,6 +74,38 @@ public class ReconciliationJobTriggerService {
 
         batchExecutionLogger.log(execution, null);
         throw resolveFailureException(execution);
+    }
+
+    // asOfAt을 무조건 LocalDateTime.now()로 새로 만들면 이 couponId로 두 번 다시 같은
+    // JobParameters가 나올 수 없어서, Spring Batch의 재시작/중복실행 방지(JobParameters
+    // 완전일치 기반 JobInstance 식별)가 실제 API 경로에서는 아예 동작하지 않는다.
+    // 그래서 트리거 직전에 이 couponId의 최근 실행 상태를 먼저 확인하고 asOfAt을 정한다.
+    private JobParameters resolveJobParameters(Long couponId) {
+        LocalDateTime asOfAt = LocalDateTime.now();
+
+        Optional<ReconciliationJobStateLookup.LatestExecution> latest = jobStateLookup.findLatest(couponId);
+        if (latest.isPresent()) {
+            ReconciliationJobStateLookup.LatestExecution execution = latest.get();
+
+            if (execution.isRunning()) {
+                // 지금 막 시작됐거나 도는 중 — jobOperator.start()까지 갈 필요 없이 여기서 바로 막는다.
+                throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
+            }
+
+            if (!execution.isCompleted()) {
+                // FAILED/STOPPED 등 미완료 — 원래 asOfAt을 그대로 재사용해야 Spring Batch가
+                // 이번 start()를 "재시작"으로 인식해 완료된 Step을 건너뛴다. 새 asOfAt을 쓰면
+                // 완전히 별개의 새 JobInstance가 되어 재시작이 아니라 처음부터 다시 도는 것과 같아진다.
+                asOfAt = execution.asOfAt();
+            }
+            // COMPLETED면 새 asOfAt으로 새 실행 — 이미 끝난 쿠폰을 나중에 다시 검증하려는
+            // 정상적인 요청이다.
+        }
+
+        return new JobParametersBuilder()
+                .addLong("couponId", couponId)
+                .addLocalDateTime("asOfAt", asOfAt)
+                .toJobParameters();
     }
 
     // verificationDetails를 JOIN FETCH로 통째로 읽지 않는다 — 300만 건 규모에서 불일치가
