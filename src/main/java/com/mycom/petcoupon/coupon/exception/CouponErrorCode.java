@@ -55,7 +55,8 @@ public enum CouponErrorCode implements BaseErrorCode {
 	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
 	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요."),
 	REALTIME_STOCK_READ_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-4", "쿠폰 실시간 재고를 조회하지 못했습니다."),
-
+	ISSUE_STOCK_RESTORE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-5", "쿠폰 발급 Redis 재고를 복구하지 못했습니다."),
+	
 	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다.");
 
     private final HttpStatus status;

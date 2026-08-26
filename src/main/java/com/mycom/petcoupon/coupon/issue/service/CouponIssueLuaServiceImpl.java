@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.issue.service;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -10,7 +11,9 @@ import org.springframework.stereotype.Service;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
@@ -22,7 +25,12 @@ import lombok.extern.slf4j.Slf4j;
 public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 
 	private final StringRedisTemplate redisTemplate;
+	
+	@Qualifier("couponIssueLuaScript")
     private final DefaultRedisScript<List> couponIssueLuaScript;
+	
+	@Qualifier("couponIssueRestoreLuaScript")
+    private final DefaultRedisScript<List> couponIssueRestoreLuaScript;
  
     private String issueKey(String suffix, Long couponId) {
         return "coupon:issue:" + suffix + ":{" + couponId + "}";
@@ -180,4 +188,64 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
         }
     }
+
+	@Override
+	public CouponIssueStockRestoreResult restoreStock(Long couponId, Long userId, String requestId, Long sequenceNo) {
+		
+		validateRestoreRequest(couponId, userId, requestId, sequenceNo);
+
+		List<?> luaResult;
+
+		try {
+			luaResult = redisTemplate.execute(
+					couponIssueRestoreLuaScript,
+					List.of(
+						issueKey("stock", couponId), 
+						issueKey("applicants", couponId),
+						issueKey("request-sequence", couponId)
+					),
+					userId.toString(), requestId, sequenceNo.toString());
+			
+		} catch (DataAccessException e) {
+			
+			log.error("쿠폰 발급 Redis 재고 복구에 실패했습니다. " + "couponId={}, userId={}, requestId={}, sequenceNo={}", couponId, userId, requestId, sequenceNo, e);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
+
+		if (luaResult == null || luaResult.size() != 2) {
+			
+			log.error("유효하지 않은 Redis 재고 복구 결과입니다. " + "couponId={}, userId={}, requestId={}, result={}", couponId, userId, requestId, luaResult);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
+
+		try {
+			Object statusValue = luaResult.get(0);
+			Object stockValue = luaResult.get(1);
+
+			if (!(statusValue instanceof Number statusNumber) || !(stockValue instanceof Number stockNumber)) {
+				throw new IllegalArgumentException("Redis 재고 복구 결과가 숫자 형식이 아닙니다. result=" + luaResult);
+			}
+
+			CouponIssueStockRestoreStatus status = CouponIssueStockRestoreStatus.from(statusNumber.longValue());
+
+			return CouponIssueStockRestoreResult.builder()
+					.status(status)
+					.remainingStock(stockNumber.intValue())
+					.build();
+
+		} catch (IllegalArgumentException e) {
+			
+			log.error("알 수 없는 Redis 재고 복구 결과입니다. " + "couponId={}, userId={}, requestId={}, result={}", couponId, userId, requestId, luaResult, e);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
+	}
+	
+	private void validateRestoreRequest(Long couponId, Long userId, String requestId, Long sequenceNo) {
+		
+		if (couponId == null || couponId <= 0 || userId == null || userId <= 0 || requestId == null
+				|| requestId.isBlank() || sequenceNo == null || sequenceNo <= 0) {
+
+			throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
+		}
+	}
 }

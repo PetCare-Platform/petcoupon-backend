@@ -19,4 +19,14 @@ public class CouponIssueLuaConfig {
 
         return script;
     }
+	
+	@Bean
+    public DefaultRedisScript<List> couponIssueRestoreLuaScript() {
+        DefaultRedisScript<List> script = new DefaultRedisScript<>();
+
+        script.setLocation(new ClassPathResource("lua/coupon-issue-restore.lua"));
+        script.setResultType(List.class);
+
+        return script;
+    }
 }
