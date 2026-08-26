@@ -267,14 +267,34 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --default-character-se
 
 ## 측정 전 확인
 
-- **로그 레벨을 낮춥니다.** 발급 경로에 요청마다 남는 추적 로그가 있어 측정에 영향을 줍니다.
-  ```bash
-  ISSUE_LOG_LEVEL=WARN ./gradlew bootRun
-  ```
-- **DB 커넥션 풀을 스레드 수에 맞춰 늘립니다.** 기본값이 10이라, 동시 요청 200건만 들어와도 전부 커넥션을 기다리다 30초 타임아웃으로 500이 납니다. (아래 "확인된 것" 참고)
-  ```bash
-  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=100 ./gradlew bootRun
-  ```
+### 앱을 부하 테스트 설정으로 띄웁니다
+
+애플리케이션 기본값은 **평상시(로컬 · 통합 테스트) 기준**이라 그대로 두면 측정이 되지 않습니다. 부하 테스트용 값은 환경변수로만 넘깁니다.
+
+```bash
+ISSUE_LOG_LEVEL=WARN TOMCAT_MAX_THREADS=2000 TOMCAT_MAX_CONNECTIONS=25000 TOMCAT_ACCEPT_COUNT=5000 DB_POOL_SIZE=100 ./gradlew bootRun
+```
+
+| 환경변수 | 기본값 | 부하 테스트 | 왜 |
+| --- | --- | --- | --- |
+| `ISSUE_LOG_LEVEL` | `INFO` | `WARN` | 요청마다 남는 추적 로그가 응답 시간에 섞입니다 |
+| `TOMCAT_MAX_THREADS` | `200` | `2000` | 동시 요청을 받아낼 워커 스레드 |
+| `TOMCAT_MAX_CONNECTIONS` | `8192` | `25000` | 동시에 열어둘 커넥션 |
+| `TOMCAT_ACCEPT_COUNT` | `100` | `5000` | 대기 큐. 차면 연결이 거절됩니다 |
+| `DB_POOL_SIZE` | `10` | `100` | **스레드만 올리면 안 됩니다** (아래) |
+
+> ⚠️ **`DB_POOL_SIZE`를 빼먹으면 측정이 통째로 무너집니다.** 스레드를 2,000으로 열어도 커넥션이 10개면 1,990개가 풀 앞에 줄만 섭니다. 실제로 200 VU에서 400건 전부 30초 타임아웃 후 500이 났습니다. (아래 "확인된 것" 참고)
+
+**적정 풀 크기는 재서 정합니다.** 1단계(재고 1,000 / 요청 2,000)를 돌리면서 아래 값이 `0`을 유지하는 선까지 올립니다.
+
+```bash
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.pending
+```
+
+`pending`이 0보다 크면 스레드가 커넥션을 기다리고 있다는 뜻이고, 그 상태의 p95는 앱 성능이 아니라 풀 크기를 재고 있는 값입니다. 상한은 MySQL `max_connections`(부하 테스트 환경 500)이며, 앱 외에 Outbox 발행기와 스케줄러도 커넥션을 씁니다.
+
+### 그 밖에
+
 - **k6와 앱은 다른 인스턴스에서 돌립니다.** 같은 기기면 k6가 쓰는 CPU가 앱 응답 시간에 섞입니다.
 - **발급 이력 더미데이터는 필요할 때만 적재합니다.** 수백만 건을 넣어두면 팀 전체의 테스트 실행이 느려집니다.
 
@@ -289,5 +309,5 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --default-character-se
 
 부수적으로 확인된 것:
 
-- **Hikari 커넥션 풀 기본값(10)이 병목입니다.** 200 VU로 쏘면 400건 전부 `Connection is not available` → 500이 났고, 풀을 100으로 올리자 500이 0건이 됐습니다. Tomcat 스레드를 2,000으로 올려도(#86) 커넥션 풀이 10이면 스레드가 풀 앞에 줄만 섭니다. 별도 이슈로 다룰 값입니다.
+- **Tomcat 스레드와 DB 커넥션 풀은 같이 올려야 합니다.** 200 VU로 쏘면 400건 전부 `Connection is not available` → 500이 났고(풀 10), 풀만 100으로 올리자 500이 0건이 됐습니다. 스레드를 2,000으로 올려도 풀이 10이면 스레드가 풀 앞에 줄만 섭니다. 이 실측 때문에 두 값을 모두 환경변수로 빼고 기본값은 평상시 기준으로 되돌렸습니다(#86).
 - 접수 응답 시간(로컬, 200 VU 기준 p95 약 3초)은 앱과 k6가 같은 PC에서 도는 값이라 그대로 쓰지 않습니다. AWS에서 인스턴스를 나눠 다시 잽니다.
