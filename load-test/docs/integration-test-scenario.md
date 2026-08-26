@@ -20,6 +20,40 @@
 | 실행 위치 | 로컬 (`docker compose up -d` — MySQL 8.0, Redis 7.2) |
 | 애플리케이션 | 단일 인스턴스, `dev` 브랜치 최신 |
 | 초기 데이터 | 회원 더미데이터 적재 완료 (`load-test/sql/seed_users.sql`) |
+| 관리자 인증 | 세션 토큰 발급 완료 (아래 참고) |
+
+### 관리자 세션 발급
+
+`/admin/**`은 전부 세션 토큰을 요구한다. 토큰 없이 호출하면 **401**이 떨어지므로, 관리자 API를 쓰는 시나리오는 시작 전에 토큰을 받아둔다.
+
+```bash
+curl -X POST localhost:8080/admin/auth/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"code":"local-dev-admin-auth-code"}'
+```
+
+```json
+{ "isSuccess": true, "result": { "token": "…", "expiresAt": "2026-08-27T01:00:00" } }
+```
+
+받은 토큰을 이후 관리자 API 요청에 `X-ADMIN-KEY` 헤더로 싣는다.
+
+```bash
+curl -X POST localhost:8080/admin/coupons/1/reconcile \
+  -H "X-ADMIN-KEY: <발급받은 토큰>"
+```
+
+| 항목 | 값 |
+| --- | --- |
+| 인증 코드 | `local-dev-admin-auth-code` (로컬 기본값) — 환경변수 `ADMIN_AUTH_CODE`로 덮어쓴다 |
+| 토큰 유효 기간 | 8시간 — 환경변수 `ADMIN_SESSION_TTL` (예: `PT2H`) |
+| 세션 폐기 | `DELETE /admin/auth/sessions` (이 요청에도 토큰이 필요하다) |
+
+> **인증 코드를 설정하지 않으면 세션 발급이 전건 거부된다.** 로컬에는 기본값이 있어 그대로 뜨지만, 기본값을 지운 환경에서 `ADMIN_AUTH_CODE`를 빠뜨리면 기동 로그에 ERROR가 남고 `/admin/**`이 통째로 막힌다.
+>
+> 토큰은 8시간 뒤 만료된다. 시나리오를 나눠서 여러 날 진행한다면 그날 다시 발급받는다.
+
+**`/internal/**`은 인증 대상이 아니다.** 부하 테스트 전용(`@Profile("!prod")`)이라 인터셉터에서 제외했다. 아래 초기화 API와 TC-55·TC-56·TC-83은 토큰 없이 호출한다.
 
 ### 매 시나리오 시작 전 초기화
 
@@ -57,12 +91,16 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 
 ### A. 정상 흐름 (End-to-End) — TC-01 ~ TC-12
 
+> **TC-01 ~ TC-06은 관리자 API라 `X-ADMIN-KEY` 헤더가 필요하다.** 빠뜨리면 기대 결과 대신 401이 떨어진다. 발급 절차는 §2 참고. TC-07 이후는 사용자 API라 토큰이 필요 없다.
+>
+> TC-02 ~ TC-04는 이벤트 수정 API가 하나로 통합(#83)되면서 `PATCH /admin/events/{eventId}` 한 곳으로 바뀌었다. **`description`을 비울 때는 `null`이 아니라 빈 문자열을 보낸다** — `null`은 "이 필드는 안 바꾼다"는 뜻이라 아무 일도 일어나지 않는다.
+
 | ID | 시나리오 | 실행 | 기대 결과 | 담당 |
 | --- | --- | --- | --- | --- |
 | TC-01 | 이벤트 생성 | `POST /admin/events` | 201, `event.status = SCHEDULED` | 전송흔 |
-| TC-02 | 이벤트 이름 수정 | `PATCH /admin/events/{id}/name` | 200, 이름 변경 반영 | 전송흔 |
-| TC-03 | 이벤트 설명 비우기 | `PATCH /admin/events/{id}/description` · `description: null` | 200, `description`이 NULL | 전송흔 |
-| TC-04 | 이벤트 기간 수정 | `PATCH /admin/events/{id}/period` | 200, openAt·closeAt 변경 반영 | 전송흔 |
+| TC-02 | 이벤트 이름 수정 | `PATCH /admin/events/{eventId}` · `{"name": "..."}` | 200, 이름 변경 반영 | 전송흔 |
+| TC-03 | 이벤트 설명 비우기 | `PATCH /admin/events/{eventId}` · `{"description": ""}` | 200, `description`이 NULL | 전송흔 |
+| TC-04 | 이벤트 기간 수정 | `PATCH /admin/events/{eventId}` · `{"openAt": "...", "closeAt": "..."}` | 200, openAt·closeAt 변경 반영 | 전송흔 |
 | TC-05 | 쿠폰 생성 | `POST /admin/events/{eventId}/coupons` (재고 10) | 201, `coupon_stock.remaining_quantity = 10` | 전송흔 |
 | TC-06 | 이벤트 오픈 | `PATCH /admin/events/{id}/status` → OPEN | 200, `event_status_history`에 SCHEDULED→OPEN 1건 | 전송흔 |
 | TC-07 | 쿠폰 발급 신청 (접수) | `POST /coupons/{couponId}/issues` | 202, result = WAITING. Redis 재고 차감, 순번 채번 | 이성집 |
@@ -144,9 +182,11 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-63 | 정합성 검증 배치 — 중복 소비 탐지 (DUPLICATE_CONSUME) | 동일 Kafka 메시지 중복 소비 상황을 재현한 후 실행 | `verification_detail`에 DUPLICATE_CONSUME 기록 | 박신형 |
 | TC-64 | 정합성 검증 배치 — 순번 결번 탐지 (SEQUENCE_GAP) | sequence_no 결번·중복 상황을 만든 후 실행 | `verification_detail`에 SEQUENCE_GAP 기록 | 박신형 |
 | TC-65 | 정합성 검증 배치 — 재고 미복구 탐지 (STOCK_NOT_RESTORED) | DLQ 확정 건의 재고 보상 누락 상황을 재현한 후 실행 | `verification_detail`에 STOCK_NOT_RESTORED 기록 | 박신형 |
-| TC-66 | 정합성 검증 배치 트리거 | 관리자 API로 특정 쿠폰의 `reconcile()` 수동 호출 | 즉시 실행되고 리포트가 생성됨 | 박신형 |
+| TC-66 | 정합성 검증 배치 트리거 | `POST /admin/coupons/{couponId}/reconcile` (`X-ADMIN-KEY` 필요) | 즉시 실행되고 리포트가 생성됨 | 박신형 |
 
 > TC-62 ~ TC-65는 재고/순번/DLQ 확정 로직(#58, #72)에 붙는 2단계 검증이고, TC-66은 배치를 실행시키는 트리거다. 둘 다 아직 미구현 — §7 참고.
+>
+> **TC-66은 관리자 API라 토큰이 필요하다.** 나머지 D 구간은 SQL 조회와 데이터 조작이라 토큰과 무관하다.
 
 ### E. 비동기 발급 확정 (Kafka) — TC-70 ~ TC-76
 
@@ -285,14 +325,16 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 
 | 구간 | 도구 | 비고 |
 | --- | --- | --- |
-| A · B (단건) | k6 또는 각 담당자의 JUnit 테스트 | 순차 실행 |
+| A · B (단건) | k6 또는 각 담당자의 JUnit 테스트 | 순차 실행. TC-01 ~ 06은 `X-ADMIN-KEY` 필요 |
 | C (동시성) | k6 소규모 스크립트 | VU를 올리면 그대로 부하 테스트 스크립트가 됨 |
-| D (배치·정합성) | 수동 트리거 + SQL 조회 | 배치는 스케줄 대기 없이 직접 호출 |
+| D (배치·정합성) | 수동 트리거 + SQL 조회 | 배치는 스케줄 대기 없이 직접 호출. TC-66은 `X-ADMIN-KEY` 필요 |
 | E (비동기) | 컨테이너 기동·중단 + Consumer Lag 조회 | Docker로 Kafka·Consumer를 직접 조작 |
 | F (대량 데이터) | 더미 SQL 적재 후 재실행 + `EXPLAIN` | 부하 테스트 직전에 수행 |
 | G (선착순 순서) | k6 + 애플리케이션 로그 + SQL 조회 | 도착 시각은 로그에서, 순위는 `sequence_no`에서 확인 |
 
 각 담당자의 JUnit 테스트 결과는 `./gradlew test` 실행 후 `build/reports/tests/test/index.html`에서 한 번에 확인한다. 따로 결과를 취합해 전달할 필요는 없다.
+
+**JUnit 테스트는 세션 발급이 필요 없다.** 컨트롤러 슬라이스 테스트는 인터셉터를 거치지 않거나 테스트 설정으로 우회한다. 토큰이 필요한 건 실제 서버에 HTTP로 요청을 보내는 경우(k6·`curl`·Postman)뿐이다.
 
 ## 6. 결과 기록표
 
