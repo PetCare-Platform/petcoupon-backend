@@ -53,19 +53,22 @@ DELETE FROM event  WHERE name = 'SEED-더미 이벤트';
 -- 1. 더미 이벤트 1개
 --
 --    created_by 는 회원 시드가 만든 공용 관리자를 쓴다.
+--
+--    관리자를 먼저 변수에 담고 VALUES 로 넣는다. INSERT ... SELECT 로 하면 관리자가 없을 때
+--    0 행이 들어가는데, 그때 LAST_INSERT_ID() 는 갱신되지 않고 세션에 남은 이전 값을 그대로
+--    돌려준다. 그 값이 @event_id 가 되어 쿠폰 6개가 무관한 이벤트에 조용히 붙을 수 있다.
+--    아래처럼 두면 @admin_id 가 NULL 일 때 created_by 의 NOT NULL 제약에 걸려 여기서 멈춘다.
 -- ---------------------------------------------------------------------
+SET @admin_id = (SELECT user_id FROM app_user WHERE role = 'ROLE_ADMIN' ORDER BY user_id LIMIT 1);
+
 INSERT INTO event (name, description, open_at, close_at, status, created_by, created_at, updated_at)
-SELECT 'SEED-더미 이벤트',
-       '부하 테스트용 과거 발급 이력 적재',
-       NOW(6) - INTERVAL 90 DAY,
-       NOW(6) - INTERVAL 1 DAY,
-       'CLOSED',
-       u.user_id,
-       NOW(6), NOW(6)
-  FROM app_user u
- WHERE u.role = 'ROLE_ADMIN'
- ORDER BY u.user_id
- LIMIT 1;
+VALUES ('SEED-더미 이벤트',
+        '부하 테스트용 과거 발급 이력 적재',
+        NOW(6) - INTERVAL 90 DAY,
+        NOW(6) - INTERVAL 1 DAY,
+        'CLOSED',
+        @admin_id,
+        NOW(6), NOW(6));
 
 SET @event_id = LAST_INSERT_ID();
 
@@ -133,7 +136,11 @@ SELECT ROW_NUMBER() OVER (ORDER BY user_id), user_id
 --      coupon_code   'SEED' + 쿠폰id + 순번 (전역 유니크, 32자 이내)
 --      request_id    'seed-' + 쿠폰id + '-' + 순번 (전역 유니크)
 --
---    status 는 순번 끝자리로 나눈다 — ISSUED 70% / USED 20% / EXPIRED 10%.
+--    status 는 (회원 순번 + 쿠폰 ID) 끝자리로 나눈다 — ISSUED 70% / USED 20% / EXPIRED 10%.
+--
+--    회원 순번만 쓰면 안 된다. m.n 은 쿠폰이 달라도 같은 값이라, 한 회원이 5장을 갖고 있으면
+--    5장 모두 같은 상태가 된다. "내 쿠폰 목록에 ISSUED·USED·EXPIRED 가 섞여 있는" 상황을
+--    만들려면 쿠폰마다 달라지는 값을 섞어야 한다. @c 를 더해 그 상관관계를 끊는다.
 --    ISSUED 의 expires_at 은 반드시 미래로 둔다. 과거로 두면 만료 배치가
 --    이 더미를 EXPIRED 로 바꿔버려서 기준선이 흔들린다.
 --
@@ -154,11 +161,11 @@ SELECT @c,
        m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY,
        NOW(6) - INTERVAL 30 DAY
@@ -175,11 +182,11 @@ INSERT INTO coupon_issue
 SELECT @c, m.user_id, m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
   FROM seed_member_seq m
@@ -195,11 +202,11 @@ INSERT INTO coupon_issue
 SELECT @c, m.user_id, m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
   FROM seed_member_seq m
@@ -215,11 +222,11 @@ INSERT INTO coupon_issue
 SELECT @c, m.user_id, m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
   FROM seed_member_seq m
@@ -235,11 +242,11 @@ INSERT INTO coupon_issue
 SELECT @c, m.user_id, m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
   FROM seed_member_seq m
@@ -255,11 +262,11 @@ INSERT INTO coupon_issue
 SELECT @c, m.user_id, m.n - @from + 1,
        CONCAT('SEED', LPAD(@c, 6, '0'), LPAD(m.n, 10, '0')),
        CONCAT('seed-', @c, '-', m.n),
-       CASE WHEN m.n % 10 = 9 THEN 'EXPIRED'
-            WHEN m.n % 10 >= 7 THEN 'USED'
+       CASE WHEN (m.n + @c) % 10 = 9 THEN 'EXPIRED'
+            WHEN (m.n + @c) % 10 >= 7 THEN 'USED'
             ELSE 'ISSUED' END,
-       CASE WHEN m.n % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
-       CASE WHEN m.n % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
+       CASE WHEN (m.n + @c) % 10 BETWEEN 7 AND 8 THEN NOW(6) - INTERVAL (m.n % 30) DAY END,
+       CASE WHEN (m.n + @c) % 10 = 9 THEN NOW(6) - INTERVAL 1 DAY
             ELSE NOW(6) + INTERVAL 365 DAY END,
        NOW(6) - INTERVAL 30 DAY, NOW(6) - INTERVAL 30 DAY
   FROM seed_member_seq m
@@ -310,8 +317,14 @@ SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'ISSUED', 'EXPIRED', 'BATCH
 --
 --    안 맞추면 정합성 배치의 재고 검증이 처음부터 불일치로 나온다.
 -- ---------------------------------------------------------------------
+--    서브쿼리 안에서 대상 쿠폰을 먼저 좁힌다. 조건 없이 GROUP BY 하면 coupon_issue 전체를
+--    집계한 뒤에야 바깥에서 SEED-% 로 걸러내는데, 이 테이블에는 선착순 테스트 데이터도 함께
+--    쌓이므로 그럴수록 불필요하게 전체를 훑게 된다.
 UPDATE coupon_stock s
-  JOIN (SELECT coupon_id, COUNT(*) AS cnt FROM coupon_issue GROUP BY coupon_id) x
+  JOIN (SELECT ci.coupon_id, COUNT(*) AS cnt
+          FROM coupon_issue ci
+         WHERE ci.coupon_id IN (SELECT coupon_id FROM coupon WHERE name LIKE 'SEED-%')
+         GROUP BY ci.coupon_id) x
     ON x.coupon_id = s.coupon_id
   JOIN coupon c ON c.coupon_id = s.coupon_id
    SET s.issued_quantity    = x.cnt,
