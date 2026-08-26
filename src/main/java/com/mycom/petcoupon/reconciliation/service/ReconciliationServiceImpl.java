@@ -14,6 +14,8 @@ import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueRedisKeys;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -36,6 +38,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
     private final CouponStockRepository couponStockRepository;
     private final ReconciliationReportRepository reconciliationReportRepository;
     private final StringRedisTemplate redisTemplate;
+    private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -51,6 +54,15 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         // 발급 마감(ENDED) 후에만 이 배치가 신뢰할 수 있는 결과를 낸다.
         if (coupon.getStatus() != CouponStatus.ENDED) {
             throw new GeneralException(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
+        }
+
+        // ENDED는 "한 번이라도 마감된 적 있는지"만 본다 — 부하 테스트가 쿠폰 하나를 여러 회차
+        // 재사용하는 구조라(§CouponResetRequest), 2회차 이후로는 status가 계속 ENDED라 이 체크
+        // 하나로는 "지금 회차가 아직 진행 중인지"를 못 거른다. 그래서 파이프라인 자체가
+        // 드레인됐는지(Outbox/Stream에 처리 중인 요청이 없는지)를 추가로 확인한다.
+        PipelineDrainStatus drainStatus = pipelineDrainChecker.check(couponId);
+        if (drainStatus.isBlocked()) {
+            throw new GeneralException(CouponErrorCode.RECONCILIATION_PIPELINE_NOT_DRAINED);
         }
 
         CouponStock stock = couponStockRepository.findById(couponId)

@@ -53,6 +53,10 @@ public enum CouponErrorCode implements BaseErrorCode {
     // 409-8은 PR #88(RESET_PRECONDITION_NOT_MET)이 같은 번호로 먼저 dev에 머지돼서 409-9로 둔다.
     RECONCILIATION_NOT_ALLOWED_YET(HttpStatus.CONFLICT, "COUPON409-9", "발급이 종료된 쿠폰만 정합성 검증할 수 있습니다."),
 
+    // ENDED 체크와 별도 코드로 둔 이유 — 원인이 다르다. 이건 CouponIssuePipelineDrainChecker가
+    // 감지하는 "아직 파이프라인에 처리 중인 요청이 남음"이라, 보통 몇 초~몇십 초면 자연히 풀린다.
+    RECONCILIATION_PIPELINE_NOT_DRAINED(HttpStatus.CONFLICT, "COUPON409-10", "처리 중인 요청이 남아있어 정합성 검증을 할 수 없습니다. 잠시 후 다시 시도해주세요."),
+
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
 	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
 	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
