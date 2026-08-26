@@ -58,17 +58,20 @@ public class ReconciliationReport {
 	@Column(name = "finished_at") 
 	private LocalDateTime finishedAt;
 	 
-	@Column(name = "total_count", nullable = false) 
-	private long totalCount; 
-	
-	@Column(name = "success_count", nullable = false) 
-	private long successCount; 
-	
-	@Column(name = "error_count", nullable = false) 
+	@Column(name = "total_count", nullable = false)
+	private long totalCount;
+
+	@Column(name = "success_count", nullable = false)
+	private long successCount;
+
+	// 발급 건(coupon_issue row) 단위로 문제가 있는 건수만 센다. STOCK_MISMATCH/SEQUENCE_GAP처럼
+	// 특정 발급 건이 아니라 쿠폰 전체를 가리키는 문제는 couponIssueId가 없어서 여기 안 잡힌다.
+	// 그래서 errorCount==0 이어도 result가 MISMATCHED일 수 있다 — "문제가 있는지"는 반드시
+	// result로 판단하고, errorCount는 "발급 건 몇 개가 걸렸는지"를 보는 보조 지표로만 쓴다.
+	@Column(name = "error_count", nullable = false)
 	private long errorCount;
-	 
-	// 이번 범위(#57/#58 파이프라인 대기)에서 아직 계산할 데이터가 없어 null 허용 —
-	// null은 "미검증", 0은 "검증했고 실제로 0건"을 뜻하므로 구분해야 함
+
+	// null은 "미검증"(Redis 키가 아예 없는 등), 0은 "검증했고 실제로 0건"을 뜻하므로 구분해야 함
 	@Column(name = "stock_total")
 	private Integer stockTotal;
 
