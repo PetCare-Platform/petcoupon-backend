@@ -21,6 +21,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueEventConsumer;
@@ -38,8 +39,9 @@ import jakarta.persistence.PersistenceContext;
 /**
  * #119 알림 로그 기록이 (1) Kafka 재전달로 같은 이벤트가 동시에 여러 번 처리돼도 중복 기록되지
  * 않는지, (2) 발급 자체가 롤백되는 상황에서 알림 로그만 남는 반쪽 상태가 생기지 않는지를
- * 실제 스레드 동시성 + 실제 MySQL로 검증한다. recordNotification()은 persist() 트랜잭션
- * 내부에서만 호출돼서 코드상으로는 안전해 보이지만, "될 것 같다"가 아니라 실측으로 확인한다.
+ * 실제 스레드 동시성 + 실제 MySQL로 검증한다. recordNotification()은 persist()와 별도
+ * 트랜잭션으로 분리돼있어(phone null 등으로 알림 저장이 실패해도 발급 자체는 롤백되지 않게 하기
+ * 위함), Consumer가 persist() 성공 이후 별도로 호출한다 — "될 것 같다"가 아니라 실측으로 확인한다.
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
@@ -178,11 +180,58 @@ class CouponIssuePersisterIntegrationTest {
 		String requestId = "notification-single-" + UUID.randomUUID();
 		CouponIssueEvent event = newEvent(requestId, 1L);
 
-		persister.persist(event);
+		CouponIssue couponIssue = persister.persist(event);
+		persister.recordNotification(couponIssue);
 
 		entityManager.clear();
 
 		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
+	}
+
+	@Test
+	void phone이_없어도_발급은_정상_처리되고_알림_기록만_실패한다() {
+		AppUser userWithoutPhone = AppUser.builder()
+				.name("phone 없는 사용자")
+				.email("no-phone-" + UUID.randomUUID() + "@test.com")
+				.phone(null)
+				.build();
+		transactionTemplate.executeWithoutResult(status -> entityManager.persist(userWithoutPhone));
+
+		String requestId = "notification-no-phone-" + UUID.randomUUID();
+		CouponIssueEvent event = new CouponIssueEvent(
+			couponId, userWithoutPhone.getUserId(), requestId, 1L, "CODE-1", LocalDateTime.now().plusDays(7)
+		);
+
+		CouponIssue couponIssue = persister.persist(event);
+
+		entityManager.clear();
+
+		// 발급 자체는 정상 커밋됐다 — phone null로 인한 알림 저장 실패가 여기까지 영향을 주지 않는다
+		assertThat(couponIssueRepository.existsByRequestId(requestId)).isTrue();
+
+		assertThatThrownBy(() -> persister.recordNotification(couponIssue))
+				.isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+		entityManager.clear();
+
+		// recordNotification()이 실패해도 이미 커밋된 발급(coupon_issue)은 그대로 남아있다
+		assertThat(couponIssueRepository.existsByRequestId(requestId)).isTrue();
+		assertThat(notificationCountOf(couponId)).isZero();
+
+		// tearDownData()가 couponId 기준으로 coupon_issue를 지우기 전에, 이 유저를 참조하는
+		// coupon_issue_history/coupon_issue를 먼저 지워야 app_user 삭제가 FK 위반 없이 끝난다
+		transactionTemplate.executeWithoutResult(status -> {
+			entityManager.createNativeQuery(
+					"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.request_id = :requestId")
+					.setParameter("requestId", requestId)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE request_id = :requestId")
+					.setParameter("requestId", requestId)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id = :userId")
+					.setParameter("userId", userWithoutPhone.getUserId())
+					.executeUpdate();
+		});
 	}
 
 	@Test

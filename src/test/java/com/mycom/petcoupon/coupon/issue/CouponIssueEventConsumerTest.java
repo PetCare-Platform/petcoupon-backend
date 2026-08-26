@@ -57,10 +57,26 @@ class CouponIssueEventConsumerTest {
 	}
 
 	@Test
-	void 정상_이벤트는_Persister에_저장을_위임한다() {
+	void 정상_이벤트는_Persister에_저장을_위임하고_알림을_기록한다() {
 		when(couponIssueRepository.findByRequestId("issue:42")).thenReturn(Optional.empty());
+		CouponIssue saved = mock(CouponIssue.class);
+		when(couponIssuePersister.persist(EVENT)).thenReturn(saved);
 
 		consumer.consume(EVENT);
+
+		verify(couponIssuePersister).persist(EVENT);
+		verify(couponIssuePersister).recordNotification(saved);
+	}
+
+	@Test
+	void 알림_기록이_실패해도_발급_처리_자체는_예외없이_끝난다() {
+		when(couponIssueRepository.findByRequestId("issue:42")).thenReturn(Optional.empty());
+		CouponIssue saved = mock(CouponIssue.class);
+		when(couponIssuePersister.persist(EVENT)).thenReturn(saved);
+		doThrow(new RuntimeException("notification insert failed"))
+			.when(couponIssuePersister).recordNotification(saved);
+
+		assertThatCode(() -> consumer.consume(EVENT)).doesNotThrowAnyException();
 
 		verify(couponIssuePersister).persist(EVENT);
 	}

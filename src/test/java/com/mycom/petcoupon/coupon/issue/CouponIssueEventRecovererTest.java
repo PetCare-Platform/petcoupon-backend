@@ -59,7 +59,7 @@ class CouponIssueEventRecovererTest {
 
 		recoverer.accept(record, new RuntimeException("consume failed"));
 
-		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
+		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq(String.valueOf(EVENT.couponId())), eq(EVENT));
 		verify(issueMessageRepository).markDlq(
 			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
 		);
@@ -76,7 +76,7 @@ class CouponIssueEventRecovererTest {
 
 		recoverer.accept(record, new RuntimeException("consume failed"));
 
-		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
+		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq(String.valueOf(EVENT.couponId())), eq(EVENT));
 	}
 
 	@Test
@@ -90,7 +90,7 @@ class CouponIssueEventRecovererTest {
 
 		recoverer.accept(record, new RuntimeException("consume failed"));
 
-		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq("request-1"), eq(EVENT));
+		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq(String.valueOf(EVENT.couponId())), eq(EVENT));
 	}
 
 	@Test

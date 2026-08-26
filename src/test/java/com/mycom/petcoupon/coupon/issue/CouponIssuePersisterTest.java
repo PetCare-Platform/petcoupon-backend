@@ -93,7 +93,6 @@ class CouponIssuePersisterTest {
 
 		when(couponRepository.getReferenceById(1L)).thenReturn(coupon);
 		when(appUserRepository.findById(10L)).thenReturn(Optional.of(user));
-		when(user.getPhone()).thenReturn("010-1234-5678");
 
 		ArgumentCaptor<CouponIssue> couponIssueCaptor = ArgumentCaptor.forClass(CouponIssue.class);
 		when(couponIssueRepository.saveAndFlush(couponIssueCaptor.capture()))
@@ -132,6 +131,22 @@ class CouponIssuePersisterTest {
 		verify(issueMessageRepository)
 			.updateStatusByMessageKey(KafkaTopics.COUPON_ISSUE_EVENT, "issue:42", IssueMessageStatus.CONSUMED);
 
+		// 알림 기록은 persist()와 별도 트랜잭션(recordNotification())으로 분리돼있어 여기서는 호출되지 않는다
+		verifyNoInteractions(notificationLogRepository);
+	}
+
+	@Test
+	void recordNotification_호출시_알림_로그가_저장된다() {
+		AppUser user = mock(AppUser.class);
+		when(user.getPhone()).thenReturn("010-1234-5678");
+
+		CouponIssue couponIssue = CouponIssue.builder()
+			.user(user)
+			.couponCode("COUPON-CODE-1")
+			.build();
+
+		persister.recordNotification(couponIssue);
+
 		ArgumentCaptor<NotificationLog> notificationCaptor = ArgumentCaptor.forClass(NotificationLog.class);
 		verify(notificationLogRepository).save(notificationCaptor.capture());
 
@@ -167,9 +182,6 @@ class CouponIssuePersisterTest {
 		// CONSUMED 배선은 idempotency_key 형식과 무관하게 항상 동작한다 (requestId를 그대로 message_key로 씀)
 		verify(issueMessageRepository)
 			.updateStatusByMessageKey(KafkaTopics.COUPON_ISSUE_EVENT, "pipeline-test-request", IssueMessageStatus.CONSUMED);
-
-		// 알림 기록도 idempotency_key 형식과 무관하게 항상 동작한다
-		verify(notificationLogRepository).save(any(NotificationLog.class));
 	}
 
 	@Test
