@@ -242,22 +242,21 @@ public class CouponIssueLuaServiceIntegrationTest {
     }
     
     @Test
-    void 재고와_발급수를_실시간으로_조회한다() {
+    void 재고_키가_있으면_초기화된_상태로_실시간_재고를_조회한다() {
         redisTemplate.opsForValue().set(issueKey("stock"), "7");
-        redisTemplate.opsForValue().set(issueKey("sequence"), "3");
 
         CouponIssueRealtimeStock stock = couponIssueLuaService.getRealtimeStock(COUPON_ID);
 
+        assertThat(stock.initialized()).isTrue();
         assertThat(stock.remainingStock()).isEqualTo(7);
-        assertThat(stock.issuedCount()).isEqualTo(3);
     }
 
     @Test
-    void 재고_키와_발급수_키가_없으면_0으로_조회한다() {
+    void 재고_키가_없으면_미초기화_상태로_조회한다() {
         CouponIssueRealtimeStock stock = couponIssueLuaService.getRealtimeStock(COUPON_ID);
 
+        assertThat(stock.initialized()).isFalse();
         assertThat(stock.remainingStock()).isZero();
-        assertThat(stock.issuedCount()).isZero();
     }
 
     @Test

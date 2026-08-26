@@ -286,6 +286,7 @@ class CouponControllerTest {
                 .totalQuantity(100)
                 .remainingQuantity(60)
                 .issuedQuantity(40)
+                .initialized(true)
                 .build();
 
         when(couponRealtimeStatusService.getRealtimeStatus(5L)).thenReturn(response);
@@ -295,7 +296,8 @@ class CouponControllerTest {
                 .andExpect(jsonPath("$.result.couponId").value(5))
                 .andExpect(jsonPath("$.result.totalQuantity").value(100))
                 .andExpect(jsonPath("$.result.remainingQuantity").value(60))
-                .andExpect(jsonPath("$.result.issuedQuantity").value(40));
+                .andExpect(jsonPath("$.result.issuedQuantity").value(40))
+                .andExpect(jsonPath("$.result.initialized").value(true));
     }
 
     @Test

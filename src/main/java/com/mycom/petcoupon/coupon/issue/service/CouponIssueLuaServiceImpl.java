@@ -148,28 +148,33 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
         }
     }
 
-    // 실시간(=Redis 기준) 잔여 재고·발급 완료 수 조회. 둘 다 Lua 스크립트가 관리하는
-    // 같은 키(stock/sequence)를 GET만 하는 읽기 전용 조회라 Lua가 필요 없다.
-    // 키가 아직 초기화 안 됐으면(첫 조회 등) 0으로 취급한다.
+    // 실시간(=Redis 기준) 잔여 재고 조회. Lua 스크립트가 관리하는 stock 키를 GET만 하는
+    // 읽기 전용 조회라 Lua가 필요 없다.
+    // stock 키가 아예 없으면 "품절(0)"이 아니라 "아직 초기화 안 됨"이다 — Lua도 이 둘을
+    // STOCK_NOT_INITIALIZED로 따로 구분한다(coupon-issue.lua). 발급 완료 수는 여기서 세는
+    // sequence 값(선착순 순번 발급기, 재고 복구를 반영하지 않음) 대신 총수량에서 잔여를 뺀
+    // 값으로 호출부(CouponConverter)가 계산한다.
     @Override
     public CouponIssueRealtimeStock getRealtimeStock(Long couponId) {
         validateCouponId(couponId);
 
         try {
             String stockValue = redisTemplate.opsForValue().get(issueKey("stock", couponId));
-            String sequenceValue = redisTemplate.opsForValue().get(issueKey("sequence", couponId));
+
+            if (stockValue == null) {
+                return CouponIssueRealtimeStock.builder()
+                        .initialized(false)
+                        .remainingStock(0)
+                        .build();
+            }
 
             return CouponIssueRealtimeStock.builder()
-                    .remainingStock(parseOrZero(stockValue))
-                    .issuedCount(parseOrZero(sequenceValue))
+                    .initialized(true)
+                    .remainingStock(Integer.parseInt(stockValue))
                     .build();
         } catch (DataAccessException e) {
             log.error("쿠폰 실시간 재고 조회 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
             throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
         }
-    }
-
-    private int parseOrZero(String value) {
-        return value == null ? 0 : Integer.parseInt(value);
     }
 }

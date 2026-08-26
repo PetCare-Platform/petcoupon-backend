@@ -4,6 +4,6 @@ import lombok.Builder;
 
 @Builder
 public record CouponIssueRealtimeStock(
-    int remainingStock,
-    int issuedCount
+    boolean initialized,
+    int remainingStock
 ) {}

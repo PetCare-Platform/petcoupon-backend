@@ -56,11 +56,19 @@ public class CouponConverter {
 
 	public CouponRealtimeStatusResponse toRealtimeStatusResponse(
 			Coupon coupon, CouponStock couponStock, CouponIssueRealtimeStock realtimeStock) {
+		int totalQuantity = couponStock.getTotalQuantity();
+
+		// Redis가 아직 초기화 안 된 상태(발급 시작 전)면 Lua가 발급 자체를 막아주므로
+		// 실제로는 아무도 발급받지 못한 게 맞다 — 잔여를 총수량 그대로 노출한다.
+		int remainingQuantity = realtimeStock.initialized() ? realtimeStock.remainingStock() : totalQuantity;
+		int issuedQuantity = totalQuantity - remainingQuantity;
+
 		return CouponRealtimeStatusResponse.builder()
 				.couponId(coupon.getCouponId())
-				.totalQuantity(couponStock.getTotalQuantity())
-				.remainingQuantity(realtimeStock.remainingStock())
-				.issuedQuantity(realtimeStock.issuedCount())
+				.totalQuantity(totalQuantity)
+				.remainingQuantity(remainingQuantity)
+				.issuedQuantity(issuedQuantity)
+				.initialized(realtimeStock.initialized())
 				.build();
 	}
 

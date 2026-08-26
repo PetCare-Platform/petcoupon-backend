@@ -46,8 +46,8 @@ class CouponRealtimeStatusServiceImplTest {
         Coupon coupon = Coupon.builder().build();
         CouponStock couponStock = CouponStock.builder().coupon(coupon).totalQuantity(100).build();
         CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+                .initialized(true)
                 .remainingStock(60)
-                .issuedCount(40)
                 .build();
         CouponRealtimeStatusResponse expected = CouponRealtimeStatusResponse.builder()
                 .couponId(1L)

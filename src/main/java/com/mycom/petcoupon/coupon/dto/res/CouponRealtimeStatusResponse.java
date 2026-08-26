@@ -7,5 +7,6 @@ public record CouponRealtimeStatusResponse(
     Long couponId,
     int totalQuantity,
     int remainingQuantity,
-    int issuedQuantity
+    int issuedQuantity,
+    boolean initialized
 ) {}
