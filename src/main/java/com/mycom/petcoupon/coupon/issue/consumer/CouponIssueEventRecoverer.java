@@ -5,13 +5,18 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ConsumerRecordRecoverer;
 import org.springframework.stereotype.Component;
 
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
+import com.mycom.petcoupon.global.common.CustomResponse;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.databind.ObjectMapper;
 
 @Slf4j
 @Component
@@ -20,6 +25,8 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 
 	private final KafkaTemplate<String, Object> kafkaTemplate;
 	private final IssueMessageRepository issueMessageRepository;
+	private final IdempotencyKeyService idempotencyKeyService;
+	private final ObjectMapper objectMapper;
 
 	@Override
 	public void accept(ConsumerRecord<?, ?> record, Exception exception) {
@@ -50,6 +57,12 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 		}
 
 		try {
+			failIdempotency(event);
+		} catch (Exception e) {
+			log.error("[CouponIssueEvent] idempotency_key FAILED 확정 중 예외 발생: requestId={}", event.requestId(), e);
+		}
+
+		try {
 			publishToDlqTopic(event);
 		} catch (Exception e) {
 			log.error("[CouponIssueEvent] DLQ 토픽 발행 중 예외 발생, 수동 확인 필요: requestId={}", event.requestId(), e);
@@ -70,6 +83,20 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 				"[CouponIssueEvent] issue_message row를 찾지 못해 DLQ 상태 갱신 불가: requestId={}", event.requestId()
 			);
 		}
+	}
+
+	// 재시도가 모두 소진돼 DLQ로 넘어간 최종 실패 — 여기서 확정하지 않으면 idempotency_key가 접수 시점
+	// SUCCEEDED("WAITING")에 영원히 머물러서, GET .../status를 폴링하는 클라이언트가 결과를 영영 못 받는다.
+	// requestId가 "issue:" 형식이 아니면(Producer 직접 호출 등) idempotency_key 자체가 없으므로 건너뛴다.
+	private void failIdempotency(CouponIssueEvent event) {
+		IdempotencyRequestIdCodec.tryDecode(event.requestId()).ifPresent(recordId -> {
+			CustomResponse<Void> failure = CustomResponse.onFailure(CouponErrorCode.ISSUE_CONFIRMATION_FAILED);
+			idempotencyKeyService.fail(
+				recordId,
+				CouponErrorCode.ISSUE_CONFIRMATION_FAILED.getStatus().value(),
+				objectMapper.writeValueAsString(failure)
+			);
+		});
 	}
 
 	// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
