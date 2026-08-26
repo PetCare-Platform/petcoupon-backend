@@ -36,8 +36,5 @@ out/
 ### VS Code ###
 .vscode/
 
-### Eclipse / STS 워크스페이스 ###
-.metadata/
-
 ### macOS ###
 .DS_Store
