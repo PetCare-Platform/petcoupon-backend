@@ -2,6 +2,7 @@ package com.mycom.petcoupon.reconciliation.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -24,6 +25,8 @@ import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
@@ -64,11 +67,18 @@ class ReconciliationServiceImplTest {
     @MockitoBean
     private StringRedisTemplate redisTemplate;
 
+    @MockitoBean
+    private CouponIssuePipelineDrainChecker pipelineDrainChecker;
+
     private Coupon coupon;
     private int sequenceCounter = 0;
 
     @BeforeEach
     void setUp() {
+        // 이 클래스의 테스트는 파이프라인 드레인 자체가 검증 대상이 아니라, 기본적으로 항상
+        // "드레인 끝남"으로 두고 시작한다. 막히는 케이스는 별도 테스트에서 개별 스텁한다.
+        when(pipelineDrainChecker.check(any())).thenReturn(new PipelineDrainStatus(0, 0, false));
+
         AppUser admin = AppUser.builder()
                 .name("관리자").email("recon-admin@test.com").phone("010-0000-0000")
                 .role(UserRole.ROLE_ADMIN).build();
@@ -286,6 +296,30 @@ class ReconciliationServiceImplTest {
                 .isInstanceOf(GeneralException.class)
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
+    }
+
+    @Test
+    void 파이프라인이_드레인_안됐으면_ENDED여도_정합성_검증을_거부한다() {
+        // 재사용되는 쿠폰은 2회차부터 status가 계속 ENDED라, ENDED 체크만으로는 "이번 회차가
+        // 아직 진행 중인지"를 못 거른다 — 그래서 이 체크가 별도로 필요하다.
+        when(pipelineDrainChecker.check(coupon.getCouponId()))
+                .thenReturn(new PipelineDrainStatus(1, 0, false));
+
+        assertThatThrownBy(() -> reconciliationService.reconcile(coupon.getCouponId()))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.RECONCILIATION_PIPELINE_NOT_DRAINED);
+    }
+
+    @Test
+    void 파이프라인_잔여_검사_자체가_실패하면_안전하게_정합성_검증을_거부한다() {
+        when(pipelineDrainChecker.check(coupon.getCouponId()))
+                .thenReturn(new PipelineDrainStatus(0, 0, true));
+
+        assertThatThrownBy(() -> reconciliationService.reconcile(coupon.getCouponId()))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.RECONCILIATION_PIPELINE_NOT_DRAINED);
     }
 
     private void markCouponEnded(Long couponId) {
