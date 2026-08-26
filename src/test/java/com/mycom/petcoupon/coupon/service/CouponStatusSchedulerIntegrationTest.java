@@ -35,7 +35,9 @@ import jakarta.persistence.PersistenceContext;
  */
 @SpringBootTest(properties = {
 		"coupon.status.interval-seconds=1",
-		"coupon.issue.stream.enabled=false"
+		"coupon.issue.stream.enabled=false",
+		// 이 테스트는 쿠폰 스케줄러만 검증 대상이므로 무관한 이벤트 스케줄러만 끔
+		"event.status.scheduler.enabled=false"
 })
 class CouponStatusSchedulerIntegrationTest {
 
@@ -102,6 +104,9 @@ class CouponStatusSchedulerIntegrationTest {
 	private void tearDownData() {
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
 				.setParameter("couponId", coupon.getCouponId())
+				.executeUpdate();
+		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
+				.setParameter("eventId", event.getEventId())
 				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
 				.setParameter("eventId", event.getEventId())

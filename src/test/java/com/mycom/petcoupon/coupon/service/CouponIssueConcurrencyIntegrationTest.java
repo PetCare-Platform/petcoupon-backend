@@ -45,7 +45,11 @@ import jakarta.persistence.PersistenceContext;
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서 경합 자체를 차단
+	"event.status.scheduler.enabled=false",
+	"coupon.status.enabled=false"
+})
 class CouponIssueConcurrencyIntegrationTest {
 
 	@PersistenceContext
@@ -143,6 +147,9 @@ class CouponIssueConcurrencyIntegrationTest {
 				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
 				.setParameter("couponId", coupon.getCouponId())
+				.executeUpdate();
+		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
+				.setParameter("eventId", event.getEventId())
 				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
 				.setParameter("eventId", event.getEventId())
