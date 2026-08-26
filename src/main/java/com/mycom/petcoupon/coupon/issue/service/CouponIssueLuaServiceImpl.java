@@ -175,6 +175,9 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
         } catch (DataAccessException e) {
             log.error("쿠폰 실시간 재고 조회 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
             throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
+        } catch (NumberFormatException e) {
+            log.error("쿠폰 실시간 재고 값이 숫자 형식이 아닙니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
         }
     }
 }

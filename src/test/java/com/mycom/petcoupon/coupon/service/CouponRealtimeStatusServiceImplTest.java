@@ -75,4 +75,68 @@ class CouponRealtimeStatusServiceImplTest {
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
     }
+
+    @Test
+    void getRealtimeStatus_throwsException_whenRemainingStockIsNegative() {
+        Coupon coupon = Coupon.builder().build();
+        CouponStock couponStock = CouponStock.builder().coupon(coupon).totalQuantity(100).build();
+        CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+                .initialized(true)
+                .remainingStock(-1)
+                .build();
+
+        when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
+        when(couponStockRepository.findById(1L)).thenReturn(Optional.of(couponStock));
+        when(couponIssueLuaService.getRealtimeStock(1L)).thenReturn(realtimeStock);
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getRealtimeStatus(1L))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+    }
+
+    @Test
+    void getRealtimeStatus_throwsException_whenRemainingStockExceedsTotalQuantity() {
+        Coupon coupon = Coupon.builder().build();
+        CouponStock couponStock = CouponStock.builder().coupon(coupon).totalQuantity(100).build();
+        CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+                .initialized(true)
+                .remainingStock(101)
+                .build();
+
+        when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
+        when(couponStockRepository.findById(1L)).thenReturn(Optional.of(couponStock));
+        when(couponIssueLuaService.getRealtimeStock(1L)).thenReturn(realtimeStock);
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getRealtimeStatus(1L))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+    }
+
+    @Test
+    void getRealtimeStatus_skipsValidation_whenNotInitialized() {
+        Coupon coupon = Coupon.builder().build();
+        CouponStock couponStock = CouponStock.builder().coupon(coupon).totalQuantity(100).build();
+        CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+                .initialized(false)
+                .remainingStock(0)
+                .build();
+        CouponRealtimeStatusResponse expected = CouponRealtimeStatusResponse.builder()
+                .couponId(1L)
+                .totalQuantity(100)
+                .remainingQuantity(100)
+                .issuedQuantity(0)
+                .initialized(false)
+                .build();
+
+        when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
+        when(couponStockRepository.findById(1L)).thenReturn(Optional.of(couponStock));
+        when(couponIssueLuaService.getRealtimeStock(1L)).thenReturn(realtimeStock);
+        when(couponConverter.toRealtimeStatusResponse(coupon, couponStock, realtimeStock)).thenReturn(expected);
+
+        CouponRealtimeStatusResponse response = couponRealtimeStatusService.getRealtimeStatus(1L);
+
+        assertThat(response).isEqualTo(expected);
+    }
 }

@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
@@ -257,6 +258,16 @@ public class CouponIssueLuaServiceIntegrationTest {
 
         assertThat(stock.initialized()).isFalse();
         assertThat(stock.remainingStock()).isZero();
+    }
+
+    @Test
+    void 재고_값이_숫자가_아니면_조회_실패_예외로_변환한다() {
+        redisTemplate.opsForValue().set(issueKey("stock"), "not-a-number");
+
+        assertThatThrownBy(() -> couponIssueLuaService.getRealtimeStock(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
     }
 
     @Test
