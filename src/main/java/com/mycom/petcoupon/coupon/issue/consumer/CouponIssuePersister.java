@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.issue.consumer;
 
+import java.time.LocalDateTime;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +20,11 @@ import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
+import com.mycom.petcoupon.notification.entity.NotificationLog;
+import com.mycom.petcoupon.notification.entity.enums.Channel;
+import com.mycom.petcoupon.notification.entity.enums.NotificationStatus;
+import com.mycom.petcoupon.notification.repository.NotificationLogRepository;
+import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -37,13 +44,25 @@ public class CouponIssuePersister {
 	private final CouponIssueConverter couponIssueConverter;
 	private final IdempotencyKeyService idempotencyKeyService;
 	private final ObjectMapper objectMapper;
+	private final NotificationLogRepository notificationLogRepository;
 
 	@Transactional
 	public CouponIssue persist(CouponIssueEvent event) {
+		// getReferenceById(지연 프록시)를 쓰면 안 된다 — increaseIssuedQuantity()가
+		// @Modifying(clearAutomatically = true)라 영속성 컨텍스트를 통째로 비우는데, 그 뒤
+		// recordNotification()에서 user.getPhone()으로 프록시를 초기화하려 하면 컨텍스트가
+		// 이미 비워져 있어 LazyInitializationException이 발생한다(실측 확인함, 동시성과 무관하게
+		// 단일 요청에서도 항상 재현됨). findById로 미리 실제 값을 로딩해두면 컨텍스트가 비워져도
+		// 이미 메모리에 있는 필드값이라 안전하다.
+		AppUser user = appUserRepository.findById(event.userId())
+			.orElseThrow(() -> new IllegalStateException(
+				"발급 대상 사용자를 찾을 수 없음: userId=" + event.userId() + ", requestId=" + event.requestId()
+			));
+
 		CouponIssue couponIssue = couponIssueRepository.saveAndFlush(
 			CouponIssue.builder()
 				.coupon(couponRepository.getReferenceById(event.couponId()))
-				.user(appUserRepository.getReferenceById(event.userId()))
+				.user(user)
 				.sequenceNo(event.sequenceNo())
 				.couponCode(event.couponCode())
 				.requestId(event.requestId())
@@ -76,7 +95,29 @@ public class CouponIssuePersister {
 		// 여기서 분리하면 "발급은 커밋됐는데 idempotency_key는 IN_PROGRESS로 남는" 반쪽 상태가 생길 수 있다.
 		confirmIdempotencySucceeded(couponIssue, event.requestId());
 
+		// 스펙 아키텍처(Kafka Consumer → DB confirmation → Notification Mock)의 Mock 알림 기록.
+		// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
+		// 유니크 제약도 있고, 애초에 발급이 실제로 처음 일어난 시점에만 알림이 나가야 하기 때문에
+		// confirmIdempotencySucceeded/markConsumed와 달리 persist() 안에서만 호출되는 private 메서드다.
+		recordNotification(couponIssue, user);
+
 		return couponIssue;
+	}
+
+	// TODO(#119): recipientMasked는 개인정보 마스킹 담당자가 별도로 처리 예정 — 지금은 마스킹 전
+	// 원본 전화번호를 그대로 넣어둠. 마스킹 로직이 준비되면 이 자리를 그걸로 교체할 것.
+	private void recordNotification(CouponIssue couponIssue, AppUser user) {
+		notificationLogRepository.save(
+			NotificationLog.builder()
+				.couponIssue(couponIssue)
+				.user(user)
+				.channel(Channel.SMS)
+				.recipientMasked(user.getPhone())
+				.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
+				.status(NotificationStatus.SENT)
+				.sentAt(LocalDateTime.now())
+				.build()
+		);
 	}
 
 	// Kafka 재전달로 이미 저장된 CouponIssue를 다시 만났을 때(CouponIssueEventConsumer의 스킵 분기)도

@@ -24,6 +24,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -73,6 +74,21 @@ public class NotificationLog {
 	private LocalDateTime sentAt; 
 	
 	@CreatedDate
-	@Column(name = "created_at", nullable = false, updatable = false) 
+	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
+
+	@Builder
+	private NotificationLog(CouponIssue couponIssue, AppUser user, Channel channel,
+			String recipientMasked, String content, NotificationStatus status, LocalDateTime sentAt) {
+		this.couponIssue = couponIssue;
+		this.user = user;
+		this.channel = channel;
+		this.recipientMasked = recipientMasked;
+		this.content = content;
+		// status 필드의 인라인 기본값(PENDING)이 빌더 생성자에서 무조건 덮어써지지 않도록 null이면 유지
+		if (status != null) {
+			this.status = status;
+		}
+		this.sentAt = sentAt;
+	}
 }
