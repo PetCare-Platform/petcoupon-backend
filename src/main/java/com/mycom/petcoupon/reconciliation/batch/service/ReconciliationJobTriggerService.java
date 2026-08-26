@@ -2,6 +2,8 @@ package com.mycom.petcoupon.reconciliation.batch.service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
@@ -13,12 +15,17 @@ import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.launch.JobRestartException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.reconciliation.converter.ReconciliationConverter;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
+import com.mycom.petcoupon.reconciliation.entity.VerificationDetail;
+import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
 import com.mycom.petcoupon.reconciliation.repository.ReconciliationReportRepository;
+import com.mycom.petcoupon.reconciliation.repository.VerificationDetailRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -35,9 +42,10 @@ public class ReconciliationJobTriggerService {
     private final JobOperator jobOperator;
     private final Job reconciliationJob;
     private final ReconciliationReportRepository reconciliationReportRepository;
+    private final VerificationDetailRepository verificationDetailRepository;
     private final ReconciliationBatchExecutionLogger batchExecutionLogger;
 
-    public ReconciliationReport reconcile(Long couponId) {
+    public ReconciliationBatchResult reconcile(Long couponId) {
         JobParameters jobParameters = new JobParametersBuilder()
                 .addLong("couponId", couponId)
                 .addLocalDateTime("asOfAt", LocalDateTime.now())
@@ -58,14 +66,35 @@ public class ReconciliationJobTriggerService {
 
         if (execution.getStatus() == BatchStatus.COMPLETED) {
             Long reportId = execution.getExecutionContext().getLong("reportId");
-            ReconciliationReport report = reconciliationReportRepository.findByIdWithDetails(reportId)
-                    .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
-            batchExecutionLogger.log(execution, report);
-            return report;
+            ReconciliationBatchResult result = loadResult(reportId);
+            batchExecutionLogger.log(execution, result);
+            return result;
         }
 
         batchExecutionLogger.log(execution, null);
         throw resolveFailureException(execution);
+    }
+
+    // verificationDetails를 JOIN FETCH로 통째로 읽지 않는다 — 300만 건 규모에서 불일치가
+    // 대량으로 나는 극단적 케이스에도 응답 조립 시점에 전체를 메모리에 올리지 않도록, 전체
+    // 건수·응답용 상위 N건·로그용 타입별 집계를 각각 필요한 만큼만 조회한다.
+    private ReconciliationBatchResult loadResult(Long reportId) {
+        ReconciliationReport report = reconciliationReportRepository.findById(reportId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        long detailCount = verificationDetailRepository.countByReport_ReportId(reportId);
+
+        List<VerificationDetail> topDetails = verificationDetailRepository.findByReport_ReportIdOrderByDetailIdAsc(
+                reportId, PageRequest.of(0, ReconciliationConverter.MAX_DETAILS_IN_RESPONSE));
+
+        Map<VerificationErrorType, Long> countByType = verificationDetailRepository
+                .countGroupedByErrorType(reportId).stream()
+                .collect(Collectors.toMap(
+                        row -> (VerificationErrorType) row[0],
+                        row -> (Long) row[1]
+                ));
+
+        return new ReconciliationBatchResult(report, detailCount, topDetails, countByType);
     }
 
     // Step(Tasklet) 안에서 GeneralException을 던져도 JobOperator.start()가 그걸 그대로 다시

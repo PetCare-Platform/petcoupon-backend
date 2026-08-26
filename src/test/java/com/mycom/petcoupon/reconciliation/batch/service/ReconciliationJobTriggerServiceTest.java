@@ -19,7 +19,6 @@ import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
-import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
@@ -129,18 +128,22 @@ class ReconciliationJobTriggerServiceTest {
 
     @Test
     void 정상_쿠폰이면_Job을_끝까지_돌려_리포트를_돌려준다() {
-        ReconciliationReport report = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+        ReconciliationBatchResult result = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
 
-        assertThat(report.getCoupon().getCouponId()).isEqualTo(endedCoupon.getCouponId());
-        assertThat(report.getStockTotal()).isEqualTo(10);
+        // Controller(ReconciliationConverter)가 이 시점엔 이미 끝난 트랜잭션 밖에서 report를 읽는다 —
+        // coupon은 여전히 지연 프록시지만 식별자(getCouponId)만 읽는 건 세션 없이도 안전하다.
+        assertThat(result.report().getCoupon().getCouponId()).isEqualTo(endedCoupon.getCouponId());
+        assertThat(result.report().getStockTotal()).isEqualTo(10);
 
-        // 컨트롤러(ReconciliationConverter)가 이 시점에는 이미 끝난 트랜잭션 밖에서
-        // verificationDetails를 읽는다 — 지연로딩 그대로 두면 LazyInitializationException이
-        // 난다(실제 E2E 호출로 재현/확인함). isNotNull()만으로는 지연 초기화가 안 트리거되니
-        // size()로 실제 컬렉션 접근까지 강제해서 findByIdWithDetails의 JOIN FETCH를 검증한다.
-        assertThat(report.getVerificationDetails().size()).isEqualTo(1);
-        assertThat(report.getVerificationDetails())
+        // verification_detail은 이제 report.getVerificationDetails()(지연로딩 컬렉션)로 읽지 않고,
+        // VerificationDetailRepository의 전용 쿼리로 이미 다 가져와 있다 — 그래서 트랜잭션 밖에서
+        // LazyInitializationException 없이 바로 읽을 수 있어야 한다(실제 E2E 호출로 원래 재현했던
+        // 문제와 같은 종류다).
+        assertThat(result.verificationDetailCount()).isEqualTo(1L);
+        assertThat(result.topVerificationDetails())
                 .anyMatch(d -> d.getErrorType() == VerificationErrorType.STOCK_MISMATCH);
+        assertThat(result.verificationDetailCountByType())
+                .containsEntry(VerificationErrorType.STOCK_MISMATCH, 1L);
     }
 
     @Test

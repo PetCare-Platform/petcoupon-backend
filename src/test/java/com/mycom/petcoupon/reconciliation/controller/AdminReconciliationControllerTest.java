@@ -20,11 +20,11 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
+import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationBatchResult;
 import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationJobTriggerService;
 import com.mycom.petcoupon.reconciliation.converter.ReconciliationConverter;
 import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationTriggerResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.VerificationDetailResponse;
-import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.enums.ReconciliationResult;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
 
@@ -51,7 +51,7 @@ class AdminReconciliationControllerTest {
 
     @Test
     void reconcileReturnsSuccessResponse() throws Exception {
-        ReconciliationReport report = mock(ReconciliationReport.class);
+        ReconciliationBatchResult result = mock(ReconciliationBatchResult.class);
         ReconciliationTriggerResponse response = ReconciliationTriggerResponse.builder()
                 .reportId(10L)
                 .couponId(COUPON_ID)
@@ -69,8 +69,8 @@ class AdminReconciliationControllerTest {
                 .verificationDetails(List.of())
                 .build();
 
-        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(report);
-        when(reconciliationConverter.toTriggerResponse(report)).thenReturn(response);
+        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(result);
+        when(reconciliationConverter.toTriggerResponse(result)).thenReturn(response);
 
         mockMvc.perform(post("/admin/coupons/{couponId}/reconcile", COUPON_ID))
                 .andExpect(status().isOk())
@@ -88,7 +88,7 @@ class AdminReconciliationControllerTest {
 
     @Test
     void reconcileReturnsMismatchedResponseWithVerificationDetails() throws Exception {
-        ReconciliationReport report = mock(ReconciliationReport.class);
+        ReconciliationBatchResult result = mock(ReconciliationBatchResult.class);
         ReconciliationTriggerResponse response = ReconciliationTriggerResponse.builder()
                 .reportId(11L)
                 .couponId(COUPON_ID)
@@ -111,8 +111,8 @@ class AdminReconciliationControllerTest {
                         .build()))
                 .build();
 
-        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(report);
-        when(reconciliationConverter.toTriggerResponse(report)).thenReturn(response);
+        when(reconciliationJobTriggerService.reconcile(COUPON_ID)).thenReturn(result);
+        when(reconciliationConverter.toTriggerResponse(result)).thenReturn(response);
 
         mockMvc.perform(post("/admin/coupons/{couponId}/reconcile", COUPON_ID))
                 .andExpect(status().isOk())

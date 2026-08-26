@@ -1,9 +1,8 @@
 package com.mycom.petcoupon.reconciliation.converter;
 
-import java.util.List;
-
 import org.springframework.stereotype.Component;
 
+import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationBatchResult;
 import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationTriggerResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.VerificationDetailResponse;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
@@ -17,10 +16,13 @@ public class ReconciliationConverter {
     // 불일치가 몇 건 안 되지만, 뭔가 시스템적으로 잘못돼서 대량으로 나는 극단적 케이스에서 응답
     // JSON이 통째로 거대해지는 걸 막기 위해 응답에 담는 개수에 상한을 둔다. 실제 전체 건수는
     // verificationDetailCount로 확인할 수 있다 — 응답 계약을 안 깨는 추가 필드다.
+    //
+    // 이 상한은 여기서 자르는 게 아니라 조회 시점(ReconciliationJobTriggerService.loadResult가
+    // Pageable로 넘기는 값)에 이미 적용된다 — 전체를 읽어서 버리지 않기 위함.
     public static final int MAX_DETAILS_IN_RESPONSE = 500;
 
-    public ReconciliationTriggerResponse toTriggerResponse(ReconciliationReport report) {
-        List<VerificationDetail> details = report.getVerificationDetails();
+    public ReconciliationTriggerResponse toTriggerResponse(ReconciliationBatchResult result) {
+        ReconciliationReport report = result.report();
 
         return ReconciliationTriggerResponse.builder()
                 .reportId(report.getReportId())
@@ -36,9 +38,8 @@ public class ReconciliationConverter {
                 .redisRemaining(report.getRedisRemaining())
                 .dbDlqCount(report.getDbDlqCount())
                 .maxSequenceNo(report.getMaxSequenceNo())
-                .verificationDetailCount(details.size())
-                .verificationDetails(details.stream()
-                        .limit(MAX_DETAILS_IN_RESPONSE)
+                .verificationDetailCount(result.verificationDetailCount())
+                .verificationDetails(result.topVerificationDetails().stream()
                         .map(this::toDetailResponse)
                         .toList())
                 .build();
