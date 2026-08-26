@@ -147,6 +147,19 @@ class CouponControllerTest {
                 .andExpect(jsonPath("$.code").value("COMMON400-1"));
     }
 
+    // status 필터(이슈 #106)를 위해 GlobalExceptionHandler에 추가한
+    // MethodArgumentTypeMismatchException 핸들러는 전역이라, couponId처럼 이 API와
+    // 무관한 다른 Long 경로 변수에 숫자가 아닌 값이 와도 (기존 500 대신) 400으로 응답한다.
+    @Test
+    void couponId가_숫자가_아니면_400을_반환한다() throws Exception {
+        mockMvc.perform(post("/coupons/{couponId}/issues", "abc")
+                        .header(IDEMPOTENCY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
     @Test
     void couponId가_음수면_400을_반환한다() throws Exception {
         mockMvc.perform(post("/coupons/{couponId}/issues", -1L)
