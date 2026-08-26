@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponListResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -51,6 +52,29 @@ public class CouponConverter {
 				.validDays(coupon.getValidDays())
 				.totalQuantity(couponStock.getTotalQuantity())
 				.status(coupon.getStatus())
+				.build();
+	}
+
+	public CouponListResponse toListResponse(Coupon coupon, CouponStock couponStock) {
+		Event event = coupon.getEvent();
+
+		return CouponListResponse.builder()
+				.couponId(coupon.getCouponId())
+				.eventId(event.getEventId())
+				.eventName(event.getName())
+				.name(coupon.getName())
+				.discountType(coupon.getDiscountType())
+				.discountValue(coupon.getDiscountValue())
+				.minOrderAmount(coupon.getMinOrderAmount())
+				.maxDiscountAmount(coupon.getMaxDiscountAmount())
+				.issueStartAt(coupon.getIssueStartAt())
+				.issueEndAt(coupon.getIssueEndAt())
+				.validDays(coupon.getValidDays())
+				.status(coupon.getStatus())
+				.totalQuantity(couponStock.getTotalQuantity())
+				.issuedQuantity(couponStock.getIssuedQuantity())
+				.remainingQuantity(couponStock.getRemainingQuantity())
+				.stockUpdatedAt(couponStock.getUpdatedAt())
 				.build();
 	}
 

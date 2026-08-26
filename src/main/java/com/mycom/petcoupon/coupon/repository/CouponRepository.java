@@ -3,6 +3,8 @@ package com.mycom.petcoupon.coupon.repository;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -10,10 +12,40 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 
 import jakarta.persistence.LockModeType;
 
 public interface CouponRepository extends JpaRepository<Coupon, Long> {
+
+	// 관리자 목록 조회 전용. 한 페이지를 SELECT 한 번으로 끝내려고 이벤트는 fetch join,
+	// 재고는 엔티티 조인으로 묶는다(연관관계가 없는 이유는 CouponWithStock 참고).
+	// 재고를 따로 조회하면 20건 목록에 쿼리가 21번 나간다.
+	//
+	// eventId·status는 선택 필터라 null이면 조건 자체를 무력화시킨다.
+	// 정렬을 Pageable에 맡기지 않고 쿼리에 고정한 건, 정렬 없이 페이징하면 페이지마다
+	// 순서가 달라져 같은 쿠폰이 두 번 보이거나 빠질 수 있어서다. 최신순 + 식별자 tie-break는
+	// 이벤트 목록(findAllByOrderByCreatedAtDescEventIdDesc)과 같은 기준으로 맞춘다.
+	@Query(value = """
+			SELECT new com.mycom.petcoupon.coupon.repository.CouponWithStock(c, cs)
+			  FROM Coupon c
+			  JOIN FETCH c.event e
+			  JOIN CouponStock cs ON cs.coupon = c
+			 WHERE (:eventId IS NULL OR e.eventId = :eventId)
+			   AND (:status IS NULL OR c.status = :status)
+			 ORDER BY c.createdAt DESC, c.couponId DESC
+			""",
+			countQuery = """
+			SELECT count(c)
+			  FROM Coupon c
+			 WHERE (:eventId IS NULL OR c.event.eventId = :eventId)
+			   AND (:status IS NULL OR c.status = :status)
+			""")
+	Page<CouponWithStock> findCouponPage(
+			@Param("eventId") Long eventId,
+			@Param("status") CouponStatus status,
+			Pageable pageable
+	);
 
 	// 관리자 수정 API 전용. 더티체킹 UPDATE는 status를 포함한 전체 컬럼을 쓰기 때문에,
 	// 락 없이 읽으면 그 사이 activateCoupons가 만든 ACTIVE를 낡은 READY로 되돌려버린다.
