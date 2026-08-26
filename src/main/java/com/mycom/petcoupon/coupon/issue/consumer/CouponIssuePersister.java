@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponIssueHistory;
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
@@ -31,10 +32,12 @@ import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.ObjectMapper;
 
 // CouponIssueEventConsumer가 같은 클래스 내부 메서드를 호출하면 프록시를 안 거쳐 @Transactional이 무시되므로
 // 별도 빈으로 분리함
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class CouponIssuePersister {
@@ -53,19 +56,25 @@ public class CouponIssuePersister {
 	@Transactional
 	public CouponIssue persist(CouponIssueEvent event) {
 		// getReferenceById(지연 프록시)를 쓰면 안 된다 — increaseIssuedQuantity()가
-		// @Modifying(clearAutomatically = true)라 영속성 컨텍스트를 통째로 비우는데, 그 뒤
-		// recordNotification()에서 user.getPhone()으로 프록시를 초기화하려 하면 컨텍스트가
-		// 이미 비워져 있어 LazyInitializationException이 발생한다(실측 확인함, 동시성과 무관하게
-		// 단일 요청에서도 항상 재현됨). findById로 미리 실제 값을 로딩해두면 컨텍스트가 비워져도
-		// 이미 메모리에 있는 필드값이라 안전하다.
+		// @Modifying(clearAutomatically = true)라 영속성 컨텍스트를 통째로 비우는데, 그 뒤 프록시의
+		// 필드를 읽으려 하면 컨텍스트가 이미 비워져 있어 LazyInitializationException이 발생한다
+		// (실측 확인함, 단일 요청에서도 항상 재현됨). findById로 미리 로딩해두면 이미 메모리에 있는
+		// 값이라 안전하다. coupon도 같은 이유로 findById를 쓴다 — 지금은 id만 읽어서 문제없지만
+		// (예: CouponIssueConverter.toRequestResponse는 name도 읽음) 응답 DTO가 coupon의 다른
+		// 필드를 노출하도록 바뀌면 재발할 수 있다.
 		AppUser user = appUserRepository.findById(event.userId())
 			.orElseThrow(() -> new IllegalStateException(
 				"발급 대상 사용자를 찾을 수 없음: userId=" + event.userId() + ", requestId=" + event.requestId()
 			));
 
+		Coupon coupon = couponRepository.findById(event.couponId())
+			.orElseThrow(() -> new IllegalStateException(
+				"발급 대상 쿠폰을 찾을 수 없음: couponId=" + event.couponId() + ", requestId=" + event.requestId()
+			));
+
 		CouponIssue couponIssue = couponIssueRepository.saveAndFlush(
 			CouponIssue.builder()
-				.coupon(couponRepository.getReferenceById(event.couponId()))
+				.coupon(coupon)
 				.user(user)
 				.sequenceNo(event.sequenceNo())
 				.couponCode(event.couponCode())
@@ -107,30 +116,35 @@ public class CouponIssuePersister {
 	}
 
 	// 스펙 아키텍처(Kafka Consumer → DB confirmation → Notification Mock)의 Mock 알림 기록.
-	// persist()와 별도 트랜잭션으로 분리 — 같은 트랜잭션에 묶으면 phone이 null이라 recipientMasked
-	// NOT NULL 제약을 위반하는 등 알림 저장 실패가 이미 확정됐어야 할 발급 자체를 롤백시키고,
-	// Kafka 재시도가 원인(phone null)과 무관하게 영원히 반복돼 해당 유저는 쿠폰을 영영 발급받지
-	// 못하게 된다(#119 리뷰에서 실측 확인). 호출부(Consumer)가 persist() 성공 이후 별도로 호출하고
-	// 실패해도 삼켜서 발급 자체엔 영향이 없게 한다.
+	// persist()와 별도 트랜잭션 + 실패를 여기서 삼킴 — 같은 트랜잭션에 묶으면 phone null 등으로
+	// 알림 저장이 실패할 때 이미 확정됐어야 할 발급까지 롤백되고 Kafka 재시도가 무한 반복된다.
+	// 호출부가 매번 자기만의 try/catch를 만들 필요 없이 "알림은 최선을 다해 시도하되 실패해도
+	// 발급엔 영향 없다"는 계약을 이 메서드가 보장한다.
 	// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
-	// 유니크 제약도 있고, 애초에 발급이 실제로 처음 일어난 시점에만 알림이 나가야 하기 때문이다.
+	// 유니크 제약도 있고, 발급이 처음 일어난 시점에만 알림이 나가야 하기 때문이다.
 	//
-	// TODO(#119): recipientMasked는 개인정보 마스킹 담당자가 별도로 처리 예정 — 지금은 마스킹 전
-	// 원본 전화번호를 그대로 넣어둠. 마스킹 로직이 준비되면 이 자리를 그걸로 교체할 것.
+	// TODO(#119): recipientMasked는 마스킹 담당자가 별도 처리 예정 — 지금은 원본 전화번호 그대로.
 	@Transactional
 	public void recordNotification(CouponIssue couponIssue) {
-		AppUser user = couponIssue.getUser();
-		notificationLogRepository.save(
-			NotificationLog.builder()
-				.couponIssue(couponIssue)
-				.user(user)
-				.channel(Channel.SMS)
-				.recipientMasked(user.getPhone())
-				.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
-				.status(NotificationStatus.SENT)
-				.sentAt(LocalDateTime.now())
-				.build()
-		);
+		try {
+			AppUser user = couponIssue.getUser();
+			notificationLogRepository.save(
+				NotificationLog.builder()
+					.couponIssue(couponIssue)
+					.user(user)
+					.channel(Channel.SMS)
+					.recipientMasked(user.getPhone())
+					.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
+					.status(NotificationStatus.SENT)
+					.sentAt(LocalDateTime.now())
+					.build()
+			);
+		} catch (Exception e) {
+			log.error(
+				"[CouponIssueEvent] 알림 로그 기록 실패, 발급 자체는 정상 처리됨: couponIssueId={}",
+				couponIssue.getCouponIssueId(), e
+			);
+		}
 	}
 
 	// Kafka 재전달로 이미 저장된 CouponIssue를 다시 만났을 때(CouponIssueEventConsumer의 스킵 분기)도
