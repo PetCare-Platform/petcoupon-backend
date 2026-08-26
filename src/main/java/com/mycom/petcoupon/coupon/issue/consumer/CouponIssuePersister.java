@@ -10,6 +10,7 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponIssueHistory;
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
+import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.coupon.repository.CouponIssueHistoryRepository;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
@@ -18,6 +19,8 @@ import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
+import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
+import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -37,6 +40,7 @@ public class CouponIssuePersister {
 	private final CouponIssueConverter couponIssueConverter;
 	private final IdempotencyKeyService idempotencyKeyService;
 	private final ObjectMapper objectMapper;
+	private final IssueMessageRepository issueMessageRepository;
 
 	@Transactional
 	public CouponIssue persist(CouponIssueEvent event) {
@@ -76,6 +80,10 @@ public class CouponIssuePersister {
 		// 여기서 분리하면 "발급은 커밋됐는데 idempotency_key는 IN_PROGRESS로 남는" 반쪽 상태가 생길 수 있다.
 		confirmIdempotencySucceeded(couponIssue, event.requestId());
 
+		// 위와 같은 이유로 같은 트랜잭션에서 확정 — 분리하면 "발급은 커밋됐는데 issue_message는
+		// 영원히 SENT로 남는" 반쪽 상태가 생겨 Kafka enqueue 성공과 파이프라인 완주를 구분 못 하게 된다.
+		markConsumed(event.requestId());
+
 		return couponIssue;
 	}
 
@@ -91,5 +99,15 @@ public class CouponIssuePersister {
 			CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(couponIssueConverter.toCreateResponse(couponIssue));
 			idempotencyKeyService.succeed(recordId, HttpStatus.OK.value(), objectMapper.writeValueAsString(success));
 		});
+	}
+
+	// confirmIdempotencySucceeded와 동일한 이유로 public — Kafka 재전달로 이미 저장된 CouponIssue를
+	// 다시 만났을 때(CouponIssueEventConsumer의 스킵 분기)도 issue_message 상태 확정이 필요하다.
+	// Outbox 저장 시 message_key = requestId로 세팅되므로(IssueMessage.pending) 그 값을 그대로 사용한다.
+	@Transactional
+	public void markConsumed(String requestId) {
+		issueMessageRepository.updateStatusByMessageKey(
+			KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.CONSUMED
+		);
 	}
 }
