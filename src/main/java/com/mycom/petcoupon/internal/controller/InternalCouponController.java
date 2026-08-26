@@ -23,6 +23,16 @@ import lombok.RequiredArgsConstructor;
  *
  * <p>운영에 노출되면 쿠폰 재고를 임의로 리셋할 수 있게 되므로
  * {@code prod} 프로필에서는 빈으로 등록되지 않는다.
+ *
+ * <p><b>호출 전 선행 조건 — 앞 회차 메시지가 모두 처리돼 있어야 한다.</b>
+ * 이 API 가 되돌리는 것은 DB 와 Redis 발급 상태뿐이다. Redis Stream 에 남은 미배달·pending
+ * 메시지와 Kafka 에 이미 발행된 메시지는 지우지 못한다. 특히 Outbox 발행은
+ * {@code kafkaTemplate.send()} 가 DB 트랜잭션 밖에서 일어나므로, 여기서 {@code issue_message}
+ * 행을 지워도 이미 브로커로 나간 메시지는 되돌릴 수 없다.
+ *
+ * <p>그 상태로 초기화하면 지난 회차 신청이 뒤늦게 처리되면서 <b>이번 회차 재고를 깎는다.</b>
+ * 초기화가 {@code coupon_issue} 를 모두 지운 뒤라 유니크 제약도 이를 막지 못한다.
+ * 호출 전에 확인할 네 가지 값과 명령은 {@code load-test/README.md} 의 "초기화" 항목에 있다.
  */
 @RestController
 @RequestMapping("/internal/coupons")

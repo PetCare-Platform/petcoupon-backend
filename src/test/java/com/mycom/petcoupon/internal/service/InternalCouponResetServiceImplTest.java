@@ -254,8 +254,13 @@ class InternalCouponResetServiceImplTest {
 			assertFalse(redisTemplate.hasKey(issueKey("request-sequence", couponId)));
 
 			// 재고 키는 지워진 채로 두면 Lua 가 STOCK_NOT_INITIALIZED 를 반환한다. 다시 채워져 있어야 한다.
-			assertEquals("500", redisTemplate.opsForValue().get(issueKey("stock", couponId)));
-			assertEquals(500, response.redisStock());
+			String storedStock = redisTemplate.opsForValue().get(issueKey("stock", couponId));
+			assertEquals("500", storedStock);
+
+			// redisStock 은 요청값을 되돌려준 값이 아니라 Redis 에서 다시 읽은 값이어야 한다.
+			// 그래서 요청한 500 이 아니라 "실제로 저장된 값"과 비교한다.
+			assertNotNull(response.redisStock(), "Redis 재고를 읽지 못하면 초기화가 끝난 것으로 볼 수 없다");
+			assertEquals(Integer.valueOf(storedStock), response.redisStock());
 		} finally {
 			redisTemplate.delete(java.util.List.of(
 					issueKey("stock", couponId),

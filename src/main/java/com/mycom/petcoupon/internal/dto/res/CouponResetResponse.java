@@ -17,7 +17,11 @@ public record CouponResetResponse(
 		int totalQuantity,
 		int remainingQuantity,
 
-		/** 초기화 후 Redis 에 다시 넣은 재고. DB 재고와 어긋나면 여기서 바로 드러난다. */
-		int redisStock
+		/**
+		 * 초기화 후 <b>Redis 에서 다시 읽은</b> 재고. 쓴 값을 되돌려주는 것이 아니라 실제로 저장된 값이라,
+		 * {@code totalQuantity} 와 다르면 Redis 초기화가 제대로 안 된 것이다.
+		 * 키를 읽지 못했거나 값이 숫자가 아니면 {@code null} 이며, 이때도 초기화 실패로 본다.
+		 */
+		Integer redisStock
 ) {
 }

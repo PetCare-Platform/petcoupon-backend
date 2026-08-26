@@ -75,7 +75,7 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 		resetStock(couponId, totalQuantity);
 
 		// DB 를 비워도 Redis 에 이전 회차 기록이 남으면 다음 회차가 전부 ALREADY_APPLIED 로 튕긴다.
-		resetIssueState(couponId, totalQuantity);
+		Integer redisStock = resetIssueState(couponId, totalQuantity);
 
 		return CouponResetResponse.builder()
 				.couponId(couponId)
@@ -87,26 +87,56 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.deletedReports(deletedReports)
 				.totalQuantity(totalQuantity)
 				.remainingQuantity(totalQuantity)
-				.redisStock(totalQuantity)
+				.redisStock(redisStock)
 				.build();
 	}
 
 	/**
-	 * Redis 발급 상태를 초기화한다.
+	 * Redis 발급 상태를 초기화하고, <b>기록된 재고를 다시 읽어서</b> 반환한다.
 	 *
 	 * <p>{@code clearIssueState} 는 신청자·순번 키와 함께 <b>재고 키까지 지운다.</b>
 	 * Lua 는 재고 키가 없으면 {@code STOCK_NOT_INITIALIZED} 를 반환하므로,
 	 * 지운 뒤 반드시 재고를 다시 넣어야 다음 회차 발급이 동작한다.
 	 *
+	 * <p>쓴 값을 그대로 돌려주면 Redis 반영 여부를 검증할 수 없다. 키 이름이 틀렸거나
+	 * 다른 인스턴스가 곧바로 덮어써도 응답은 똑같이 정상으로 보인다. 그래서 {@code SET} 뒤에
+	 * 다시 읽어서 실제로 저장된 값을 응답에 싣는다. 호출자는 이 값이 {@code totalQuantity} 와
+	 * 같은지 확인해 초기화 성공 여부를 판정할 수 있다.
+	 *
+	 * <p>읽기에 실패하거나 값이 숫자가 아니면 {@code null} 을 반환한다. 응답 필드가
+	 * {@code Integer} 인 이유이며, {@code null} 은 <b>초기화가 끝나지 않았다</b>는 뜻이다.
+	 *
 	 * <p>Redis 는 DB 트랜잭션에 참여하지 않는다. 여기서 실패하면 DB 는 롤백되지만
 	 * Redis 는 이미 지워진 상태로 남을 수 있으므로, 그 경우 초기화 API 를 다시 호출하면 된다.
 	 * 부하 테스트 전용 API 라 재실행으로 복구되는 것으로 충분하다고 보고 별도 보상은 두지 않았다.
 	 */
-	private void resetIssueState(Long couponId, int totalQuantity) {
+	private Integer resetIssueState(Long couponId, int totalQuantity) {
 		couponIssueLuaService.clearIssueState(couponId);
 
-		redisTemplate.opsForValue()
-				.set(String.format(STOCK_KEY_FORMAT, couponId), String.valueOf(totalQuantity));
+		String stockKey = String.format(STOCK_KEY_FORMAT, couponId);
+		redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
+
+		return readRedisStock(stockKey);
+	}
+
+	/**
+	 * 재고 키를 읽어 숫자로 바꾼다. 키가 없거나 숫자가 아니면 {@code null}.
+	 *
+	 * <p>검증용 값이라 여기서 예외를 던지지 않는다. 초기화 자체는 이미 끝났고,
+	 * 읽기에 실패했다는 사실은 {@code null} 로 호출자에게 그대로 전달하는 편이 낫다.
+	 */
+	private Integer readRedisStock(String stockKey) {
+		String raw = redisTemplate.opsForValue().get(stockKey);
+
+		if (raw == null) {
+			return null;
+		}
+
+		try {
+			return Integer.valueOf(raw);
+		} catch (NumberFormatException e) {
+			return null;
+		}
 	}
 
 	private long deleteHistories(Long couponId) {
