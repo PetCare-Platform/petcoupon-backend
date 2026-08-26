@@ -13,6 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
@@ -20,6 +21,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueLuaConfig;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaServiceImpl;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -61,6 +63,9 @@ import jakarta.persistence.PersistenceContext;
 // Redis 정리까지 실제로 확인해야 해서 JPA 슬라이스에 Redis 자동설정을 더한다.
 // 목으로 두면 키가 진짜 지워졌는지 알 수 없다. 실행 전 Redis 가 떠 있어야 한다.
 @ImportAutoConfiguration(DataRedisAutoConfiguration.class)
+// 잔여 메시지 검사가 Stream 키·그룹 이름을 알아야 한다. 슬라이스라 애플리케이션 클래스의
+// @EnableConfigurationProperties 가 적용되지 않으므로 여기서 다시 켠다.
+@EnableConfigurationProperties(CouponIssueStreamProperties.class)
 class InternalCouponResetServiceImplTest {
 
 	@PersistenceContext
@@ -121,7 +126,7 @@ class InternalCouponResetServiceImplTest {
 		발급데이터를_만든다(3);
 
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
 
 		assertEquals(3, response.deletedIssues());
 		assertEquals(3, response.deletedHistories());
@@ -156,7 +161,7 @@ class InternalCouponResetServiceImplTest {
 				.executeUpdate();
 
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
 
 		assertEquals(1, response.deletedNotifications());
 		assertEquals(1, response.deletedIssues());
@@ -171,7 +176,7 @@ class InternalCouponResetServiceImplTest {
 		메시지를_만든다(2);
 
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
 
 		assertEquals(2, response.deletedMessages());
 		assertEquals(0L, 남은개수(
@@ -184,7 +189,7 @@ class InternalCouponResetServiceImplTest {
 		정합성_리포트를_만든다();
 
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
 
 		assertEquals(1, response.deletedReports());
 		assertEquals(0L, 남은개수(
@@ -198,7 +203,7 @@ class InternalCouponResetServiceImplTest {
 	void resetUpdatesStockTimestamp() {
 		LocalDateTime before = entityManager.find(CouponStock.class, coupon.getCouponId()).getUpdatedAt();
 
-		internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(200));
+		internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(200, null));
 
 		LocalDateTime after = entityManager.find(CouponStock.class, coupon.getCouponId()).getUpdatedAt();
 		assertNotNull(after);
@@ -209,7 +214,7 @@ class InternalCouponResetServiceImplTest {
 	@DisplayName("totalQuantity 를 주면 총재고까지 바꾼다")
 	void resetChangesTotalQuantityWhenGiven() {
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(10_000));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(10_000, null));
 
 		assertEquals(10_000, response.totalQuantity());
 		assertEquals(10_000, response.remainingQuantity());
@@ -224,7 +229,7 @@ class InternalCouponResetServiceImplTest {
 	@DisplayName("발급 데이터가 없어도 실패하지 않는다 - 매 회차 반복 호출된다")
 	void resetSucceedsWhenNothingToDelete() {
 		CouponResetResponse response =
-				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null));
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
 
 		assertEquals(0, response.deletedIssues());
 		assertEquals(0, response.deletedHistories());
@@ -246,7 +251,7 @@ class InternalCouponResetServiceImplTest {
 
 		try {
 			CouponResetResponse response =
-					internalCouponResetService.reset(couponId, new CouponResetRequest(500));
+					internalCouponResetService.reset(couponId, new CouponResetRequest(500, null));
 
 			// 이전 회차 흔적이 남아 있으면 같은 유저가 다시 신청할 때 ALREADY_APPLIED 가 된다.
 			assertFalse(redisTemplate.hasKey(issueKey("applicants", couponId)));
@@ -280,10 +285,54 @@ class InternalCouponResetServiceImplTest {
 	void resetThrowsWhenCouponDoesNotExist() {
 		GeneralException exception = assertThrows(
 				GeneralException.class,
-				() -> internalCouponResetService.reset(999_999L, new CouponResetRequest(null))
+				() -> internalCouponResetService.reset(999_999L, new CouponResetRequest(null, null))
 		);
 
 		assertEquals(CouponErrorCode.COUPON_NOT_FOUND, exception.getErrorCode());
+	}
+
+	@Test
+	@DisplayName("Outbox 에 아직 발행 안 된 메시지가 있으면 초기화를 거절한다 - 지우면 그 메시지가 다음 회차 재고를 깎는다")
+	void resetRejectedWhenOutboxHasUnpublishedMessages() {
+		미발행_메시지를_만든다();
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null))
+		);
+
+		assertEquals(CouponErrorCode.RESET_PRECONDITION_NOT_MET, exception.getErrorCode());
+
+		// 거절했으면 아무것도 지우지 않아야 한다. 반쯤 지우고 실패하면 상태가 더 나빠진다.
+		assertEquals(1L, 남은개수("SELECT COUNT(m) FROM IssueMessage m WHERE m.coupon.couponId = :couponId"));
+	}
+
+	@Test
+	@DisplayName("force 를 주면 미발행 메시지가 있어도 초기화한다 - 되찾을 수 없는 잔여물을 사람이 넘길 때")
+	void resetProceedsWhenForced() {
+		미발행_메시지를_만든다();
+
+		CouponResetResponse response =
+				internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, true));
+
+		assertEquals(1, response.deletedMessages());
+		assertEquals(0L, 남은개수("SELECT COUNT(m) FROM IssueMessage m WHERE m.coupon.couponId = :couponId"));
+	}
+
+	/** poller 가 아직 집어가지 않은 Outbox 한 건. 다른 테스트의 메시지는 CONSUMED 라 검사에 걸리지 않는다. */
+	private void 미발행_메시지를_만든다() {
+		entityManager.createNativeQuery("""
+						INSERT INTO issue_message
+						       (coupon_id, user_id, sequence_no, message_key, topic, payload,
+						        status, retry_count, created_at)
+						VALUES (:couponId, :userId, 9001, :messageKey, 'coupon-issue', '{}',
+						        'PENDING', 0, NOW(6))
+						""")
+				.setParameter("couponId", coupon.getCouponId())
+				.setParameter("userId", user.getUserId())
+				.setParameter("messageKey", "pending-" + coupon.getCouponId())
+				.executeUpdate();
+		entityManager.flush();
 	}
 
 	private void 발급데이터를_만든다(int count) {
