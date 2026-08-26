@@ -6,6 +6,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -34,6 +35,11 @@ public class CouponIssueEventProducer {
 	// 프로젝트 루트 lombok.config에 등록해둬서 @RequiredArgsConstructor가 이 어노테이션을 생성자로 복사해줌
 	@Qualifier("kafkaCallbackExecutor")
 	private final Executor kafkaCallbackExecutor;
+
+	// Outbox Publisher(자동 재시도)와 관리자 수동 재처리 양쪽 모두 이 값을 넘겨서 실패할 때마다
+	// 여기서 재시도 소진 여부를 판단하므로, 두 호출 경로 모두 소진 시 DLQ 전이가 적용됨
+	@Value("${coupon.issue.outbox.max-retry-count:5}")
+	private int maxRetryCount;
 
 	public CompletableFuture<Void> publish(IssueMessage issueMessage) {
 
@@ -94,11 +100,30 @@ public class CouponIssueEventProducer {
 	}
 
 	private void markFailed(IssueMessage issueMessage, Throwable ex) {
-		issueMessageRepository.markPublishFailed(issueMessage.getMessageId(), IssueMessageStatus.FAILED, errorMessage(ex));
+		// claimForReprocess는 retryCount만 올리고 status는 DLQ로 그대로 둔 채 선점하므로,
+		// 이 메시지가 DLQ 수동 재처리 중이었다면 여기서도 issueMessage.getStatus()는 여전히 DLQ임.
+		// retryCount 소진 여부와 무관하게 무조건 DLQ로 복귀시켜, 재처리 실패가 FAILED로 새서
+		// Outbox Poller의 자동 재시도 대상(PENDING/FAILED)에 다시 걸리는 걸 막음
+		boolean fromDlqReprocess = issueMessage.getStatus() == IssueMessageStatus.DLQ;
+		boolean retryExhausted = issueMessage.getRetryCount() + 1 >= maxRetryCount;
+		boolean shouldGoToDlq = fromDlqReprocess || retryExhausted;
+		IssueMessageStatus status = shouldGoToDlq ? IssueMessageStatus.DLQ : IssueMessageStatus.FAILED;
+
+		issueMessageRepository.markPublishFailed(issueMessage.getMessageId(), status, errorMessage(ex));
+
+		if (shouldGoToDlq) {
+			// 관리자 수동 재처리(claimForReprocess) 경로에서는 issueMessage의 retryCount가
+			// 이미 DB에서 별도로 증가된 뒤라 메모리 값과 어긋날 수 있어, 로그엔 실제 카운트를 남기지 않음
+			log.error(
+				"[CouponIssueEvent] Outbox 발행 재시도 소진 또는 DLQ 재처리 실패, DLQ 전이: messageId={}",
+				issueMessage.getMessageId()
+			);
+		}
 	}
 
-	// TODO: 최대 재시도 초과 Outbox 메시지의 DLQ 처리 및 Redis 재고 보상/정합성 보정 정책 구현
-	
+	// TODO: Redis 재고 보상(restoreStock) 정책 구현 — DLQ 전이된 메시지에 대해 관리자가
+	// 수동으로 재고 복구를 트리거하는 방식으로 논의 중 (CouponIssueLuaService.restoreStock() 대기)
+
 	private String errorMessage(Throwable throwable) {
 	    String message = throwable.getMessage();
 
