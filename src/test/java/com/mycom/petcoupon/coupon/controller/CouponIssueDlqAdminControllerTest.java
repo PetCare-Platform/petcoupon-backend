@@ -82,6 +82,6 @@ class CouponIssueDlqAdminControllerTest {
 		mockMvc.perform(post("/admin/coupon-issue/dlq/{messageId}/reprocess", 1L))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.isSuccess").value(false))
-				.andExpect(jsonPath("$.code").value("COUPON404-2"));
+				.andExpect(jsonPath("$.code").value("COUPON404-3"));
 	}
 }
