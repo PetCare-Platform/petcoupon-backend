@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.issue;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -11,7 +13,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
@@ -49,6 +53,9 @@ public class CouponIssueStreamConsumerTest {
     @Mock
     private ObjectMapper objectMapper;
 
+    @Mock
+    private PendingMessages pendingMessages;
+    
 	private CouponIssueStreamConsumer consumer;
 
 	@BeforeEach
@@ -77,6 +84,8 @@ public class CouponIssueStreamConsumerTest {
 			)
 		);
 
+		when(streamOperations.acknowledge("coupon:issue:stream", "coupon-issue-group", message.getId())).thenReturn(1L);
+		
 		consumer.onMessage(message);
 
 		verify(couponIssueLuaService).issue(
@@ -150,5 +159,30 @@ public class CouponIssueStreamConsumerTest {
 		verifyNoInteractions(couponIssueLuaService);
         verifyNoInteractions(couponIssueOutboxService);
 		verifyNoInteractions(redisTemplate);
+	}
+	
+	@Test
+	void 다른_Consumer가_먼저_ACK했다면_멱등_성공으로_처리한다() {
+		
+		when(couponIssueLuaService.issue(1L, 100L, "request-1"))
+			.thenReturn(new CouponIssueLuaResult(CouponIssueLuaResultStatus.SUCCESS, 1L));
+
+		when(redisTemplate.opsForStream()).thenReturn(streamOperations);
+		when(properties.getKey()).thenReturn("coupon:issue:stream");
+		when(properties.getGroup()).thenReturn("coupon-issue-group");
+
+		MapRecord<String, String, String> message = MapRecord.create("coupon:issue:stream",
+			Map.of("requestId", "request-1", "couponId", "1", "userId", "100"));
+
+		when(streamOperations.acknowledge("coupon:issue:stream", "coupon-issue-group", message.getId())).thenReturn(0L);
+
+		when(streamOperations.pending(eq("coupon:issue:stream"), eq("coupon-issue-group"), any(Range.class), eq(1L)))
+			.thenReturn(pendingMessages);
+
+		when(pendingMessages.isEmpty()).thenReturn(true);
+
+		consumer.onMessage(message);
+
+		verify(streamOperations).pending(eq("coupon:issue:stream"), eq("coupon-issue-group"), any(Range.class), eq(1L));
 	}
 }

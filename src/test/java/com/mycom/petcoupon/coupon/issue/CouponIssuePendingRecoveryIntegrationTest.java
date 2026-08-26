@@ -27,6 +27,7 @@ import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import com.mycom.petcoupon.coupon.issue.consumer.CouponIssuePendingDlqHandler;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssuePendingMessageRecoverer;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 
@@ -66,6 +67,9 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 
 	@Autowired
 	private CouponIssuePendingMessageRecoverer recoverer;
+	
+	@Autowired
+	private CouponIssuePendingDlqHandler dlqHandler;
 
 	/*
 	 * 이 테스트의 목적은 실제 Redis XPENDING/XCLAIM/ACK 연동 검증이다. 비즈니스 처리 자체는
@@ -205,5 +209,30 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 		PendingMessagesSummary pendingAfterFailure = streamOperations.pending(STREAM_KEY, GROUP);
 
 		assertThat(pendingAfterFailure.getTotalPendingMessages()).isEqualTo(1L);
+	}
+	
+	@Test
+	void DLQ_이동_직전에_원본이_ACK되면_DLQ_기록을_남기지_않는다() {
+		
+		List<MapRecord<String, String, String>> sourceMessages = streamOperations.range(
+			STREAM_KEY,
+			Range.closed(pendingMessageId.getValue(), pendingMessageId.getValue())
+		);
+
+		assertThat(sourceMessages).hasSize(1);
+
+		Long acknowledgedCount = streamOperations.acknowledge(STREAM_KEY, GROUP, pendingMessageId);
+
+		assertThat(acknowledgedCount).isEqualTo(1L);
+
+		dlqHandler.moveToDlq(sourceMessages.get(0), 3L);
+
+		List<MapRecord<String, String, String>> dlqMessages = streamOperations.range(DLQ_KEY, Range.unbounded());
+
+		assertThat(dlqMessages).isEmpty();
+
+		PendingMessagesSummary pending = streamOperations.pending(STREAM_KEY, GROUP);
+
+		assertThat(pending.getTotalPendingMessages()).isZero();
 	}
 }

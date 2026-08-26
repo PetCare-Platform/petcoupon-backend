@@ -2,7 +2,9 @@ package com.mycom.petcoupon.coupon.issue.consumer;
 
 import java.util.Map;
 
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.PendingMessages;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
@@ -117,9 +119,35 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 	        message.getId()
 	    );
 		
-		if (acknowledgedCount == null || acknowledgedCount == 0) {
-	        throw new IllegalStateException("Redis Stream ACK에 실패했습니다. messageId = " + message.getId());
+		if (acknowledgedCount == null) {
+	        throw new IllegalStateException("Redis Stream ACK결과를 확인할 수 없습니다. messageId = " + message.getId());
 	    }
+		
+		if (acknowledgedCount > 0) {
+			return;
+		}
+		
+		/*
+		 * 다른 Consumer 또는 Pending Recoverer가 먼저 ACK했을 수 있다.
+		 * 실제로 PEL에서 사라졌다면 실패가 아니라 멱등 성공으로 처리한다.
+		 */
+		PendingMessages pendingMessages = redisTemplate.opsForStream().pending(
+			properties.getKey(),
+			properties.getGroup(),
+			Range.closed(
+				message.getId().getValue(),
+				message.getId().getValue()
+				
+			),
+			1
+		);
+		
+		if (pendingMessages.isEmpty()) {
+			log.info("Redis Stream 메시지가 이미 ACK되었습니다. messageId={}", message.getId());
+			return;
+		}
+
+		throw new IllegalStateException("Redis Stream ACK에 실패했습니다. messageId=" + message.getId());
 	}
 
 	// Lua가 SUCCESS 없이 끝까지 판정 낸 경우(ALREADY_APPLIED/SOLD_OUT) 전용 —
