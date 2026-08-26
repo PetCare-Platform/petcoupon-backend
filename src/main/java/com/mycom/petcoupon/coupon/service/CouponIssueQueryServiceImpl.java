@@ -55,7 +55,7 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
 
     @Override
     @Transactional(readOnly = true)
-    public List<CouponIssueRequestResponse> getIssueRequests(Long userId) {
+    public List<CouponIssueRequestResponse> getIssueRequests(Long userId, IssueStatus status) {
 
         // userId 자체가 존재하지 않는 사용자면 404로 먼저 걸러냄 (존재하는 유저인데 발급 내역이 0건인 경우와 구분)
         if (!appUserRepository.existsById(userId)) {
@@ -64,7 +64,7 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
 
         // repository에서 이미 coupon fetch join + createdAt 내림차순 정렬까지 끝낸 상태로 가져오므로
         // 여기선 엔티티 리스트를 DTO 리스트로 변환만 하면 됨
-        return couponIssueRepository.findAllByUserIdOrderByCreatedAtDesc(userId).stream()
+        return couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(userId, status).stream()
                 .map(couponIssueConverter::toRequestResponse)
                 .toList();
     }

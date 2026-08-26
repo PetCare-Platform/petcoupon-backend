@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCancelRequest;
@@ -14,6 +15,7 @@ import com.mycom.petcoupon.coupon.dto.req.CouponIssueUseRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDetailResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueRequestResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueStatusResponse;
+import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.service.CouponIssueCancelService;
 import com.mycom.petcoupon.coupon.service.CouponIssueQueryService;
 import com.mycom.petcoupon.coupon.service.CouponIssueUseService;
@@ -33,10 +35,12 @@ public class CouponIssueController {
     private final CouponIssueCancelService couponIssueCancelService;
 
     // 사용자 본인의 쿠폰 발급 신청 내역 전체를 최신순으로 조회 (건당 상세/상태 조회와 달리 목록 API)
+    // status 미지정 시 전체 조회, 지정 시 해당 상태만 필터링
     @GetMapping("/users/{userId}/coupon-issue-requests")
     public CustomResponse<List<CouponIssueRequestResponse>> getCouponIssueRequests(
-            @PathVariable("userId") @Positive Long userId) {
-        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(userId);
+            @PathVariable("userId") @Positive Long userId,
+            @RequestParam(value = "status", required = false) IssueStatus status) {
+        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(userId, status);
         return CustomResponse.onSuccess(response);
     }
 

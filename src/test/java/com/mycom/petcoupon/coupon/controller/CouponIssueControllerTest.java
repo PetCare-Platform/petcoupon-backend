@@ -2,12 +2,17 @@ package com.mycom.petcoupon.coupon.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +27,8 @@ import org.springframework.validation.beanvalidation.MethodValidationPostProcess
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueRequestResponse;
+import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.service.CouponIssueCancelService;
 import com.mycom.petcoupon.coupon.service.CouponIssueQueryService;
@@ -169,5 +176,52 @@ class CouponIssueControllerTest {
                         .content("{\"userId\":100}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("COUPON409-3"));
+    }
+
+    @Test
+    void status_파라미터가_없으면_전체_목록을_반환한다() throws Exception {
+        CouponIssueRequestResponse response = CouponIssueRequestResponse.builder()
+                .couponIssueId(1L)
+                .couponCode("COUPON-0001")
+                .status("ISSUED")
+                .build();
+
+        when(couponIssueQueryService.getIssueRequests(eq(1L), isNull()))
+                .thenReturn(List.of(response));
+
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests", 1L))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result[0].couponIssueId").value(1))
+                .andExpect(jsonPath("$.result[0].status").value("ISSUED"));
+
+        verify(couponIssueQueryService).getIssueRequests(eq(1L), isNull());
+    }
+
+    @Test
+    void status_파라미터가_있으면_해당_상태로_필터링한_목록을_반환한다() throws Exception {
+        CouponIssueRequestResponse response = CouponIssueRequestResponse.builder()
+                .couponIssueId(2L)
+                .couponCode("COUPON-0002")
+                .status("USED")
+                .build();
+
+        when(couponIssueQueryService.getIssueRequests(eq(1L), eq(IssueStatus.USED)))
+                .thenReturn(List.of(response));
+
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests", 1L)
+                        .param("status", "USED"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result[0].couponIssueId").value(2))
+                .andExpect(jsonPath("$.result[0].status").value("USED"));
+
+        verify(couponIssueQueryService).getIssueRequests(eq(1L), eq(IssueStatus.USED));
+    }
+
+    @Test
+    void status_파라미터가_유효하지_않으면_400을_반환한다() throws Exception {
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests", 1L)
+                        .param("status", "INVALID"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
     }
 }

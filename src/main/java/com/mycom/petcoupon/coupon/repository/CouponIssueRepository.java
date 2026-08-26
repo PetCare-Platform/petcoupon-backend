@@ -35,16 +35,20 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
             @Param("usedAt") LocalDateTime usedAt
     );
 	
-	// 사용자별 발급 신청 내역 목록 조회용.
+	// 사용자별 발급 신청 내역 목록 조회용. status가 null이면 전체, 값이 있으면 해당 상태만 필터링.
 	// JOIN FETCH로 coupon을 같이 가져오는 이유: 안 그러면 LAZY 로딩이라 결과 리스트를 순회하며
 	// couponIssue.getCoupon().getName()을 부를 때마다 쿼리가 또 나가는 N+1 문제가 생김.
 	@Query("""
 			SELECT ci FROM CouponIssue ci
 			JOIN FETCH ci.coupon
 			WHERE ci.user.userId = :userId
+			  AND (:status IS NULL OR ci.status = :status)
 			ORDER BY ci.createdAt DESC
 			""")
-	List<CouponIssue> findAllByUserIdOrderByCreatedAtDesc(@Param("userId") Long userId);
+	List<CouponIssue> findAllByUserIdAndStatusOrderByCreatedAtDesc(
+			@Param("userId") Long userId,
+			@Param("status") IssueStatus status
+	);
 	
 
 
