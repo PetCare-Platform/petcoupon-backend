@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.reconciliation.dto.res;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import com.mycom.petcoupon.reconciliation.entity.enums.ReconciliationResult;
 
@@ -17,6 +18,16 @@ public record ReconciliationTriggerResponse(
         ReconciliationResult result,
         long totalCount,
         long successCount,
-        long errorCount
+        long errorCount,
+
+        // null은 "미검증"(예: Redis 키가 아예 없음), 0은 "검증했고 실제로 0건"이라 구분해야 함
+        Integer stockTotal,
+        Integer stockIssued,
+        Integer stockRemaining,
+        Integer redisRemaining,
+        Long dbDlqCount,
+        Long maxSequenceNo,
+
+        List<VerificationDetailResponse> verificationDetails
 ) {
 }
