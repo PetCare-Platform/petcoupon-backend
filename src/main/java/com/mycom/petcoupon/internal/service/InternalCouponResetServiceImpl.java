@@ -140,6 +140,10 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 *
 	 * <p>Stream 은 쿠폰별로 나뉘어 있지 않아 검사도 전역이다. 다른 쿠폰의 잔여물이라도
 	 * 환경이 깨끗하지 않다는 신호이므로 그대로 막는다.
+	 *
+	 * <p><b>검사 자체가 실패해도 막는다.</b> Redis 에 닿지 못했다는 건 "남은 게 없다"가 아니라
+	 * "남았는지 모른다"는 뜻이다. 모르는 채로 지우면 확인 절차를 둔 의미가 없으므로,
+	 * 확인할 수 없을 때는 초기화하지 않는다. 강행이 필요하면 {@code force} 로 넘긴다.
 	 */
 	private void validatePipelineDrained(Long couponId) {
 		long outboxUnpublished = countUnpublishedMessages(couponId);
@@ -162,10 +166,11 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 						.count();
 			}
 		} catch (DataAccessException e) {
-			// 검사가 실패했다고 초기화까지 막지는 않는다. 원래 없던 검사이고 확인 절차는 README 에도 있다.
-			// 다만 검사가 건너뛰어졌다는 사실은 남겨야 나중에 결과를 의심할 수 있다.
-			log.warn("[Reset] 파이프라인 잔여 검사 실패 — 검사를 건너뛴다. couponId={}", couponId, e);
-			return;
+			// 검사에 실패했다는 건 "남은 게 없다"가 아니라 "남았는지 모른다"는 뜻이다.
+			// 모르는 채로 지우면 지난 회차 신청이 뒤늦게 확정되며 이번 회차 재고를 깎는다.
+			// 확인할 수 없을 때는 진행하지 않는다. 정말 강행해야 하면 force 로 넘긴다.
+			log.error("[Reset] 파이프라인 잔여 검사에 실패해 초기화를 중단한다. couponId={}", couponId, e);
+			throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
 		}
 
 		if (outboxUnpublished == 0 && streamUndelivered == 0) {
