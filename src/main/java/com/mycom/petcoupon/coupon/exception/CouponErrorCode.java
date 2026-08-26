@@ -46,10 +46,18 @@ public enum CouponErrorCode implements BaseErrorCode {
     NOT_DLQ_STATUS(HttpStatus.CONFLICT, "COUPON409-7", "DLQ 상태의 메시지가 아닙니다."),
     RECONCILIATION_NOT_ALLOWED_YET(HttpStatus.CONFLICT, "COUPON409-8", "발급이 종료된 쿠폰만 정합성 검증할 수 있습니다."),
 
+    // 부하 테스트 초기화 API 전용. 앞 회차 메시지가 파이프라인에 남은 채로 초기화하면
+    // 그 메시지가 뒤늦게 처리되면서 이번 회차 재고를 깎는다(유령 발급).
+    // 409-4 는 PR #52(쿠폰 총수량 수정), 409-7 은 PR #75(NOT_DLQ_STATUS)가 먼저 써서 409-8 로 둔다.
+    RESET_PRECONDITION_NOT_MET(HttpStatus.CONFLICT, "COUPON409-8", "앞 회차 메시지가 아직 처리 중이라 초기화할 수 없습니다."),
+
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
 	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
 	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
-	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요.");
+	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요."),
+	REALTIME_STOCK_READ_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-4", "쿠폰 실시간 재고를 조회하지 못했습니다."),
+
+	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다.");
 
     private final HttpStatus status;
     private final String code;
