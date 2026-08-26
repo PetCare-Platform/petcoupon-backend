@@ -35,6 +35,7 @@ public enum CouponErrorCode implements BaseErrorCode {
     COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-0", "존재하지 않는 쿠폰입니다."),
     COUPON_ISSUE_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-1", "발급 내역을 찾을 수 없습니다."),
     COUPON_ISSUE_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-2", "해당 Idempotency-Key로 신청된 발급 요청을 찾을 수 없습니다."),
+    DLQ_MESSAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-3", "DLQ 메시지를 찾을 수 없습니다."),
     NOT_COUPON_OWNER(HttpStatus.FORBIDDEN, "COUPON403-0", "본인의 쿠폰이 아닙니다."),
     INVALID_ISSUE_STATUS(HttpStatus.CONFLICT, "COUPON409-3", "현재 상태에서는 처리할 수 없습니다."),
 
@@ -42,6 +43,7 @@ public enum CouponErrorCode implements BaseErrorCode {
     // COUPON409-3은 PR #28(박신형, INVALID_ISSUE_STATUS)이 먼저 씀 — 겹쳐서 409-5/6으로 옮김
     REQUEST_IN_PROGRESS(HttpStatus.CONFLICT, "COUPON409-5", "요청이 처리 중입니다. 잠시 후 다시 시도해주세요."),
     IDEMPOTENCY_KEY_REUSED(HttpStatus.CONFLICT, "COUPON409-6", "이미 사용된 Idempotency-Key입니다. 다른 요청에는 새 키를 사용해주세요."),
+    NOT_DLQ_STATUS(HttpStatus.CONFLICT, "COUPON409-7", "DLQ 상태의 메시지가 아닙니다."),
 
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
 	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
