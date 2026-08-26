@@ -445,4 +445,27 @@ public class CouponIssueLuaServiceIntegrationTest {
 				.isInstanceOf(GeneralException.class).extracting(ex -> ((GeneralException) ex).getErrorCode())
 				.isEqualTo(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
 	}
+	
+	@Test
+	void 순번_기록은_있지만_신청_기록이_없으면_복구하지_않는다() {
+		
+	    redisTemplate.opsForValue().set(issueKey("stock"), "9");
+	    redisTemplate.opsForHash().put(issueKey("request-sequence"), "request-1", "1");
+
+	    CouponIssueStockRestoreResult result =
+	    	couponIssueLuaService.restoreStock(
+	    		COUPON_ID, 
+	    		10L,  
+	    		"request-1",     
+	    		1L
+	    	);
+
+	    assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.INCONSISTENT_STATE);
+
+	    assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+
+	    assertThat(redisTemplate.opsForHash()
+	            .get(issueKey("request-sequence"), "request-1"))
+	            .isEqualTo("1");
+	}
 }
