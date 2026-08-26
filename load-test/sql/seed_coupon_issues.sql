@@ -33,6 +33,18 @@
 --    외래키 때문에 이력을 먼저 지운다.
 --    SEED- 로 시작하는 쿠폰만 지우므로 부하 테스트용 쿠폰은 건드리지 않는다.
 -- ---------------------------------------------------------------------
+-- 정합성 검증 상세는 리포트를 참조하므로 리포트보다 먼저 지운다.
+DELETE vd
+  FROM verification_detail vd
+  JOIN reconciliation_report rr ON rr.report_id = vd.report_id
+  JOIN coupon c ON c.coupon_id = rr.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
+DELETE rr
+  FROM reconciliation_report rr
+  JOIN coupon c ON c.coupon_id = rr.coupon_id
+ WHERE c.name LIKE 'SEED-%';
+
 DELETE h FROM coupon_issue_history h
   JOIN coupon c ON c.coupon_id = h.coupon_id
  WHERE c.name LIKE 'SEED-%';
@@ -46,6 +58,13 @@ DELETE s FROM coupon_stock s
  WHERE c.name LIKE 'SEED-%';
 
 DELETE FROM coupon WHERE name LIKE 'SEED-%';
+
+-- 이벤트 상태 이력이 존재하면 이벤트보다 먼저 지운다.
+DELETE eh
+  FROM event_status_history eh
+  JOIN event e ON e.event_id = eh.event_id
+ WHERE e.name = 'SEED-더미 이벤트';
+
 DELETE FROM event  WHERE name = 'SEED-더미 이벤트';
 
 
