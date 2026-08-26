@@ -28,6 +28,10 @@ public record ReconciliationTriggerResponse(
         Long dbDlqCount,
         Long maxSequenceNo,
 
+        // verificationDetails는 응답 크기 보호를 위해 최대 ReconciliationConverter.MAX_DETAILS_IN_RESPONSE
+        // 건까지만 담는다 — 실제 전체 불일치 건수는 이 필드로 확인한다(잘림 여부는
+        // verificationDetailCount > verificationDetails.size()로 판단).
+        long verificationDetailCount,
         List<VerificationDetailResponse> verificationDetails
 ) {
 }

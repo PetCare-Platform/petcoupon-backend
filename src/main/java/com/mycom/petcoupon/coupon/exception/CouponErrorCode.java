@@ -63,7 +63,11 @@ public enum CouponErrorCode implements BaseErrorCode {
 	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요."),
 	REALTIME_STOCK_READ_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-4", "쿠폰 실시간 재고를 조회하지 못했습니다."),
 
-	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다.");
+	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다."),
+
+	// 정합성 검증 배치(reconciliationJob) Step 안에서 GeneralException이 아닌 예상 못 한
+	// 예외가 나서 JobExecution이 FAILED로 끝난 경우 — ReconciliationJobTriggerService 참고.
+	RECONCILIATION_BATCH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-1", "정합성 검증 배치 실행 중 예상하지 못한 오류가 발생했습니다.");
 
     private final HttpStatus status;
     private final String code;
