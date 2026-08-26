@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.repository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -19,6 +20,9 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 
 	// Kafka Consumer 중복 소비 방지용 (request_id unique 제약과 짝을 이룸)
 	boolean existsByRequestId(String requestId);
+
+	// 재전달로 이미 저장된 CouponIssue를 다시 만났을 때, idempotency_key 확정에 필요한 엔티티를 가져오는 용도
+	Optional<CouponIssue> findByRequestId(String requestId);
 
 	@Modifying(clearAutomatically = true)
     @Query("""
