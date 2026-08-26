@@ -107,6 +107,16 @@ public class ReconciliationReport {
 	@Column(nullable = false, length = 20)
 	private ReconciliationResult result;
 
+	// Batch Job에서는 이 row를 먼저 INSERT해둬야 청크 Step들이 report_id를 참조할 수 있는데,
+	// errorCount/successCount/result는 모든 Step이 끝나야 정해진다. 그래서 최초 INSERT 때는
+	// 임시값을 넣어두고, 마지막 Step(FinalizeReportTasklet)에서 이 메서드로 확정값을 채운다.
+	public void finalizeCounts(long successCount, long errorCount, ReconciliationResult result, LocalDateTime finishedAt) {
+		this.successCount = successCount;
+		this.errorCount = errorCount;
+		this.result = result;
+		this.finishedAt = finishedAt;
+	}
+
 	@Builder
 	private ReconciliationReport(
 			Coupon coupon, LocalDateTime asOfAt, LocalDateTime startedAt, LocalDateTime finishedAt,
