@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -13,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.connection.stream.Consumer;
 import org.springframework.data.redis.connection.stream.MapRecord;
 import org.springframework.data.redis.connection.stream.PendingMessagesSummary;
@@ -37,6 +40,9 @@ import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 	"coupon.issue.stream.key=coupon:issue:stream:pending-test",
 	"coupon.issue.stream.group=coupon-issue-pending-test-group",
 	"coupon.issue.stream.consumer=recovery-test-consumer",
+	
+	"coupon.issue.stream.pending-recovery.max-delivery-count=3",
+	"coupon.issue.stream.pending-recovery.dlq-key=coupon:issue:stream:pending-test:dlq",
 	    
 	/*
 	 * 테스트에서 기다리지 않고 즉시 회수할 수 있도록 0으로 설정한다.
@@ -53,7 +59,8 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 	private static final String STREAM_KEY = "coupon:issue:stream:pending-test";
 	private static final String GROUP = "coupon-issue-pending-test-group";
 	private static final String DEAD_CONSUMER = "stopped-consumer";
-
+	private static final String DLQ_KEY = "coupon:issue:stream:pending-test:dlq";
+	
 	@Autowired
 	private StringRedisTemplate redisTemplate;
 
@@ -72,7 +79,7 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 
 	@BeforeEach
 	void setUp() {
-		redisTemplate.delete(STREAM_KEY);
+		redisTemplate.delete(List.of(STREAM_KEY, DLQ_KEY));
 		streamOperations = redisTemplate.opsForStream();
 
 		MapRecord<String, String, String> record = MapRecord.create(STREAM_KEY,
@@ -99,7 +106,7 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 
 	@AfterEach
 	void tearDown() {
-		redisTemplate.delete(STREAM_KEY);
+		redisTemplate.delete(List.of(STREAM_KEY, DLQ_KEY));
 	}
 
 	@Test
@@ -147,5 +154,56 @@ public class CouponIssuePendingRecoveryIntegrationTest {
 	    PendingMessagesSummary pending = streamOperations.pending(STREAM_KEY, GROUP);
 
 	    assertThat(pending.getTotalPendingMessages()).isEqualTo(1L);
+	}
+	
+	@Test
+	void 최대_처리_횟수에_도달하면_DLQ로_이동하고_원본을_ACK한다() {
+		
+		// 최초 XREADGROUP으로 deliveryCount=1인 상태다. 두 번 더 claim하여 총 처리 횟수를 3으로 만든다.
+		streamOperations.claim(STREAM_KEY, GROUP, "failed-retry-consumer-1", Duration.ZERO, pendingMessageId);
+		streamOperations.claim(STREAM_KEY, GROUP, "failed-retry-consumer-2", Duration.ZERO, pendingMessageId);
+
+		int handledCount = recoverer.recoverPendingMessages();
+
+		assertThat(handledCount).isEqualTo(1);
+
+		// 제한에 도달했으므로 기존 Consumer를 다시 호출하지 않는다.
+		verifyNoInteractions(streamConsumer);
+
+		PendingMessagesSummary pendingAfterDlq = streamOperations.pending(STREAM_KEY, GROUP);
+
+		assertThat(pendingAfterDlq.getTotalPendingMessages()).isZero();
+
+		List<MapRecord<String, String, String>> dlqMessages = streamOperations.range(DLQ_KEY, Range.unbounded());
+
+		assertThat(dlqMessages).hasSize(1);
+
+		MapRecord<String, String, String> dlqMessage = dlqMessages.get(0);
+
+		assertThat(dlqMessage.getValue()).containsEntry("requestId", "pending-recovery-request")
+				.containsEntry("couponId", "1").containsEntry("userId", "100")
+				.containsEntry("originalMessageId", pendingMessageId.getValue()).containsEntry("deliveryCount", "3")
+				.containsEntry("reason", "MAX_DELIVERY_COUNT_EXCEEDED").containsKey("failedAt");
+	}
+	
+	@Test
+	void DLQ_저장에_실패하면_원본_메시지는_Pending에_남는다() {
+		
+		streamOperations.claim(STREAM_KEY, GROUP, "failed-retry-consumer-1", Duration.ZERO, pendingMessageId);
+		streamOperations.claim(STREAM_KEY, GROUP, "failed-retry-consumer-2", Duration.ZERO, pendingMessageId);
+
+		// DLQ key를 String 타입으로 만들어 XADD가 WRONGTYPE 오류를 발생시키도록 한다.
+		redisTemplate.opsForValue().set(DLQ_KEY, "not-a-stream");
+
+		int handledCount = recoverer.recoverPendingMessages();
+
+		// DLQ 이동에 실패했으므로 완료 처리된 메시지는 없다.
+		assertThat(handledCount).isZero();
+
+		verifyNoInteractions(streamConsumer);
+
+		PendingMessagesSummary pendingAfterFailure = streamOperations.pending(STREAM_KEY, GROUP);
+
+		assertThat(pendingAfterFailure.getTotalPendingMessages()).isEqualTo(1L);
 	}
 }

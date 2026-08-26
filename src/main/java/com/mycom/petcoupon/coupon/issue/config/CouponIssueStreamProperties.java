@@ -37,5 +37,14 @@ public class CouponIssueStreamProperties {
 
         // 한 번에 회수할 Pending 메시지 수
         private int batchSize = 100;
+        
+        /*
+    	 * 최초 Consumer 처리를 포함한 최대 처리 횟수.
+    	 * 이 횟수만큼 처리했는데도 ACK되지 않으면 DLQ로 이동한다.
+    	 */
+    	private int maxDeliveryCount = 3;
+
+    	// 최종 처리 실패 메시지를 저장할 Redis Stream
+    	private String dlqKey = "coupon:issue:stream:dlq";
     }
 }
