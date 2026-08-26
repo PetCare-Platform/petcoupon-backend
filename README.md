@@ -75,7 +75,8 @@ flowchart TD
     KC --> PERSIST[(coupon_issue<br/>coupon_stock<br/>coupon_issue_history)]
     PERSIST -->|확정| IDEM
 
-    KC -.재시도 소진.-> DLQ[[DLQ 토픽<br/>+ issue_message.status=DLQ]]
+    PUB -.발행 5회 소진.-> DLQ[[DLQ 토픽<br/>+ issue_message.status=DLQ]]
+    KC -.소비 3회 소진.-> DLQ
     DLQ -.관리자 수동 재발행.-> KAFKA
 
     C -->|GET .../status?idempotencyKey| IDEM
@@ -85,9 +86,10 @@ flowchart TD
 |---|---|---|
 | Idempotency-Key | 같은 키의 재전송을 한 번만 반영하고 저장된 응답을 재현 | 409 (처리 중 / 키 재사용) |
 | Redis Stream | 요청을 대기열에 적재해 API 응답을 재고 판정과 분리 | 503 (접수 실패) |
-| Lua Script | 재고 차감 · 순번 채번 · 신청자 기록을 **원자적으로** 실행 | ACK 안 함 → 재처리 |
-| Outbox | Kafka 발행 대상을 DB에 먼저 기록해 유실 방지 | 1초 뒤 재발행 |
-| Kafka Consumer | 발급 · 재고 확정 · 이력을 한 트랜잭션으로 기록 | 재시도 → DLQ |
+| Lua Script | 재고 차감 · 순번 채번 · 신청자 기록을 **원자적으로** 실행 | ACK하지 않고 pending 유지 |
+| Outbox | Kafka 발행 대상을 DB에 먼저 기록해 유실 방지 | 1초 뒤 재발행, 5회 소진 시 DLQ |
+| Kafka Consumer | 발급 · 재고 확정 · 이력을 한 트랜잭션으로 기록 | 1초 간격 2회 재시도 후 DLQ |
+| DLQ | 자동 처리를 포기한 메시지를 보관 | 관리자가 목록 확인 후 수동 재발행 |
 
 ### 동시성을 무엇으로 막는가
 
@@ -183,7 +185,11 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 
 | Method | Path | 설명 |
 |---|---|---|
-| `POST` | `/internal/coupons/{couponId}/reset` | 부하 테스트 회차 초기화 |
+| `POST` | `/internal/coupons/{couponId}/reset` | 부하 테스트 회차 초기화 — DB 발급 데이터 삭제 + Redis 발급 상태 재설정 |
+
+앞 회차 메시지가 파이프라인에 남아 있으면 `409`로 거절한다. 남은 메시지가 뒤늦게 처리되면서
+이번 회차 재고를 깎기 때문이다. 사람이 판단해 넘겨야 할 때만 `force: true`로 강행한다.
+응답의 `redisStock`은 초기화 후 Redis에서 다시 읽은 값이라, `totalQuantity`와 다르면 초기화가 덜 끝난 것이다.
 
 ---
 
