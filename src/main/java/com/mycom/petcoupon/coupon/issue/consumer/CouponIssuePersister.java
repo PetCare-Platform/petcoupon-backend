@@ -32,12 +32,10 @@ import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.ObjectMapper;
 
 // CouponIssueEventConsumer가 같은 클래스 내부 메서드를 호출하면 프록시를 안 거쳐 @Transactional이 무시되므로
 // 별도 빈으로 분리함
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class CouponIssuePersister {
@@ -116,35 +114,37 @@ public class CouponIssuePersister {
 	}
 
 	// 스펙 아키텍처(Kafka Consumer → DB confirmation → Notification Mock)의 Mock 알림 기록.
-	// persist()와 별도 트랜잭션 + 실패를 여기서 삼킴 — 같은 트랜잭션에 묶으면 phone null 등으로
-	// 알림 저장이 실패할 때 이미 확정됐어야 할 발급까지 롤백되고 Kafka 재시도가 무한 반복된다.
-	// 호출부가 매번 자기만의 try/catch를 만들 필요 없이 "알림은 최선을 다해 시도하되 실패해도
-	// 발급엔 영향 없다"는 계약을 이 메서드가 보장한다.
+	// persist()와 별도 트랜잭션 — 같은 트랜잭션에 묶으면 phone null 등으로 알림 저장이 실패할 때
+	// 이미 확정됐어야 할 발급까지 롤백되고 Kafka 재시도가 무한 반복된다.
+	//
+	// 이 메서드 안에서 실패를 삼키지 않는다(예전엔 try/catch로 삼켰으나 실측으로 틀렸다고 확인함) —
+	// notificationLogRepository.save()가 실패하면 그 시점에 JPA 스펙상 트랜잭션이 이미
+	// rollback-only로 마킹된다. 메서드 안에서 그 예외를 잡아 삼켜도 메서드는 "정상 반환"한 것으로
+	// 처리되고, 그 직후 @Transactional 프록시가 커밋을 시도하다가(메서드 몸통 *바깥*, 이 코드로는
+	// 손댈 수 없는 지점) rollback-only 트랜잭션을 커밋하려 한 걸 감지해 UnexpectedRollbackException을
+	// 새로 던진다 — 결국 호출부에는 무조건 예외가 전파된다(CouponIssuePersisterIntegrationTest의
+	// phone이_없어도_발급은_정상_처리되고_알림_기록만_실패하며_예외가_전파되지_않는다()로 실측 확인).
+	// 그래서 실패 흡수는 이 메서드를 호출하는 쪽(CouponIssueEventConsumer)의 try/catch가 유일하게
+	// 가능한 지점이다 — 여기서 다시 삼키려고 하면 원인 예외만 가려질 뿐 근본적으로 못 막는다.
+	//
 	// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
 	// 유니크 제약도 있고, 발급이 처음 일어난 시점에만 알림이 나가야 하기 때문이다.
 	//
 	// TODO(#119): recipientMasked는 마스킹 담당자가 별도 처리 예정 — 지금은 원본 전화번호 그대로.
 	@Transactional
 	public void recordNotification(CouponIssue couponIssue) {
-		try {
-			AppUser user = couponIssue.getUser();
-			notificationLogRepository.save(
-				NotificationLog.builder()
-					.couponIssue(couponIssue)
-					.user(user)
-					.channel(Channel.SMS)
-					.recipientMasked(user.getPhone())
-					.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
-					.status(NotificationStatus.SENT)
-					.sentAt(LocalDateTime.now())
-					.build()
-			);
-		} catch (Exception e) {
-			log.error(
-				"[CouponIssueEvent] 알림 로그 기록 실패, 발급 자체는 정상 처리됨: couponIssueId={}",
-				couponIssue.getCouponIssueId(), e
-			);
-		}
+		AppUser user = couponIssue.getUser();
+		notificationLogRepository.save(
+			NotificationLog.builder()
+				.couponIssue(couponIssue)
+				.user(user)
+				.channel(Channel.SMS)
+				.recipientMasked(user.getPhone())
+				.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
+				.status(NotificationStatus.SENT)
+				.sentAt(LocalDateTime.now())
+				.build()
+		);
 	}
 
 	// Kafka 재전달로 이미 저장된 CouponIssue를 다시 만났을 때(CouponIssueEventConsumer의 스킵 분기)도
