@@ -103,18 +103,23 @@ public class CouponIssuePersister {
 		// 영원히 SENT로 남는" 반쪽 상태가 생겨 Kafka enqueue 성공과 파이프라인 완주를 구분 못 하게 된다.
 		markConsumed(event.requestId());
 
-		// 스펙 아키텍처(Kafka Consumer → DB confirmation → Notification Mock)의 Mock 알림 기록.
-		// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
-		// 유니크 제약도 있고, 애초에 발급이 실제로 처음 일어난 시점에만 알림이 나가야 하기 때문에
-		// confirmIdempotencySucceeded/markConsumed와 달리 persist() 안에서만 호출되는 private 메서드다.
-		recordNotification(couponIssue, user);
-
 		return couponIssue;
 	}
 
+	// 스펙 아키텍처(Kafka Consumer → DB confirmation → Notification Mock)의 Mock 알림 기록.
+	// persist()와 별도 트랜잭션으로 분리 — 같은 트랜잭션에 묶으면 phone이 null이라 recipientMasked
+	// NOT NULL 제약을 위반하는 등 알림 저장 실패가 이미 확정됐어야 할 발급 자체를 롤백시키고,
+	// Kafka 재시도가 원인(phone null)과 무관하게 영원히 반복돼 해당 유저는 쿠폰을 영영 발급받지
+	// 못하게 된다(#119 리뷰에서 실측 확인). 호출부(Consumer)가 persist() 성공 이후 별도로 호출하고
+	// 실패해도 삼켜서 발급 자체엔 영향이 없게 한다.
+	// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
+	// 유니크 제약도 있고, 애초에 발급이 실제로 처음 일어난 시점에만 알림이 나가야 하기 때문이다.
+	//
 	// TODO(#119): recipientMasked는 개인정보 마스킹 담당자가 별도로 처리 예정 — 지금은 마스킹 전
 	// 원본 전화번호를 그대로 넣어둠. 마스킹 로직이 준비되면 이 자리를 그걸로 교체할 것.
-	private void recordNotification(CouponIssue couponIssue, AppUser user) {
+	@Transactional
+	public void recordNotification(CouponIssue couponIssue) {
+		AppUser user = couponIssue.getUser();
 		notificationLogRepository.save(
 			NotificationLog.builder()
 				.couponIssue(couponIssue)

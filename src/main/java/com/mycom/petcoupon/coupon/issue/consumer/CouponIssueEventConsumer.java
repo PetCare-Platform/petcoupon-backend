@@ -43,11 +43,23 @@ public class CouponIssueEventConsumer {
 		}
 
 		try {
-			couponIssuePersister.persist(event);
+			CouponIssue couponIssue = couponIssuePersister.persist(event);
 			log.info(
 				"[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}",
 				event.requestId(), event.sequenceNo()
 			);
+
+			// 알림 기록은 발급 확정과 별도 트랜잭션이라 여기서 실패해도 삼킨다 — 이미 커밋된 발급을
+			// 되돌릴 수도 없고, 그대로 던지면 원인(예: phone null)과 무관하게 Kafka 재시도가
+			// 영원히 반복돼 정상 처리된 발급까지 DLQ로 밀려나게 된다.
+			try {
+				couponIssuePersister.recordNotification(couponIssue);
+			} catch (Exception notificationException) {
+				log.error(
+					"[CouponIssueEvent] 알림 로그 기록 실패, 발급 자체는 정상 처리됨: requestId={}",
+					event.requestId(), notificationException
+				);
+			}
 		} catch (DataIntegrityViolationException e) {
 			Optional<CouponIssue> racedByOtherConsumer = couponIssueRepository.findByRequestId(event.requestId());
 			if (racedByOtherConsumer.isPresent()) {
