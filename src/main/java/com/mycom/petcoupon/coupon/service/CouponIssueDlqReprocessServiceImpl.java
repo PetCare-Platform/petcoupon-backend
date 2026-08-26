@@ -13,6 +13,7 @@ import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueEventProducer;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -21,7 +22,9 @@ import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReprocessService {
@@ -94,6 +97,15 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 				issueMessage.getMessageKey(),
 				issueMessage.getSequenceNo()
 		);
+
+		// status는 이미 ABANDONED로 커밋된 뒤라 여기서 되돌릴 방법이 없다 — RESTORED가 아니면
+		// 응답 필드만으로는 운영자가 놓치기 쉬우므로 서버 로그에도 남겨 grep으로 찾을 수 있게 한다.
+		if (restoreResult.status() != CouponIssueStockRestoreStatus.RESTORED) {
+			log.warn(
+					"[DLQ Abandon] 재고 복구가 정상 완료되지 않았습니다. messageId={}, requestId={}, restoreStatus={}, remainingStock={}",
+					messageId, issueMessage.getMessageKey(), restoreResult.status(), restoreResult.remainingStock()
+			);
+		}
 
 		return couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult);
 	}

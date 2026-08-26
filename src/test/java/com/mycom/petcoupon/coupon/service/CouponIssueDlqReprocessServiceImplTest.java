@@ -183,4 +183,71 @@ class CouponIssueDlqReprocessServiceImplTest {
 
 		verify(couponIssueLuaService, never()).restoreStock(any(), any(), any(), any());
 	}
+
+	// claimForAbandon()은 자체 @Transactional을 가진 별도 트랜잭션이라 이 시점에 이미 DB에 커밋돼 있다.
+	// 이후 restoreStock()이 실패해도 되돌릴 방법이 없다는 걸 알고 받아들인 설계이므로,
+	// 최소한 "선점은 이미 끝났고 예외가 그대로 호출자(503)에게 전파된다"는 동작만은 고정해둔다.
+	@Test
+	void abandon는_선점_커밋후_재고복구가_실패해도_선점은_이미_끝난_채로_예외가_전파된다() {
+		Coupon coupon = mock(Coupon.class);
+		when(coupon.getCouponId()).thenReturn(10L);
+
+		IssueMessage issueMessage = mock(IssueMessage.class);
+		when(issueMessage.getRetryCount()).thenReturn(1);
+		when(issueMessage.getCoupon()).thenReturn(coupon);
+		when(issueMessage.getUserId()).thenReturn(100L);
+		when(issueMessage.getMessageKey()).thenReturn("request-1");
+		when(issueMessage.getSequenceNo()).thenReturn(5L);
+
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED))
+				.thenReturn(1);
+		when(couponIssueLuaService.restoreStock(10L, 100L, "request-1", 5L))
+				.thenThrow(new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED));
+
+		assertThatThrownBy(() -> couponIssueDlqReprocessService.abandon(1L))
+				.isInstanceOf(GeneralException.class)
+				.extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+
+		// 선점(claimForAbandon)은 restoreStock 실패와 무관하게 이미 호출되어 커밋 대상이 된 뒤다
+		verify(issueMessageRepository).claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED);
+		verify(couponIssueDlqConverter, never()).toAbandonResponse(any(), any());
+	}
+
+	@Test
+	void abandon는_재고복구_상태가_RESTORED가_아니어도_예외없이_응답을_반환한다() {
+		Coupon coupon = mock(Coupon.class);
+		when(coupon.getCouponId()).thenReturn(10L);
+
+		IssueMessage issueMessage = mock(IssueMessage.class);
+		when(issueMessage.getRetryCount()).thenReturn(1);
+		when(issueMessage.getCoupon()).thenReturn(coupon);
+		when(issueMessage.getUserId()).thenReturn(100L);
+		when(issueMessage.getMessageKey()).thenReturn("request-1");
+		when(issueMessage.getSequenceNo()).thenReturn(5L);
+
+		CouponIssueStockRestoreResult restoreResult = CouponIssueStockRestoreResult.builder()
+				.status(CouponIssueStockRestoreStatus.INCONSISTENT_STATE)
+				.remainingStock(9)
+				.build();
+		CouponIssueDlqAbandonResponse response = CouponIssueDlqAbandonResponse.builder()
+				.messageId(1L)
+				.requestId("request-1")
+				.restoreStatus("INCONSISTENT_STATE")
+				.remainingStock(9)
+				.build();
+
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED))
+				.thenReturn(1);
+		when(couponIssueLuaService.restoreStock(10L, 100L, "request-1", 5L)).thenReturn(restoreResult);
+		when(couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult)).thenReturn(response);
+
+		// 정합성 이상(INCONSISTENT_STATE)이어도 이미 ABANDONED로 커밋된 뒤라 예외를 던지지 않고
+		// 응답으로만 상태를 알린다 — 대신 서비스 내부에서 WARN 로그를 남겨 운영에서 놓치지 않게 한다.
+		CouponIssueDlqAbandonResponse result = couponIssueDlqReprocessService.abandon(1L);
+
+		assertThat(result).isEqualTo(response);
+	}
 }
