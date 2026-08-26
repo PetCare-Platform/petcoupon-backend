@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -13,9 +15,9 @@ import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
 
 public interface EventRepository extends JpaRepository<Event, Long> {
-    List<Event> findAllByStatusOrderByCreatedAtDescEventIdDesc(EventStatus status);
+	Page<Event> findAllByStatusOrderByCreatedAtDescEventIdDesc(EventStatus status, Pageable pageable);
 
-    List<Event> findAllByOrderByCreatedAtDescEventIdDesc();
+	Page<Event> findAllByOrderByCreatedAtDescEventIdDesc(Pageable pageable);
 
 	@Query("select e.status from Event e where e.eventId = :eventId")
 	Optional<EventStatus> findStatusByEventId(@Param("eventId") Long eventId);

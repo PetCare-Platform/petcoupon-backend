@@ -1,12 +1,12 @@
 package com.mycom.petcoupon.event.controller;
 
-import java.util.List;
-
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.mycom.petcoupon.event.dto.res.EventListResponse;
+import com.mycom.petcoupon.event.dto.req.EventPageRequest;
+import com.mycom.petcoupon.event.dto.res.EventPageResponse;
 import com.mycom.petcoupon.event.service.EventService;
 import com.mycom.petcoupon.global.common.CustomResponse;
 
@@ -17,12 +17,15 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class EventController {
 
-    private final EventService eventService;
+	private final EventService eventService;
 
-    @GetMapping
-    public CustomResponse<List<EventListResponse>> getOpenEvents() {
-        List<EventListResponse> response = eventService.getOpenEvents();
+	@GetMapping
+	public CustomResponse<EventPageResponse> getOpenEvents(
+			@RequestParam(name = "page", defaultValue = EventPageRequest.DEFAULT_PAGE) String page,
+			@RequestParam(name = "size", defaultValue = EventPageRequest.DEFAULT_SIZE) String size
+	) {
+		EventPageResponse response = eventService.getOpenEvents(EventPageRequest.from(page, size));
 
-        return CustomResponse.onSuccess(response);
-    }
+		return CustomResponse.onSuccess(response);
+	}
 }

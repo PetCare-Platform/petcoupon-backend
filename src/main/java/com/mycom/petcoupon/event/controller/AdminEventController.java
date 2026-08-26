@@ -1,7 +1,5 @@
 package com.mycom.petcoupon.event.controller;
 
-import java.util.List;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -9,15 +7,17 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
+import com.mycom.petcoupon.event.dto.req.EventPageRequest;
 import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
-import com.mycom.petcoupon.event.dto.res.EventListResponse;
+import com.mycom.petcoupon.event.dto.res.EventPageResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.service.EventService;
@@ -32,12 +32,15 @@ import lombok.RequiredArgsConstructor;
 public class AdminEventController {
 	private final EventService eventService;
 
-    @GetMapping
-    public CustomResponse<List<EventListResponse>> getAllEvents() {
-        List<EventListResponse> response = eventService.getAllEvents();
+	@GetMapping
+	public CustomResponse<EventPageResponse> getAllEvents(
+			@RequestParam(name = "page", defaultValue = EventPageRequest.DEFAULT_PAGE) String page,
+			@RequestParam(name = "size", defaultValue = EventPageRequest.DEFAULT_SIZE) String size
+	) {
+		EventPageResponse response = eventService.getAllEvents(EventPageRequest.from(page, size));
 
-        return CustomResponse.onSuccess(response);
-    }
+		return CustomResponse.onSuccess(response);
+	}
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
