@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -20,6 +21,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.idempotency.entity.IdempotencyKey;
@@ -33,6 +35,7 @@ class IdempotencyKeyServiceImplTest {
     private static final Long USER_ID = 1L;
     private static final Long COUPON_ID = 100L;
     private static final String KEY = "idem-key-1";
+    private static final long TTL_SECONDS = 30L;
 
     @Mock
     private IdempotencyKeyRepository idempotencyKeyRepository;
@@ -42,6 +45,12 @@ class IdempotencyKeyServiceImplTest {
 
     @InjectMocks
     private IdempotencyKeyServiceImpl idempotencyKeyService;
+
+    // ttlSeconds는 @Value 필드라 @InjectMocks(생성자 주입)로는 안 채워짐 — 직접 넣어준다
+    @BeforeEach
+    void setTtl() {
+        ReflectionTestUtils.setField(idempotencyKeyService, "ttlSeconds", TTL_SECONDS);
+    }
 
     @Test
     void 신규_키면_INSERT를_바로_시도하고_PROCEED를_반환한다() {
@@ -159,6 +168,58 @@ class IdempotencyKeyServiceImplTest {
 
         LocalDateTime expectedThreshold = LocalDateTime.now().minusDays(7);
         assertThat(thresholdCaptor.getValue()).isCloseTo(expectedThreshold, within(5, ChronoUnit.SECONDS));
+    }
+
+    @Test
+    void findStatus_존재하지_않는_키면_NOT_FOUND를_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.empty());
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.NOT_FOUND);
+    }
+
+    @Test
+    void findStatus_처리중이면_IN_PROGRESS를_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null)));
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
+    }
+
+    @Test
+    void findStatus_SUCCEEDED면_저장된_응답을_그대로_DONE으로_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(existing(IdempotencyStatus.SUCCEEDED, LocalDateTime.now().plusSeconds(30), 200, "{\"isSuccess\":true}")));
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.DONE);
+        assertThat(result.responseStatus()).isEqualTo(200);
+        assertThat(result.responseBody()).isEqualTo("{\"isSuccess\":true}");
+    }
+
+    @Test
+    void findStatus_응답이_저장된_FAILED면_DONE으로_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), 409, "{\"isSuccess\":false}")));
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.DONE);
+        assertThat(result.responseStatus()).isEqualTo(409);
+    }
+
+    @Test
+    void findStatus_응답없는_FAILED면_아직_최종결과_없는_것으로_보고_IN_PROGRESS를_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), null, null)));
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
     }
 
     // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로

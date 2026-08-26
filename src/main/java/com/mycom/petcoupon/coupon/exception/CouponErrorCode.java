@@ -34,6 +34,7 @@ public enum CouponErrorCode implements BaseErrorCode {
 
     COUPON_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-0", "존재하지 않는 쿠폰입니다."),
     COUPON_ISSUE_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-1", "발급 내역을 찾을 수 없습니다."),
+    COUPON_ISSUE_REQUEST_NOT_FOUND(HttpStatus.NOT_FOUND, "COUPON404-2", "해당 Idempotency-Key로 신청된 발급 요청을 찾을 수 없습니다."),
     NOT_COUPON_OWNER(HttpStatus.FORBIDDEN, "COUPON403-0", "본인의 쿠폰이 아닙니다."),
     INVALID_ISSUE_STATUS(HttpStatus.CONFLICT, "COUPON409-3", "현재 상태에서는 처리할 수 없습니다."),
 
@@ -44,7 +45,8 @@ public enum CouponErrorCode implements BaseErrorCode {
 
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
 	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
-	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다.");
+	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
+	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus status;
     private final String code;
