@@ -20,11 +20,14 @@ import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.messaging.service.CouponIssueOutboxService;
+
+import tools.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 public class CouponIssueStreamConsumerTest {
-	
+
 	@Mock
 	private StringRedisTemplate redisTemplate;
 
@@ -40,11 +43,17 @@ public class CouponIssueStreamConsumerTest {
     @Mock
     private CouponIssueOutboxService couponIssueOutboxService;
 
+    @Mock
+    private IdempotencyKeyService idempotencyKeyService;
+
+    @Mock
+    private ObjectMapper objectMapper;
+
 	private CouponIssueStreamConsumer consumer;
 
 	@BeforeEach
 	void setUp() {
-		consumer = new CouponIssueStreamConsumer(redisTemplate, properties, couponIssueLuaService, couponIssueOutboxService);
+		consumer = new CouponIssueStreamConsumer(redisTemplate, properties, couponIssueLuaService, couponIssueOutboxService, idempotencyKeyService, objectMapper);
 	}
 
 	@Test
@@ -88,6 +97,40 @@ public class CouponIssueStreamConsumerTest {
 			"coupon-issue-group",
 			message.getId()
 		);
+	}
+
+	@Test
+	void requestId가_issue_형식이_아니어도_품절_판정은_idempotency_확정_없이_ACK한다() {
+		// CouponIssueStreamProducer를 직접 호출하는 경로(통합 테스트 등)는 idempotency_key를 안 거치므로
+		// requestId가 "issue:{id}" 형식이 아닐 수 있다 — 이 경우도 ACK는 정상적으로 끝나야 한다(펜딩으로 안 남아야 함).
+		when(couponIssueLuaService.issue(1L, 100L, "pipeline-test-request"))
+			.thenReturn(new CouponIssueLuaResult(CouponIssueLuaResultStatus.SOLD_OUT, 0L));
+
+		when(redisTemplate.opsForStream()).thenReturn(streamOperations);
+		when(properties.getKey()).thenReturn("coupon:issue:stream");
+		when(properties.getGroup()).thenReturn("coupon-issue-group");
+
+		MapRecord<String, String, String> message = MapRecord.create(
+			"coupon:issue:stream",
+			Map.of(
+				"requestId", "pipeline-test-request",
+				"couponId", "1",
+				"userId", "100"
+			)
+		);
+
+		when(streamOperations.acknowledge("coupon:issue:stream", "coupon-issue-group", message.getId()))
+			.thenReturn(1L);
+
+		consumer.onMessage(message);
+
+		verify(streamOperations).acknowledge(
+			"coupon:issue:stream",
+			"coupon-issue-group",
+			message.getId()
+		);
+		verifyNoInteractions(idempotencyKeyService);
+		verifyNoInteractions(objectMapper);
 	}
 
 	@Test
