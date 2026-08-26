@@ -40,7 +40,7 @@ const acceptRate = new Rate('issue_accept_rate');
 const acceptedDuration = new Trend('issue_accepted_duration', true);
 
 // 실제로 존재하는 회원 ID 목록.
-// SharedArray 라 VU 를 2,000 개 띄워도 메모리에는 한 벌만 올라간다.
+// SharedArray 라 VU 를 20,000 개 띄워도 메모리에는 한 벌만 올라간다.
 const MEMBERS = new SharedArray('members', function () {
 	let raw;
 	try {
@@ -142,7 +142,18 @@ export function setup() {
 	// 시나리오마다 보낼 요청 수. rate 는 초당 요청 수 × 지속 시간으로 계산한다.
 	const requiredMembers = cfg.SCENARIO === 'rate'
 		? cfg.RATE * durationToSeconds(cfg.DURATION)
-		: cfg.TOTAL_REQUESTS;
+		: scenario.vus * scenario.iterations;
+
+	// 인스턴스별 오프셋은 INSTANCE_STRIDE 단위로 나뉘므로, 한 인스턴스가 그보다 많은 회원을
+	// 사용하면 다음 인스턴스의 구간과 겹친다. 같은 회원이 재사용되면 1인 1매 제약으로
+	// 발급 파이프라인을 타지 않아 다중 k6 결과가 왜곡된다.
+	if (cfg.INSTANCE_STRIDE < requiredMembers) {
+		throw new Error(
+			'INSTANCE_STRIDE가 인스턴스별 필요 회원 수보다 작습니다. ' +
+				'stride=' + cfg.INSTANCE_STRIDE + ' requiredMembers=' + requiredMembers + '\n' +
+				'다중 k6 실행 시 회원 구간이 겹치므로 INSTANCE_STRIDE를 requiredMembers 이상으로 늘리세요.',
+		);
+	}
 
 	// 회원을 돌려쓰면 두 번째부터는 1인 1매 제약에 걸려 판정 단계에서 탈락한다.
 	// 탈락한 요청은 Outbox·Kafka·DB 를 거치지 않고 끝나므로, 처리량이 실제보다 좋게 나온다.
@@ -158,7 +169,7 @@ export function setup() {
 
 	// 서버가 Idempotency-Key 를 64자로 제한한다. 넘으면 400 인데, 부하 중에 전건 400 이 뜨면
 	// 원인을 찾느라 회차를 통째로 버리게 된다. 가장 긴 키를 미리 만들어 여기서 막는다.
-	const longestKey = buildIdempotencyKey(offset + Math.max(cfg.TOTAL_REQUESTS, 1) - 1);
+	const longestKey = buildIdempotencyKey(offset + Math.max(requiredMembers, 1) - 1);
 	if (longestKey.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
 		throw new Error(
 			'Idempotency-Key 가 서버 제한(' + IDEMPOTENCY_KEY_MAX_LENGTH + '자)을 넘습니다. ' +

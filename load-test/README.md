@@ -95,11 +95,13 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "SELECT c.coupon_id
 k6 run -e SCENARIO=smoke -e COUPON_ID=1 -e TOTAL_QUANTITY=5 -e RUN_ID=smoke1 load-test/k6/issue-coupon.js
 ```
 
-### 본 측정 (재고 10,000에 요청 20,000)
+### 본 측정 (재고 10,000에 동시 사용자 20,000명)
 
 ```bash
-k6 run -e SCENARIO=burst -e VUS=2000 -e ITERATIONS_PER_VU=10 -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=burst -e VUS=20000 -e ITERATIONS_PER_VU=1 -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
 ```
+
+`2,000 VU × 10회`는 총 20,000건을 보내지만 동시 사용자는 최대 2,000명이다. 동시 사용자 20,000명을 검증하려면 `20,000 VU × 1회`로 실행한다. 한 대의 부하 발생기가 20,000 VU를 감당하지 못하면 아래처럼 두 대로 나눈다.
 
 ### 처리량 한계 (초당 요청 수 고정)
 
@@ -115,8 +117,8 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | `COUPON_ID` | `1` | 대상 쿠폰 |
 | `TOTAL_QUANTITY` | `10000` | 초기화 때 되돌릴 총재고 |
 | `SCENARIO` | `smoke` | `smoke` / `burst` / `rate` |
-| `VUS` | `2000` | 동시 사용자 수 |
-| `ITERATIONS_PER_VU` | `10` | VU당 요청 수 (총 요청 = VUS × 이 값) |
+| `VUS` | `20000` | 동시 사용자 수 |
+| `ITERATIONS_PER_VU` | `1` | VU당 요청 수 (총 요청 = VUS × 이 값) |
 | `RATE`, `DURATION` | `1000`, `30s` | `rate` 시나리오 전용 |
 | `MEMBER_IDS_FILE` | `./members.csv` | 회원 ID 목록 |
 | `RUN_ID` | `local` | 멱등키 접두사. 회차마다 바꿉니다 |
@@ -153,17 +155,17 @@ curl -X POST localhost:8080/internal/coupons/1/reset \
 
 ```bash
 # 1번 기기
-k6 run -e RESET=false -e INSTANCE_INDEX=0 -e INSTANCE_STRIDE=10000 -e VUS=1000 -e ITERATIONS_PER_VU=10 ... load-test/k6/issue-coupon.js
+k6 run -e RESET=false -e INSTANCE_INDEX=0 -e INSTANCE_STRIDE=10000 -e VUS=10000 -e ITERATIONS_PER_VU=1 ... load-test/k6/issue-coupon.js
 ```
 
 ```bash
 # 2번 기기
-k6 run -e RESET=false -e INSTANCE_INDEX=1 -e INSTANCE_STRIDE=10000 -e VUS=1000 -e ITERATIONS_PER_VU=10 ... load-test/k6/issue-coupon.js
+k6 run -e RESET=false -e INSTANCE_INDEX=1 -e INSTANCE_STRIDE=10000 -e VUS=10000 -e ITERATIONS_PER_VU=1 ... load-test/k6/issue-coupon.js
 ```
 
 > ⚠️ **`INSTANCE_STRIDE`는 회원 목록 크기에 맞춰야 합니다.** 기본값 `100000`을 그대로 쓰면서 회원을 30,000명만 뽑으면, 2번 기기가 100,000번째 회원부터 쓰려다 `setup()`에서 막힙니다.
 >
-> **한 기기가 보낼 요청 수 이상**으로 잡고, **`INSTANCE_STRIDE × 기기 수` 이상**의 회원을 뽑으면 됩니다. 위 예시는 기기당 10,000건이라 `INSTANCE_STRIDE=10000`, 회원은 20,000명 이상 필요합니다.
+> `INSTANCE_STRIDE`는 **한 기기가 사용할 회원 수(`requiredMembers`) 이상**으로 잡고, **`INSTANCE_STRIDE × 기기 수` 이상**의 회원을 뽑으면 됩니다. 이 조건을 어기면 `setup()`이 구간 중복을 방지하기 위해 실행을 중단합니다. 위 예시는 기기당 10,000명이라 `INSTANCE_STRIDE=10000`, 회원은 20,000명 이상 필요합니다.
 >
 > ```bash
 > ... "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id LIMIT 30000" > load-test/k6/members.csv

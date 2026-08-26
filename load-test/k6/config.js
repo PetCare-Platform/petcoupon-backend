@@ -39,11 +39,11 @@ export const TOTAL_QUANTITY = num('TOTAL_QUANTITY', 10000);
 // rate  : 초당 요청 수를 고정해 처리량 한계를 보는 측정
 export const SCENARIO = __ENV.SCENARIO || 'smoke';
 
-// burst 총 요청 수 = VUS * ITERATIONS_PER_VU
-// VU 하나가 OS 스레드는 아니지만 메모리를 쓰므로, 한 대에서 2만 VU 를 띄우는 대신
-// 2,000 VU 가 10 번씩 보내 2만 건을 만든다.
-export const VUS = num('VUS', 2000);
-export const ITERATIONS_PER_VU = num('ITERATIONS_PER_VU', 10);
+// burst 총 요청 수 = VUS * ITERATIONS_PER_VU.
+// 목표가 "동시 사용자 20,000명"이므로 VU 20,000개가 각각 한 번씩 요청한다.
+// 2,000 VU × 10회는 총 20,000건일 뿐 동시 사용자는 최대 2,000명이다.
+export const VUS = num('VUS', 20000);
+export const ITERATIONS_PER_VU = num('ITERATIONS_PER_VU', 1);
 export const MAX_DURATION = __ENV.MAX_DURATION || '10m';
 
 // rate 시나리오용
@@ -72,5 +72,3 @@ export const RUN_ID = __ENV.RUN_ID || 'local';
 // setup 에서 초기화 API 를 호출할지.
 // 이미 초기화한 상태에서 여러 대로 나눠 쏠 때는 1번 기기만 true 로 둔다.
 export const RESET = bool('RESET', true);
-
-export const TOTAL_REQUESTS = VUS * ITERATIONS_PER_VU;
