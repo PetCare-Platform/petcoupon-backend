@@ -1,6 +1,6 @@
 -- =====================================================================
 -- 더미 발급 이력 300만 건 생성
--- 대상: coupon_issue 3,000,000 + coupon_issue_history 3,600,000
+-- 대상: coupon_issue 3,000,000 + coupon_issue_history 3,900,000
 -- =====================================================================
 -- 실행 전 확인
 --   - seed_users.sql 로 회원 100만 명이 들어가 있을 것
@@ -262,8 +262,8 @@ SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'NONE', 'ISSUED', 'SYSTEM',
  WHERE c.name LIKE 'SEED-%';
 
 INSERT INTO coupon_issue_history
-    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, reason, created_at)
-SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'ISSUED', 'USED', 'USER', '더미 적재',
+    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, actor_id, reason, created_at)
+SELECT ci.coupon_issue_id, ci.coupon_id, ci.user_id, 'ISSUED', 'USED', 'USER', ci.user_id, '더미 적재',
        ci.used_at
   FROM coupon_issue ci
   JOIN coupon c ON c.coupon_id = ci.coupon_id
