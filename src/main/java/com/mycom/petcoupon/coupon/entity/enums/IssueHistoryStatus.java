@@ -4,6 +4,5 @@ public enum IssueHistoryStatus {
 	NONE,
     ISSUED,
     USED,
-    CANCELED,
     EXPIRED
 }

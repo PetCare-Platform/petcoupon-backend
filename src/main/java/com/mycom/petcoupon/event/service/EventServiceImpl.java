@@ -7,10 +7,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
-import com.mycom.petcoupon.event.dto.req.EventDescriptionUpdateRequest;
-import com.mycom.petcoupon.event.dto.req.EventNameUpdateRequest;
-import com.mycom.petcoupon.event.dto.req.EventPeriodUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
+import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
@@ -81,35 +79,25 @@ public class EventServiceImpl implements EventService {
 
 	@Override
 	@Transactional
-	public EventUpdateResponse updateEventName(Long eventId, EventNameUpdateRequest request) {
+	public EventUpdateResponse updateEvent(Long eventId, EventUpdateRequest request) {
 		Event event = eventRepository.findById(eventId)
 				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
-		event.updateName(request.name());
+		// 기간은 한쪽만 보낼 수 있으므로 기존 값과 합쳐 검증한 뒤, 다른 필드보다 먼저 반영한다
+		if (request.openAt() != null || request.closeAt() != null) {
+			LocalDateTime openAt = request.openAt() != null ? request.openAt() : event.getOpenAt();
+			LocalDateTime closeAt = request.closeAt() != null ? request.closeAt() : event.getCloseAt();
+			validatePeriod(openAt, closeAt);
 
-		return eventConverter.toUpdateResponse(event);
-	}
-
-	@Override
-	@Transactional
-	public EventUpdateResponse updateEventPeriod(Long eventId, EventPeriodUpdateRequest request) {
-		validatePeriod(request.openAt(), request.closeAt());
-
-		Event event = eventRepository.findById(eventId)
-				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
-
-		event.updatePeriod(request.openAt(), request.closeAt());
-
-		return eventConverter.toUpdateResponse(event);
-	}
-
-	@Override
-	@Transactional
-	public EventUpdateResponse updateEventDescription(Long eventId, EventDescriptionUpdateRequest request) {
-		Event event = eventRepository.findById(eventId)
-				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
-
-		event.updateDescription(request.description());
+			event.updatePeriod(openAt, closeAt);
+		}
+		if (request.name() != null) {
+			event.updateName(request.name());
+		}
+		if (request.description() != null) {
+			// 빈 문자열은 "설명 비우기"이므로 null로 저장한다
+			event.updateDescription(request.description().isBlank() ? null : request.description());
+		}
 
 		return eventConverter.toUpdateResponse(event);
 	}

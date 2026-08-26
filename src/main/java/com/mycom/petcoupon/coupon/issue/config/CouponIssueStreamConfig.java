@@ -18,14 +18,12 @@ import org.springframework.scheduling.TaskScheduler;
 
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueStreamConsumer;
 
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 
-// Redis Stream Consumer 설정 클래스 
+// Redis Stream Consumer 설정 클래스
 @Slf4j
 @Configuration
-@RequiredArgsConstructor
 @ConditionalOnProperty(
 	prefix = "coupon.issue.stream",
 	name = "enabled",
@@ -41,14 +39,28 @@ public class CouponIssueStreamConfig {
 	private final TaskScheduler taskScheduler;
 	
 	private final CouponIssueStreamConsumer consumer;
-	
+
 	// Redis 오류 발생 후 복구 시도까지의 지연 시간
 	private static final long ERROR_RETRY_DELAY_MILLIS = 1_000L;
-	
+
 	// 동일한 장애에 대해 복구 작업이 중복 예약되지 않도록 방지
 	private final AtomicBoolean recoveryScheduled = new AtomicBoolean(false);
-	
+
 	private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
+
+	// TaskScheduler 빈이 여러 개(couponExpireBatchTaskScheduler 등)라
+	// @Qualifier로 Redis Stream 복구 전용 스케줄러를 명시해야 함
+	public CouponIssueStreamConfig(
+			CouponIssueStreamProperties properties,
+			StringRedisTemplate redisTemplate,
+			@Qualifier("redisStreamRecoveryTaskScheduler") TaskScheduler taskScheduler,
+			CouponIssueStreamConsumer consumer
+	) {
+		this.properties = properties;
+		this.redisTemplate = redisTemplate;
+		this.taskScheduler = taskScheduler;
+		this.consumer = consumer;
+	}
 	
 	@Bean
 	public StreamMessageListenerContainer<String, MapRecord<String, String, String>> couponIssueStreamContainer(
