@@ -132,21 +132,43 @@ export function setup() {
 		return {};
 	}
 
-	// 초기화 API 는 DB(발급 · 이력 · 멱등키 · Outbox · 검증리포트)와 재고를 되돌린다.
-	// Redis 에 남은 이전 회차 신청자 기록은 아직 별도로 지워야 한다. README 의 "초기화" 항목 참고.
+	// 초기화 API 는 DB(발급 · 이력 · 멱등키 · Outbox · 검증리포트)와 Redis 발급 상태를 되돌린다.
 	const res = http.post(
 		cfg.BASE_URL + '/internal/coupons/' + cfg.COUPON_ID + '/reset',
 		JSON.stringify({ totalQuantity: cfg.TOTAL_QUANTITY }),
 		{ headers: { 'Content-Type': 'application/json' }, timeout: '300s' },
 	);
 
+	// 409 는 앞 회차 메시지가 파이프라인에 남아 거절된 것이다. 이 상태로 쏘면 지난 회차 신청이
+	// 뒤늦게 확정되며 이번 회차 재고를 깎아, 측정 결과를 믿을 수 없게 된다.
+	if (res.status === 409) {
+		throw new Error(
+			'앞 회차 메시지가 아직 처리 중이라 초기화가 거절됐습니다.\n' +
+				'큐가 빌 때까지 기다린 뒤 다시 실행하세요. 확인 방법은 load-test/README.md 의 "초기화" 항목 참고.\n' +
+				'응답: ' + res.body,
+		);
+	}
+
 	if (res.status !== 200) {
 		throw new Error('초기화 API 실패: status=' + res.status + ' body=' + res.body);
 	}
 
 	const result = res.json('result');
+
+	// redisStock 은 초기화 후 Redis 에서 다시 읽은 값이다. 여기서 안 보면 Redis 초기화가 실패한 채로
+	// 부하를 쏘게 되는데, 그때는 Lua 가 전건을 STOCK_NOT_INITIALIZED 로 거절한다.
+	// 그래도 응답은 WAITING 이라 k6 는 전부 성공으로 집계한다 — SQL 을 돌려야 발급 0건인 걸 알게 된다.
+	if (result.redisStock !== cfg.TOTAL_QUANTITY) {
+		throw new Error(
+			'Redis 재고 초기화가 끝나지 않았습니다. 기대=' + cfg.TOTAL_QUANTITY +
+				' 실제=' + result.redisStock + '\n' +
+				'이 상태로 쏘면 전건이 거절되는데 응답은 WAITING 이라 k6 요약만으로는 알 수 없습니다.',
+		);
+	}
+
 	console.log(
 		'초기화 완료 — 총재고=' + result.totalQuantity +
+			' Redis재고=' + result.redisStock +
 			' 지운 발급=' + result.deletedIssues +
 			' 이력=' + result.deletedHistories +
 			' 멱등키=' + result.deletedIdempotencyKeys +

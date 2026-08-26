@@ -127,22 +127,28 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 
 ## 초기화
 
-`setup()`이 `POST /internal/coupons/{couponId}/reset`을 호출해 **DB**(발급 · 이력 · 멱등키 · Outbox · 검증 리포트)와 재고를 되돌립니다.
+`setup()`이 `POST /internal/coupons/{couponId}/reset`을 호출해 되돌립니다.
 
-> ⚠️ **Redis는 아직 이 API가 건드리지 않습니다.** 이전 회차의 신청자 기록이 남아 있으면 다음 회차 요청이 전부 중복으로 판정돼 발급이 0건이 됩니다. 초기화 API에 Redis 정리를 붙이는 작업(#88)이 머지되기 전까지는 회차 사이에 직접 되돌립니다.
->
-> ```bash
-> docker exec petcoupon-redis redis-cli DEL "coupon:issue:applicants:{1}" "coupon:issue:sequence:{1}" "coupon:issue:request-sequence:{1}"
-> docker exec petcoupon-redis redis-cli SET "coupon:issue:stock:{1}" 10000
-> ```
->
-> 재고 키는 **지우면 안 되고 값을 다시 넣어야** 합니다. 없으면 Lua가 `STOCK_NOT_INITIALIZED`로 전부 거절합니다. 중괄호 안의 `1`이 쿠폰 ID이므로 각자 값으로 바꾸고, **중괄호 자체는 Redis Cluster 해시 태그라 그대로 둡니다.**
+| 대상 | 내용 |
+| --- | --- |
+| DB | 발급 · 이력 · 멱등키 · Outbox · 검증 리포트 삭제, 재고 원복 |
+| Redis | 신청자 · 순번 키 삭제, 재고 키를 총재고로 재설정 |
+
+응답의 `redisStock`은 **초기화 후 Redis에서 다시 읽은 값**입니다. `totalQuantity`와 다르면 초기화가 덜 끝난 것이고, `setup()`이 이 값을 대조해 어긋나면 즉시 실패합니다. 쓴 값을 그대로 돌려주는 게 아니라 실제 저장된 값이라 검증에 쓸 수 있습니다.
 
 여러 대에서 나눠 쏠 때는 **1번 기기만** `RESET=true`로 두고, 나머지는 `RESET=false`에 `INSTANCE_INDEX`를 다르게 줍니다. 회원 구간과 멱등키가 겹치지 않습니다.
 
-### 🔴 초기화 전에 반드시 확인할 것 — 미처리 메시지
+### 초기화가 `409`로 거절될 때 — 미처리 메시지
 
 초기화 API는 **DB와 Redis 발급 상태까지만** 되돌립니다. **Redis Stream과 Kafka에 쌓인 메시지는 지우지 않습니다.**
+
+그대로 지우면 지난 회차 신청이 뒤늦게 처리되며 이번 회차 재고를 깎기 때문에, **API가 먼저 검사해서 남아 있으면 거절합니다.**
+
+```json
+{ "isSuccess": false, "code": "COUPON409-8", "message": "앞 회차 메시지가 아직 처리 중이라 초기화할 수 없습니다." }
+```
+
+거절당했다면 아래를 읽고 큐를 비운 뒤 다시 부릅니다. **API가 Kafka LAG은 보지 못하므로**, 확인 명령은 거절 여부와 관계없이 한 번씩 봐두는 게 안전합니다.
 
 앞 회차가 중간에 끊겼다면(앱 강제 종료, Consumer 다운, k6 Ctrl+C) 처리되지 않은 신청이 큐에 남습니다. 남는 방식이 **두 가지**이고 결과가 정반대이므로 나눠서 봅니다.
 
@@ -151,9 +157,9 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | **A** | 배달됐지만 ACK 안 됨 (pending) | 아무도 안 가져감 | **신청 유실** |
 | **B** | 아직 처리 안 됨 (Stream 미배달 · Outbox 미발행 · Kafka 미소비) | 뒤늦게 처리됨 | **유령 발급** |
 
-**B가 지금 문제입니다.** 초기화가 `coupon_issue`를 모두 지운 뒤라 `uk_issue_coupon_user`·`uk_issue_sequence`·`request_id` 유니크 제약이 아무것도 막지 못합니다. 지난 회차 신청이 이번 회차 재고를 깎으며 저장됩니다.
+**B가 초기화를 막는 쪽입니다.** 초기화가 `coupon_issue`를 모두 지운 뒤라 `uk_issue_coupon_user`·`uk_issue_sequence`·`request_id` 유니크 제약이 아무것도 막지 못합니다. 지난 회차 신청이 이번 회차 재고를 깎으며 저장됩니다. **API가 거절하는 것도 B가 남았을 때입니다.**
 
-**A는 반대로 영원히 처리되지 않습니다.** 유령 발급은 안 만들지만, 값이 0이 아니라는 것 자체가 "앞 회차가 깨끗하게 안 끝났다"는 신호라 함께 확인합니다.
+**A는 반대로 영원히 처리되지 않습니다.** Consumer 이름이 기동할 때마다 바뀌어서 죽은 Consumer가 잡고 있던 pending은 아무도 회수하지 않습니다. 재처리되지 않으니 유령 발급은 안 만들고, **그래서 API도 A로는 막지 않습니다.** 다만 값이 0이 아니라는 것 자체가 "앞 회차가 깨끗하게 안 끝났다"는 신호이고 그만큼의 신청이 판정 없이 사라졌다는 뜻이라, 결과를 읽을 때 감안해야 합니다.
 
 B가 **파이프라인 세 지점**에 나뉘어 있다는 점이 중요합니다. 한 곳만 봐서는 부족합니다.
 
@@ -195,6 +201,18 @@ docker exec petcoupon-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-
 **앱과 Consumer를 띄운 채로 네 값이 모두 0이 될 때까지 기다린 뒤** 초기화합니다. 정상 메시지라면 곧 처리되어 빠집니다. 기다리지 않고 초기화하면 그대로 유령 발급이 됩니다.
 
 ②는 `retry_count`가 `max-retry-count`(기본 5)에 도달하면 poller가 더 이상 집지 않아 `FAILED`로 영원히 남습니다. 이때는 기다려도 0이 되지 않으므로, Kafka가 살아 있는지 확인하고 앱을 재시작해 재발행시키거나 해당 row를 지웁니다.
+
+#### 그래도 안 빠지면 — `force`
+
+되찾을 수 없는 잔여물이라고 판단되면 검사를 건너뛰고 강행할 수 있습니다.
+
+```bash
+curl -X POST localhost:8080/internal/coupons/1/reset \
+  -H "Content-Type: application/json" \
+  -d '{"totalQuantity": 10000, "force": true}'
+```
+
+**켜고 돌린 회차의 결과는 신뢰할 수 없습니다.** 남아 있던 메시지가 뒤늦게 처리되면 발급 건수가 재고를 넘거나 순번이 어긋납니다. 측정용이 아니라 환경을 되돌리는 용도로만 씁니다. k6 스크립트에는 이 옵션이 없습니다 — 사람이 판단해야 하는 값이라 일부러 넣지 않았습니다.
 
 #### A가 남아 있다면 (`XPENDING`)
 
