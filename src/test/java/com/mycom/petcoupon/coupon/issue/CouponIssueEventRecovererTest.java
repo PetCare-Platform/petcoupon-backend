@@ -16,11 +16,15 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueEventRecoverer;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
+
+import tools.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 class CouponIssueEventRecovererTest {
@@ -34,6 +38,12 @@ class CouponIssueEventRecovererTest {
 
 	@Mock
 	private IssueMessageRepository issueMessageRepository;
+
+	@Mock
+	private IdempotencyKeyService idempotencyKeyService;
+
+	@Mock
+	private ObjectMapper objectMapper;
 
 	@InjectMocks
 	private CouponIssueEventRecoverer recoverer;
@@ -90,6 +100,33 @@ class CouponIssueEventRecovererTest {
 
 		recoverer.accept(record, new RuntimeException("deserialization failed"));
 
-		verifyNoInteractions(kafkaTemplate, issueMessageRepository);
+		verifyNoInteractions(kafkaTemplate, issueMessageRepository, idempotencyKeyService);
+	}
+
+	@Test
+	void requestId가_issue_형식이면_idempotency_key를_FAILED로_확정한다() {
+		CouponIssueEvent event = new CouponIssueEvent(
+			1L, 10L, "issue:42", 5L, "COUPON-CODE-1", LocalDateTime.now().plusDays(7)
+		);
+		when(objectMapper.writeValueAsString(any())).thenReturn("{\"isSuccess\":false}");
+
+		ConsumerRecord<String, Object> record =
+			new ConsumerRecord<>(KafkaTopics.COUPON_ISSUE_EVENT, 0, 0L, "issue:42", event);
+
+		recoverer.accept(record, new RuntimeException("consume failed"));
+
+		verify(idempotencyKeyService).fail(
+			eq(42L), eq(CouponErrorCode.ISSUE_CONFIRMATION_FAILED.getStatus().value()), eq("{\"isSuccess\":false}")
+		);
+	}
+
+	@Test
+	void requestId가_issue_형식이_아니면_idempotency_key를_건드리지_않는다() {
+		ConsumerRecord<String, Object> record =
+			new ConsumerRecord<>(KafkaTopics.COUPON_ISSUE_EVENT, 0, 0L, "request-1", EVENT);
+
+		recoverer.accept(record, new RuntimeException("consume failed"));
+
+		verifyNoInteractions(idempotencyKeyService);
 	}
 }

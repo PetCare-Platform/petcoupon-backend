@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -12,9 +13,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.service.CouponIssueService;
+import com.mycom.petcoupon.coupon.service.CouponRealtimeStatusService;
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -45,6 +48,7 @@ public class CouponController {
     private final IdempotencyKeyService idempotencyKeyService;
     private final CouponRepository couponRepository;
     private final AppUserRepository appUserRepository;
+    private final CouponRealtimeStatusService couponRealtimeStatusService;
     private final ObjectMapper objectMapper;
 
     @PostMapping("/coupons/{couponId}/issues")
@@ -100,11 +104,14 @@ public class CouponController {
         String requestId = "issue:" + recordId;
         try {
             CouponIssueCreateResponse response = couponIssueService.issue(couponId, request, requestId);
-            CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(response);
+            // 접수만 됐을 뿐 실제 발급 확정은 비동기(Stream Consumer/Persister)라 202로 응답한다 —
+            // 시나리오 문서(TC-07)가 기대하는 것과 동일. GET .../coupon-issue-requests/status가
+            // 이 응답을 그대로 재현하다가, 확정되면 그 응답을 덮어써서 폴링 결과로 노출한다.
+            CustomResponse<CouponIssueCreateResponse> success = CustomResponse.onSuccess(HttpStatus.ACCEPTED, response);
             // 성공 응답을 통째로 저장 — 다음에 같은 키가 오면 이 JSON을 그대로 재현한다
-            
-            idempotencyKeyService.succeed(recordId, HttpStatus.OK.value(), writeJson(success));
-            return ResponseEntity.ok(success);
+
+            idempotencyKeyService.succeed(recordId, HttpStatus.ACCEPTED.value(), writeJson(success));
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(success);
         } catch (GeneralException ex) {
             // 재고소진/중복 등 "정상적으로 끝까지 처리된 실패" — 이 실패 응답도 성공과 동일하게 저장해서 재현한다
             
@@ -118,6 +125,14 @@ public class CouponController {
             idempotencyKeyService.failWithoutBody(recordId);
             throw ex;
         }
+    }
+
+    // 쿠폰 실시간 요청 현황 조회 — 잔여 재고·발급 완료 수는 Redis 기준(실시간), 총 수량은 DB 기준
+    @GetMapping("/coupons/{couponId}/status")
+    public CustomResponse<CouponRealtimeStatusResponse> getRealtimeStatus(
+            @PathVariable("couponId") @Positive Long couponId) {
+        CouponRealtimeStatusResponse response = couponRealtimeStatusService.getRealtimeStatus(couponId);
+        return CustomResponse.onSuccess(response);
     }
 
     // 응답 객체를 JSON 문자열로 직렬화해서 idempotency_key.response_body에 저장하기 위한 헬퍼.

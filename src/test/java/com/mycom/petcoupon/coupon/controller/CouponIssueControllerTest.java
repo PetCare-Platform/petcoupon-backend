@@ -35,6 +35,7 @@ import com.mycom.petcoupon.coupon.service.CouponIssueQueryService;
 import com.mycom.petcoupon.coupon.service.CouponIssueUseService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyStatusResult;
 
 /**
  * PetCouponApplication에 붙은 @EnableJpaAuditing 때문에 @WebMvcTest가 JPA까지 끌고 들어와 실패한다.
@@ -223,5 +224,41 @@ class CouponIssueControllerTest {
                         .param("status", "INVALID"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
+    @Test
+    void 처리중인_요청을_조회하면_IN_PROGRESS를_반환한다() throws Exception {
+        when(couponIssueQueryService.getRequestStatus(1L, "key-in-progress"))
+                .thenReturn(IdempotencyKeyStatusResult.inProgress());
+
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests/status", 1L)
+                        .queryParam("idempotencyKey", "key-in-progress"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.result.status").value("IN_PROGRESS"));
+    }
+
+    @Test
+    void 완료된_요청을_조회하면_저장된_응답을_그대로_반환한다() throws Exception {
+        String storedBody = "{\"isSuccess\":true,\"code\":\"200\",\"message\":\"OK\",\"result\":{\"couponId\":1,\"userId\":100}}";
+        when(couponIssueQueryService.getRequestStatus(1L, "key-done"))
+                .thenReturn(IdempotencyKeyStatusResult.done(200, storedBody));
+
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests/status", 1L)
+                        .queryParam("idempotencyKey", "key-done"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.couponId").value(1))
+                .andExpect(jsonPath("$.result.userId").value(100));
+    }
+
+    @Test
+    void 존재하지_않는_Idempotency_Key를_조회하면_404를_반환한다() throws Exception {
+        when(couponIssueQueryService.getRequestStatus(1L, "key-unknown"))
+                .thenReturn(IdempotencyKeyStatusResult.notFound());
+
+        mockMvc.perform(get("/users/{userId}/coupon-issue-requests/status", 1L)
+                        .queryParam("idempotencyKey", "key-unknown"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("COUPON404-2"));
     }
 }

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
@@ -146,6 +147,37 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
         }
     }
-    
-    
+
+    // 실시간(=Redis 기준) 잔여 재고 조회. Lua 스크립트가 관리하는 stock 키를 GET만 하는
+    // 읽기 전용 조회라 Lua가 필요 없다.
+    // stock 키가 아예 없으면 "품절(0)"이 아니라 "아직 초기화 안 됨"이다 — Lua도 이 둘을
+    // STOCK_NOT_INITIALIZED로 따로 구분한다(coupon-issue.lua). 발급 완료 수는 여기서 세는
+    // sequence 값(선착순 순번 발급기, 재고 복구를 반영하지 않음) 대신 총수량에서 잔여를 뺀
+    // 값으로 호출부(CouponConverter)가 계산한다.
+    @Override
+    public CouponIssueRealtimeStock getRealtimeStock(Long couponId) {
+        validateCouponId(couponId);
+
+        try {
+            String stockValue = redisTemplate.opsForValue().get(issueKey("stock", couponId));
+
+            if (stockValue == null) {
+                return CouponIssueRealtimeStock.builder()
+                        .initialized(false)
+                        .remainingStock(0)
+                        .build();
+            }
+
+            return CouponIssueRealtimeStock.builder()
+                    .initialized(true)
+                    .remainingStock(Integer.parseInt(stockValue))
+                    .build();
+        } catch (DataAccessException e) {
+            log.error("쿠폰 실시간 재고 조회 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
+        } catch (NumberFormatException e) {
+            log.error("쿠폰 실시간 재고 값이 숫자 형식이 아닙니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
+        }
+    }
 }

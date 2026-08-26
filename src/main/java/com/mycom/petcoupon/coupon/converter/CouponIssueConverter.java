@@ -25,6 +25,16 @@ public class CouponIssueConverter {
                 .build();
     }
 
+    // 비동기 파이프라인에서 발급이 실제로 DB에 확정된 뒤 쓰는 변환 — couponIssueId·sequenceNo까지 채워서 돌려준다.
+    public CouponIssueCreateResponse toCreateResponse(CouponIssue couponIssue) {
+        return CouponIssueCreateResponse.builder()
+                .couponIssueId(couponIssue.getCouponIssueId())
+                .couponId(couponIssue.getCoupon().getCouponId())
+                .userId(couponIssue.getUser().getUserId())
+                .sequenceNo(couponIssue.getSequenceNo())
+                .build();
+    }
+
     public CouponIssueStatusResponse toStatusResponse(CouponIssue couponIssue, boolean isUsable) {
         return CouponIssueStatusResponse.builder()
                 .status(couponIssue.getStatus().name())

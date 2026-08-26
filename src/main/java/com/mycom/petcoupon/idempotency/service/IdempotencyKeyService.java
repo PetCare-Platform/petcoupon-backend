@@ -23,4 +23,7 @@ public interface IdempotencyKeyService {
 
     // 보관기간이 지난 행(상태 무관)을 정리한다. 삭제된 개수를 반환한다.
     int cleanupExpiredRecords();
+
+    // GET 폴링 전용 순수 조회 — begin()과 달리 새 시도를 만들거나 상태를 바꾸지 않는다.
+    IdempotencyKeyStatusResult findStatus(Long userId, String idempotencyKey);
 }

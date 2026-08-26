@@ -15,6 +15,8 @@ import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyStatusResult;
 import com.mycom.petcoupon.user.exception.UserErrorCode;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
@@ -27,6 +29,7 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
     private final CouponIssueRepository couponIssueRepository;
     private final CouponIssueConverter couponIssueConverter;
     private final AppUserRepository appUserRepository;
+    private final IdempotencyKeyService idempotencyKeyService;
 
 
     @Override
@@ -67,5 +70,16 @@ public class CouponIssueQueryServiceImpl implements CouponIssueQueryService {
         return couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(userId, status).stream()
                 .map(couponIssueConverter::toRequestResponse)
                 .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public IdempotencyKeyStatusResult getRequestStatus(Long userId, String idempotencyKey) {
+        // userId 자체가 존재하지 않는 사용자면 404로 먼저 걸러냄 (getIssueRequests와 동일한 이유)
+        if (!appUserRepository.existsById(userId)) {
+            throw new GeneralException(UserErrorCode.USER_NOT_FOUND);
+        }
+
+        return idempotencyKeyService.findStatus(userId, idempotencyKey);
     }
 }

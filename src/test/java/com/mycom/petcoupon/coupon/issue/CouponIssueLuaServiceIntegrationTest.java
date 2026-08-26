@@ -19,7 +19,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -240,6 +242,34 @@ public class CouponIssueLuaServiceIntegrationTest {
         assertThat(result.sequenceNo()).isNull();
     }
     
+    @Test
+    void 재고_키가_있으면_초기화된_상태로_실시간_재고를_조회한다() {
+        redisTemplate.opsForValue().set(issueKey("stock"), "7");
+
+        CouponIssueRealtimeStock stock = couponIssueLuaService.getRealtimeStock(COUPON_ID);
+
+        assertThat(stock.initialized()).isTrue();
+        assertThat(stock.remainingStock()).isEqualTo(7);
+    }
+
+    @Test
+    void 재고_키가_없으면_미초기화_상태로_조회한다() {
+        CouponIssueRealtimeStock stock = couponIssueLuaService.getRealtimeStock(COUPON_ID);
+
+        assertThat(stock.initialized()).isFalse();
+        assertThat(stock.remainingStock()).isZero();
+    }
+
+    @Test
+    void 재고_값이_숫자가_아니면_조회_실패_예외로_변환한다() {
+        redisTemplate.opsForValue().set(issueKey("stock"), "not-a-number");
+
+        assertThatThrownBy(() -> couponIssueLuaService.getRealtimeStock(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
+    }
+
     @Test
     void 쿠폰_발급_Redis_상태를_초기화한다() {
         redisTemplate.opsForValue().set(issueKey("stock"), "10");

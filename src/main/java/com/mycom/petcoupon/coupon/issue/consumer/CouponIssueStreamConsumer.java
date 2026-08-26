@@ -7,14 +7,19 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.stream.StreamListener;
 import org.springframework.stereotype.Component;
 
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueMessage;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.global.common.CustomResponse;
+import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
 import com.mycom.petcoupon.messaging.service.CouponIssueOutboxService;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import tools.jackson.databind.ObjectMapper;
 
 // Redis Stream 메시지를 수신하고 쿠폰 발급 처리를 수행하는 Consumer 
 // 처리 성공 시 ACK 하고, 처리 실패 시 ACK 하지 않아서 메시지를 Pending 상태로 남김 
@@ -28,6 +33,8 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 	
 	private final CouponIssueLuaService couponIssueLuaService;
 	private final CouponIssueOutboxService couponIssueOutboxService;
+	private final IdempotencyKeyService idempotencyKeyService;
+	private final ObjectMapper objectMapper;
 
 	@Override
 	public void onMessage(MapRecord<String, String, String> message) {
@@ -75,12 +82,13 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				}
 
 				case ALREADY_APPLIED -> {
-					// TODO: idempotency_key에 ALREADY_APPLIED 결과 저장 후 ACK
+					// SUCCESS와 달리 여기서 끝까지 판정 났음 — 뒤이은 Kafka/DB 확정을 기다릴 필요가 없다.
+					saveFailureResult(issueMessage.requestId(), CouponErrorCode.DUPLICATE_USER);
 					acknowledge(message);
 				}
-				
+
 				case SOLD_OUT -> {
-					// TODO: idempotency_key에 SOLD_OUT 결과 저장 후 ACK 
+					saveFailureResult(issueMessage.requestId(), CouponErrorCode.SOLD_OUT);
 					acknowledge(message);
 				}
 
@@ -112,5 +120,34 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 		if (acknowledgedCount == null || acknowledgedCount == 0) {
 	        throw new IllegalStateException("Redis Stream ACK에 실패했습니다. messageId = " + message.getId());
 	    }
+	}
+
+	// Lua가 SUCCESS 없이 끝까지 판정 낸 경우(ALREADY_APPLIED/SOLD_OUT) 전용 —
+	// 추가로 기다릴 비동기 단계가 없으므로 이 자리에서 바로 idempotency_key를 FAILED로 확정한다.
+	//
+	// requestId가 "issue:{recordId}" 형식이 아니면(CouponIssueStreamProducer를 직접 호출하는 경로 등)
+	// idempotency_key 자체가 없는 요청이므로 조용히 스킵한다 — 여기서 예외를 던지면 ACK가 안 돼서
+	// 이미 끝까지 판정 난 메시지가 영원히 Pending으로 남는다.
+	private void saveFailureResult(String requestId, CouponErrorCode errorCode) {
+		IdempotencyRequestIdCodec.tryDecode(requestId).ifPresentOrElse(
+			idempotencyRecordId -> {
+				CustomResponse<Void> failure = CustomResponse.onFailure(errorCode);
+
+				idempotencyKeyService.fail(
+					idempotencyRecordId,
+					errorCode.getStatus().value(),
+					objectMapper.writeValueAsString(failure)
+				);
+
+				log.info(
+					"[ISSUE] 최종 실패 결과 저장. requestId={}, recordId={}, errorCode={}",
+					requestId, idempotencyRecordId, errorCode
+				);
+			},
+			() -> log.info(
+				"[ISSUE] idempotency_key 확정 스킵(requestId가 issue: 형식이 아님). requestId={}, errorCode={}",
+				requestId, errorCode
+			)
+		);
 	}
 }
