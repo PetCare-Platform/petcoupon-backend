@@ -22,7 +22,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
@@ -287,4 +289,183 @@ public class CouponIssueLuaServiceIntegrationTest {
         assertThat(redisTemplate.hasKey(issueKey("sequence"))).isFalse();
         assertThat(redisTemplate.hasKey(issueKey("request-sequence"))).isFalse();
     }
+    
+	@Test
+	void 발급_실패_요청의_Redis_재고와_신청정보를_복구한다() {
+		
+		redisTemplate.opsForValue().set(issueKey("stock"), "10");
+
+		CouponIssueLuaResult issueResult = couponIssueLuaService.issue(
+			COUPON_ID, 
+			10L, 
+			"request-1"
+		);
+
+		CouponIssueStockRestoreResult result = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-1", 
+			issueResult.sequenceNo()
+		);
+
+		assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.RESTORED);
+
+		assertThat(result.remainingStock()).isEqualTo(10);
+
+		assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("10");
+
+		assertThat(redisTemplate.opsForHash().get(issueKey("applicants"), "10")).isNull();
+
+		assertThat(redisTemplate.opsForHash().get(issueKey("request-sequence"), "request-1")).isNull();
+
+		// 전역 순번은 되돌리지 않는다.
+		assertThat(redisTemplate.opsForValue().get(issueKey("sequence"))).isEqualTo("1");
+	}
+    
+	@Test
+	void 같은_요청을_다시_복구해도_재고는_한번만_증가한다() {
+		
+		redisTemplate.opsForValue().set(issueKey("stock"), "10");
+
+		CouponIssueLuaResult issueResult = couponIssueLuaService.issue(
+			COUPON_ID, 
+			10L, 
+			"request-1"
+		);
+
+		CouponIssueStockRestoreResult first = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-1",
+			issueResult.sequenceNo()
+		);
+
+		CouponIssueStockRestoreResult retry = couponIssueLuaService.restoreStock(COUPON_ID, 10L, "request-1", issueResult.sequenceNo());
+
+		assertThat(first.status()).isEqualTo(CouponIssueStockRestoreStatus.RESTORED);
+
+		assertThat(retry.status()).isEqualTo(CouponIssueStockRestoreStatus.ALREADY_RESTORED);
+
+		assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("10");
+	}
+    
+	@Test
+	void 사용자의_현재_requestId와_복구_requestId가_다르면_복구하지_않는다() {
+		
+		redisTemplate.opsForValue().set(issueKey("stock"), "10");
+
+		CouponIssueLuaResult issueResult = couponIssueLuaService.issue(
+			COUPON_ID,
+			10L, 
+			"request-1"
+		);
+
+		CouponIssueStockRestoreResult result = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-2",
+			issueResult.sequenceNo()
+		);
+
+		assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.REQUEST_MISMATCH);
+
+		assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+
+		assertThat(redisTemplate.opsForHash().get(issueKey("applicants"), "10")).isEqualTo("request-1");
+		
+		assertThat(redisTemplate.opsForHash().get(issueKey("request-sequence"), "request-1")).isEqualTo("1");
+	}
+	
+	@Test
+	void 저장된_순번과_복구_순번이_다르면_복구하지_않는다() {
+		
+		redisTemplate.opsForValue().set(issueKey("stock"), "10");
+
+		couponIssueLuaService.issue(
+			COUPON_ID, 
+			10L, 
+			"request-1"
+		);
+
+		CouponIssueStockRestoreResult result = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-1", 
+			999L
+		);
+
+		assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.INCONSISTENT_STATE);
+
+		assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+		
+		assertThat(redisTemplate.opsForHash().get(issueKey("applicants"), "10")).isEqualTo("request-1");
+
+		assertThat(redisTemplate.opsForHash().get(issueKey("request-sequence"), "request-1")).isEqualTo("1");
+	}
+	
+	@Test
+	void 재고_키가_없으면_복구하지_않는다() {
+		
+		CouponIssueStockRestoreResult result = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-1", 
+			1L
+		);
+
+		assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.STOCK_NOT_INITIALIZED);
+
+		assertThat(result.remainingStock()).isZero();
+		assertThat(redisTemplate.hasKey(issueKey("stock"))).isFalse();
+	}
+
+	@Test
+	void 신청_기록은_있지만_순번_기록이_없으면_복구하지_않는다() {
+		
+		redisTemplate.opsForValue().set(issueKey("stock"), "9");
+		redisTemplate.opsForHash().put(issueKey("applicants"), "10", "request-1");
+
+		CouponIssueStockRestoreResult result = couponIssueLuaService.restoreStock(
+			COUPON_ID, 
+			10L, 
+			"request-1", 
+			1L
+		);
+
+		assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.INCONSISTENT_STATE);
+
+		assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+
+		assertThat(redisTemplate.opsForHash().get(issueKey("applicants"), "10")).isEqualTo("request-1");
+	}
+	
+	@Test
+	void 유효하지_않은_재고_복구_요청은_복구_전용_예외가_발생한다() {
+		assertThatThrownBy(() -> couponIssueLuaService.restoreStock(null, 10L, "request-1", 1L))
+				.isInstanceOf(GeneralException.class).extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
+	}
+	
+	@Test
+	void 순번_기록은_있지만_신청_기록이_없으면_복구하지_않는다() {
+		
+	    redisTemplate.opsForValue().set(issueKey("stock"), "9");
+	    redisTemplate.opsForHash().put(issueKey("request-sequence"), "request-1", "1");
+
+	    CouponIssueStockRestoreResult result =
+	    	couponIssueLuaService.restoreStock(
+	    		COUPON_ID, 
+	    		10L,  
+	    		"request-1",     
+	    		1L
+	    	);
+
+	    assertThat(result.status()).isEqualTo(CouponIssueStockRestoreStatus.INCONSISTENT_STATE);
+
+	    assertThat(redisTemplate.opsForValue().get(issueKey("stock"))).isEqualTo("9");
+
+	    assertThat(redisTemplate.opsForHash()
+	            .get(issueKey("request-sequence"), "request-1"))
+	            .isEqualTo("1");
+	}
 }

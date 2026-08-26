@@ -38,6 +38,7 @@ public class CouponIssueEventConsumer {
 		if (alreadyPersisted.isPresent()) {
 			log.warn("[CouponIssueEvent] 이미 저장된 requestId 재수신, 스킵: requestId={}", event.requestId());
 			couponIssuePersister.confirmIdempotencySucceeded(alreadyPersisted.get(), event.requestId());
+			couponIssuePersister.markConsumed(event.requestId());
 			return;
 		}
 
@@ -56,6 +57,7 @@ public class CouponIssueEventConsumer {
 					event.requestId(), e
 				);
 				couponIssuePersister.confirmIdempotencySucceeded(racedByOtherConsumer.get(), event.requestId());
+				couponIssuePersister.markConsumed(event.requestId());
 			} else {
 				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요
 				// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)

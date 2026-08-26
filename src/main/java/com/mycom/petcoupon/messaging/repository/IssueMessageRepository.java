@@ -50,6 +50,18 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	);
 	
 	
+	// Kafka Consumer가 coupon_issue 저장까지 성공했을 때(CONSUMED) 호출 — markDlq와 동일하게
+	// topic+message_key(uk_message_key_topic) 기준. Kafka enqueue 성공(SENT)과 파이프라인 완주를
+	// 구분하기 위한 것이라 retryCount/lastError는 건드리지 않는다.
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("UPDATE IssueMessage im SET im.status = :status WHERE im.topic = :topic AND im.messageKey = :messageKey")
+	int updateStatusByMessageKey(
+			@Param("topic") String topic,
+			@Param("messageKey") String messageKey,
+			@Param("status") IssueMessageStatus status
+	);
+
 	boolean existsByTopicAndMessageKey(String topic, String messageKey);
 	
 	List<IssueMessage> findByStatusInAndRetryCountLessThan(
