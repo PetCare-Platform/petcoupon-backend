@@ -114,6 +114,14 @@ public class ReconciliationJobConfig {
     // HISTORY_MISMATCH: 현재 status가 가장 최근 이력의 to_status와 다른 건.
     // ReconciliationDetectionQueries의 다른 검증들과 조건 형식은 같지만, 대용량이라 전체 로드
     // 대신 coupon_issue_id 기준 keyset 페이징으로 chunkSize씩 읽는다.
+    //
+    // "최근 이력"을 h.history_id = (상관 서브쿼리 MAX(...)) 형태로 짰더니, EXPLAIN에서
+    // coupon_issue_history에 이미 있는 FK 인덱스(coupon_issue_id)를 두고도 DEPENDENT SUBQUERY로
+    // 잡혀 외부 coupon_issue 행마다 coupon_issue_history를 매번 통째로 스캔했다(type=ALL) —
+    // 인덱스를 더 추가해도 옵티마이저가 상관 서브쿼리 형태 자체를 못 벗어나 소용없었다.
+    // ROW_NUMBER() 윈도우 함수로 파생 테이블을 한 번만 만들어 조인하는 형태로 바꾸니
+    // select_type이 DEPENDENT SUBQUERY(행마다 반복) 대신 DERIVED(한 번만 실행)로 바뀌었다 —
+    // 50,000건 규모로 EXPLAIN/결과 일치까지 직접 확인함.
     @Bean
     @StepScope
     public JdbcPagingItemReader<HistoryMismatchRow> historyMismatchReader(
@@ -125,13 +133,13 @@ public class ReconciliationJobConfig {
             queryProviderFactory.setSelectClause("ci.coupon_issue_id, ci.user_id, ci.status, h.to_status");
             queryProviderFactory.setFromClause("""
                     coupon_issue ci
-                    LEFT JOIN coupon_issue_history h
-                      ON h.history_id = (
-                           SELECT MAX(h2.history_id)
-                             FROM coupon_issue_history h2
-                            WHERE h2.coupon_issue_id = ci.coupon_issue_id
-                              AND h2.created_at <= :asOfAt
-                         )
+                    LEFT JOIN (
+                        SELECT coupon_issue_id, to_status,
+                               ROW_NUMBER() OVER (PARTITION BY coupon_issue_id ORDER BY history_id DESC) AS rn
+                          FROM coupon_issue_history
+                         WHERE coupon_id = :couponId
+                           AND created_at <= :asOfAt
+                    ) h ON h.coupon_issue_id = ci.coupon_issue_id AND h.rn = 1
                     """);
             queryProviderFactory.setWhereClause("""
                     ci.coupon_id = :couponId
