@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,7 +30,10 @@ import lombok.RequiredArgsConstructor;
 public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
 
     // IN_PROGRESS 상태가 이 시간을 넘기면 죽은 시도로 간주하고 재처리를 허용한다.
-    private static final Duration TTL = Duration.ofSeconds(30);
+    // 부하 테스트 목표(전건 확정 5분/300초 이내)의 2배 여유를 두고 600초로 잡았다 — 실측(p95/p99/p99.9/최대
+    // 처리 시간) 나오면 조정 예정(#84). 하드코딩 대신 프로퍼티로 빼서 그때 코드 변경 없이 튜닝 가능하게 함.
+    @Value("${coupon.issue.idempotency.ttl-seconds:600}")
+    private long ttlSeconds;
 
     // 상태와 무관하게, 생성된 지 이만큼 지난 행은 재현(REPLAY)될 일이 없다고 보고 정리 대상으로 삼는다.
     // TTL(30초)과 달리 SUCCEEDED/FAILED 행은 완료 후에도 재요청 재현을 위해 한동안 남아있어야 하므로
@@ -50,7 +54,7 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
         // 실제 INSERT는 IdempotencyKeyCreator.create()가 REQUIRES_NEW로 별도 트랜잭션에서 수행한다
         // (같은 트랜잭션에서 실패하면 Hibernate 세션이 오염돼 바로 뒤의 재조회도 실패하기 때문).
         try {
-            IdempotencyKey created = idempotencyKeyCreator.create(userId, couponId, idempotencyKey, requestHash, now.plus(TTL));
+            IdempotencyKey created = idempotencyKeyCreator.create(userId, couponId, idempotencyKey, requestHash, now.plus(ttl()));
             return IdempotencyDecision.proceed(created.getIdempotencyId());
         } catch (DataIntegrityViolationException e) {
             // 동시 요청이 먼저 INSERT를 끝냄 — 그 레코드를 다시 조회해서 기존 판단 로직을 그대로 태운다.
@@ -87,8 +91,12 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
 
     // 죽은 시도(만료된 IN_PROGRESS, 또는 응답 없는 FAILED)를 이어받아 본처리를 다시 시작하게 한다.
     private IdempotencyDecision reclaim(IdempotencyKey record, LocalDateTime now) {
-        record.reclaim(now.plus(TTL));
+        record.reclaim(now.plus(ttl()));
         return IdempotencyDecision.proceed(record.getIdempotencyId());
+    }
+
+    private Duration ttl() {
+        return Duration.ofSeconds(ttlSeconds);
     }
 
     @Override
@@ -116,6 +124,22 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
     @Transactional
     public int cleanupExpiredRecords() {
         return idempotencyKeyRepository.deleteByCreatedAtBefore(LocalDateTime.now().minus(RETENTION));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public IdempotencyKeyStatusResult findStatus(Long userId, String idempotencyKey) {
+        return idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(userId, idempotencyKey)
+                .map(record -> switch (record.getStatus()) {
+                    case IN_PROGRESS -> IdempotencyKeyStatusResult.inProgress();
+                    case SUCCEEDED -> IdempotencyKeyStatusResult.done(record.getResponseStatus(), record.getResponseBody());
+                    // 응답이 저장된 FAILED는 그대로 재현하고, 응답 없는 FAILED(인프라 예외로 끊긴 시도)는
+                    // 아직 최종 결과가 없는 것이므로 IN_PROGRESS와 동일하게 취급한다 — decideForExisting()과 동일한 판단.
+                    case FAILED -> record.getResponseBody() != null
+                            ? IdempotencyKeyStatusResult.done(record.getResponseStatus(), record.getResponseBody())
+                            : IdempotencyKeyStatusResult.inProgress();
+                })
+                .orElseGet(IdempotencyKeyStatusResult::notFound);
     }
 
     // 요청을 식별하는 해시 — 지금은 (couponId, userId) 조합만 넣는다.

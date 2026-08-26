@@ -1,9 +1,12 @@
 package com.mycom.petcoupon.coupon.issue.consumer;
 
+import java.util.Optional;
+
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
@@ -29,9 +32,12 @@ public class CouponIssueEventConsumer {
 			event.couponId(), event.userId(), event.requestId(), event.sequenceNo()
 		);
 
-		// 재전달된 메시지 (이전 처리에서 저장까지는 성공했으나 오프셋 커밋이 안 된 경우) — 재고 보상 없이 스킵
-		if (couponIssueRepository.existsByRequestId(event.requestId())) {
+		// 재전달된 메시지 (이전 처리에서 저장까지는 성공했으나 오프셋 커밋이 안 된 경우) — 재고 보상 없이 스킵.
+		// 단, idempotency_key 확정(succeed)까지 끝났다는 보장은 없다(그 사이에 죽었을 수 있음) — 그래서 여기서도 다시 확정을 시도한다.
+		Optional<CouponIssue> alreadyPersisted = couponIssueRepository.findByRequestId(event.requestId());
+		if (alreadyPersisted.isPresent()) {
 			log.warn("[CouponIssueEvent] 이미 저장된 requestId 재수신, 스킵: requestId={}", event.requestId());
+			couponIssuePersister.confirmIdempotencySucceeded(alreadyPersisted.get(), event.requestId());
 			return;
 		}
 
@@ -42,12 +48,14 @@ public class CouponIssueEventConsumer {
 				event.requestId(), event.sequenceNo()
 			);
 		} catch (DataIntegrityViolationException e) {
-			if (couponIssueRepository.existsByRequestId(event.requestId())) {
+			Optional<CouponIssue> racedByOtherConsumer = couponIssueRepository.findByRequestId(event.requestId());
+			if (racedByOtherConsumer.isPresent()) {
 				// 이 requestId로 이미 저장이 끝난 상태 (재전달) — 재고는 정상 소진된 것이므로 보상하지 않음
 				log.warn(
 					"[CouponIssueEvent] 재전달로 인한 저장 스킵 (이미 처리된 것으로 확인): requestId={}",
 					event.requestId(), e
 				);
+				couponIssuePersister.confirmIdempotencySucceeded(racedByOtherConsumer.get(), event.requestId());
 			} else {
 				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요
 				// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)

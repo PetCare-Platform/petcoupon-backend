@@ -241,13 +241,13 @@ class CouponControllerTest {
                         .header(IDEMPOTENCY_HEADER, KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":1}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isAccepted());
 
         org.mockito.Mockito.verify(couponIssueService).issue(eq(5L), any(), eq("issue:42"));
     }
 
     @Test
-    void 정상_요청이면_200과_응답값을_반환하고_성공을_기록한다() throws Exception {
+    void 정상_요청이면_202와_응답값을_반환하고_성공을_기록한다() throws Exception {
         when(couponIssueService.issue(eq(5L), any(), any()))
                 .thenReturn(CouponIssueCreateResponse.builder()
                         .couponId(5L)
@@ -258,12 +258,12 @@ class CouponControllerTest {
                         .header(IDEMPOTENCY_HEADER, KEY)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":1}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.result.couponId").value(5))
                 .andExpect(jsonPath("$.result.userId").value(1));
 
-        org.mockito.Mockito.verify(idempotencyKeyService).succeed(eq(1L), eq(200), any());
+        org.mockito.Mockito.verify(idempotencyKeyService).succeed(eq(1L), eq(202), any());
     }
 
     @Test
