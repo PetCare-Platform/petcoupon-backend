@@ -438,4 +438,11 @@ public class CouponIssueLuaServiceIntegrationTest {
 
 		assertThat(redisTemplate.opsForHash().get(issueKey("applicants"), "10")).isEqualTo("request-1");
 	}
+	
+	@Test
+	void 유효하지_않은_재고_복구_요청은_복구_전용_예외가_발생한다() {
+		assertThatThrownBy(() -> couponIssueLuaService.restoreStock(null, 10L, "request-1", 1L))
+				.isInstanceOf(GeneralException.class).extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
+	}
 }

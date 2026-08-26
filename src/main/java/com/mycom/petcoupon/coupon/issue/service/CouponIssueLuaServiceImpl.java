@@ -245,7 +245,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 		if (couponId == null || couponId <= 0 || userId == null || userId <= 0 || requestId == null
 				|| requestId.isBlank() || sequenceNo == null || sequenceNo <= 0) {
 
-			throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
+			throw new GeneralException(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
 		}
 	}
 }
