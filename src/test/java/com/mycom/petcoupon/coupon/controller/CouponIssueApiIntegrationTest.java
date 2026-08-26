@@ -177,6 +177,12 @@ class CouponIssueApiIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM issue_message WHERE coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)
 				.executeUpdate();
+		// #119(쿠폰 발급 알림 로그)에서 coupon_issue를 FK로 무는 notification_log가 추가돼서,
+		// 위와 같은 이유로 coupon_issue 삭제보다 먼저 지워야 한다.
+		entityManager.createNativeQuery(
+				"DELETE n FROM notification_log n JOIN coupon_issue ci ON n.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id IN :couponIds")
+				.setParameter("couponIds", couponIds)
+				.executeUpdate();
 		entityManager.createNativeQuery(
 				"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)

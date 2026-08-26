@@ -130,10 +130,18 @@ class CouponIssuePipelineIntegrationTest {
 
 		transactionTemplate.executeWithoutResult(status -> {
 			if (couponId != null) {
-				// coupon_issue를 참조하는 이력을 먼저 삭제
+				// coupon_issue를 참조하는 이력/알림 로그를 먼저 삭제
 				entityManager.createNativeQuery("""
 						DELETE FROM coupon_issue_history
 						 WHERE coupon_id = :couponId
+						""").setParameter("couponId", couponId).executeUpdate();
+
+				// #119(쿠폰 발급 알림 로그)에서 coupon_issue를 FK로 무는 notification_log가 추가돼서,
+				// 위와 같은 이유로 coupon_issue 삭제보다 먼저 지워야 한다.
+				entityManager.createNativeQuery("""
+						DELETE n FROM notification_log n
+						  JOIN coupon_issue ci ON n.coupon_issue_id = ci.coupon_issue_id
+						 WHERE ci.coupon_id = :couponId
 						""").setParameter("couponId", couponId).executeUpdate();
 
 				entityManager.createNativeQuery("""
