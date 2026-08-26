@@ -122,6 +122,7 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | `RUN_ID` | `local` | 멱등키 접두사. 회차마다 바꿉니다 |
 | `RESET` | `true` | `setup`에서 초기화 API 호출 여부 |
 | `INSTANCE_INDEX` | `0` | k6를 여러 대로 돌릴 때 기기 번호 |
+| `INSTANCE_STRIDE` | `100000` | 기기별 회원 구간 폭. **회원 목록 크기에 맞춰 줄여야 합니다** |
 
 ---
 
@@ -136,7 +137,39 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 
 응답의 `redisStock`은 **초기화 후 Redis에서 다시 읽은 값**입니다. `totalQuantity`와 다르면 초기화가 덜 끝난 것이고, `setup()`이 이 값을 대조해 어긋나면 즉시 실패합니다. 쓴 값을 그대로 돌려주는 게 아니라 실제 저장된 값이라 검증에 쓸 수 있습니다.
 
-여러 대에서 나눠 쏠 때는 **1번 기기만** `RESET=true`로 두고, 나머지는 `RESET=false`에 `INSTANCE_INDEX`를 다르게 줍니다. 회원 구간과 멱등키가 겹치지 않습니다.
+### 여러 대에서 나눠 쏠 때
+
+**초기화를 부하와 같은 실행에 섞지 마세요.** k6에는 기기 간 동기화가 없어서, 1번 기기가 초기화를 끝내기 전에 2번 기기의 요청이 먼저 들어갈 수 있습니다. 그러면 그 요청들은 초기화에 지워지거나 이전 회차 상태에서 판정됩니다.
+
+**초기화를 별도 단계로 떼어내고, 끝난 뒤 전 기기를 `RESET=false`로 시작합니다.**
+
+```bash
+curl -X POST localhost:8080/internal/coupons/1/reset \
+  -H "Content-Type: application/json" \
+  -d '{"totalQuantity": 10000}'
+```
+
+응답의 `redisStock`이 `totalQuantity`와 같은지 확인한 뒤, 각 기기에서 이렇게 띄웁니다.
+
+```bash
+# 1번 기기
+k6 run -e RESET=false -e INSTANCE_INDEX=0 -e INSTANCE_STRIDE=10000 -e VUS=1000 -e ITERATIONS_PER_VU=10 ... load-test/k6/issue-coupon.js
+```
+
+```bash
+# 2번 기기
+k6 run -e RESET=false -e INSTANCE_INDEX=1 -e INSTANCE_STRIDE=10000 -e VUS=1000 -e ITERATIONS_PER_VU=10 ... load-test/k6/issue-coupon.js
+```
+
+> ⚠️ **`INSTANCE_STRIDE`는 회원 목록 크기에 맞춰야 합니다.** 기본값 `100000`을 그대로 쓰면서 회원을 30,000명만 뽑으면, 2번 기기가 100,000번째 회원부터 쓰려다 `setup()`에서 막힙니다.
+>
+> **한 기기가 보낼 요청 수 이상**으로 잡고, **`INSTANCE_STRIDE × 기기 수` 이상**의 회원을 뽑으면 됩니다. 위 예시는 기기당 10,000건이라 `INSTANCE_STRIDE=10000`, 회원은 20,000명 이상 필요합니다.
+>
+> ```bash
+> ... "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id LIMIT 30000" > load-test/k6/members.csv
+> ```
+>
+> `RUN_ID`는 전 기기가 같은 값을 써도 됩니다. 멱등키에 `INSTANCE_INDEX`가 들어가 기기끼리 겹치지 않습니다.
 
 ### 초기화가 `409`로 거절될 때 — 미처리 메시지
 

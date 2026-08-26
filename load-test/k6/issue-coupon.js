@@ -99,6 +99,19 @@ function buildIdempotencyKey(seq) {
 	return cfg.RUN_ID + '-' + cfg.INSTANCE_INDEX + '-' + seq;
 }
 
+// k6 duration 표기('30s', '2m', '1h')를 초로 바꾼다. rate 시나리오의 필요 회원 수 계산에 쓴다.
+function durationToSeconds(duration) {
+	const matched = /^(\d+)(ms|s|m|h)$/.exec(String(duration).trim());
+	if (!matched) {
+		throw new Error('DURATION 형식이 올바르지 않습니다. 예: 30s, 2m, 1h. 받은 값: ' + duration);
+	}
+
+	const value = Number(matched[1]);
+	const unit = { ms: 0.001, s: 1, m: 60, h: 3600 }[matched[2]];
+
+	return Math.ceil(value * unit);
+}
+
 const scenario = SCENARIOS[cfg.SCENARIO];
 if (!scenario) {
 	throw new Error(
@@ -116,6 +129,9 @@ export const options = {
 		issue_bad_request: ['count==0'],
 		issue_server_error: ['count==0'],
 		issue_request_error: ['count==0'],
+		// 409 는 멱등키가 겹쳤다는 뜻이다. 요청마다 고유한 키를 만드는 이상 나올 수 없고,
+		// 나왔다면 키 생성 규칙이 깨진 것이라 그 회차 측정은 믿을 수 없다.
+		issue_conflict: ['count==0'],
 		'http_req_duration{expected_response:true}': ['p(95)<1000', 'p(99)<3000'],
 	},
 };
@@ -123,10 +139,20 @@ export const options = {
 export function setup() {
 	const offset = cfg.INSTANCE_INDEX * cfg.INSTANCE_STRIDE;
 
-	if (cfg.SCENARIO === 'burst' && offset + cfg.TOTAL_REQUESTS > MEMBERS.length) {
+	// 시나리오마다 보낼 요청 수. rate 는 초당 요청 수 × 지속 시간으로 계산한다.
+	const requiredMembers = cfg.SCENARIO === 'rate'
+		? cfg.RATE * durationToSeconds(cfg.DURATION)
+		: cfg.TOTAL_REQUESTS;
+
+	// 회원을 돌려쓰면 두 번째부터는 1인 1매 제약에 걸려 판정 단계에서 탈락한다.
+	// 탈락한 요청은 Outbox·Kafka·DB 를 거치지 않고 끝나므로, 처리량이 실제보다 좋게 나온다.
+	// 파이프라인 전 구간을 재려면 요청 하나당 회원 하나가 반드시 있어야 한다.
+	if (offset + requiredMembers > MEMBERS.length) {
 		throw new Error(
-			'회원이 모자랍니다. 필요=' + (offset + cfg.TOTAL_REQUESTS) + ' 보유=' + MEMBERS.length + '\n' +
-				'회원이 재사용되면 1인 1매 제약에 걸려 측정이 왜곡됩니다.',
+			'회원이 모자랍니다. 필요=' + (offset + requiredMembers) + ' 보유=' + MEMBERS.length + '\n' +
+				'회원을 돌려쓰면 중복 신청이 되어 발급 경로를 타지 않고 탈락합니다.\n' +
+				'그 요청들은 파이프라인을 거치지 않으므로 처리량이 실제보다 높게 측정됩니다.\n' +
+				'회원 ID 목록을 늘리거나(README 4번) 요청 수를 줄이세요.',
 		);
 	}
 
