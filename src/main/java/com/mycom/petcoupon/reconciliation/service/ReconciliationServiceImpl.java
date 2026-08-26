@@ -5,12 +5,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueRedisKeys;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
+import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.VerificationDetail;
@@ -28,7 +33,9 @@ import lombok.RequiredArgsConstructor;
 public class ReconciliationServiceImpl implements ReconciliationService {
 
     private final CouponRepository couponRepository;
+    private final CouponStockRepository couponStockRepository;
     private final ReconciliationReportRepository reconciliationReportRepository;
+    private final StringRedisTemplate redisTemplate;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -39,13 +46,30 @@ public class ReconciliationServiceImpl implements ReconciliationService {
         Coupon coupon = couponRepository.findById(couponId)
                 .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
+        // 발급이 아직 진행 중인 쿠폰은 Redis Stream/Outbox/Kafka가 드레인 안 끝난 상태라
+        // STOCK_MISMATCH·SEQUENCE_GAP이 "아직 처리 중"인 것도 버그처럼 잡을 수 있다.
+        // 발급 마감(ENDED) 후에만 이 배치가 신뢰할 수 있는 결과를 낸다.
+        if (coupon.getStatus() != CouponStatus.ENDED) {
+            throw new GeneralException(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
+        }
+
+        CouponStock stock = couponStockRepository.findById(couponId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
         LocalDateTime asOfAt = LocalDateTime.now();
         LocalDateTime startedAt = LocalDateTime.now();
+
+        Integer redisRemaining = readRedisStock(couponId);
+        long dbDlqCount = countDlqMessages(couponId);
+        Long maxSequenceNo = findMaxSequenceNo(couponId);
 
         List<VerificationDetail> details = new java.util.ArrayList<>();
         details.addAll(findHistoryMismatches(couponId));
         details.addAll(findInvalidStatusTransitions(couponId));
         details.addAll(findDuplicateIssues(couponId));
+        details.addAll(findStockMismatch(stock, redisRemaining));
+        details.addAll(findSequenceGap(couponId, maxSequenceNo));
+        details.addAll(findStockNotRestored(couponId));
 
         long totalCount = countTotalIssues(couponId);
         long distinctErrorIssueCount = details.stream()
@@ -66,19 +90,51 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .totalCount(totalCount)
                 .successCount(totalCount - distinctErrorIssueCount)
                 .errorCount(distinctErrorIssueCount)
-                .stockTotal(null)
-                .stockIssued(null)
-                .stockRemaining(null)
+                .stockTotal(stock.getTotalQuantity())
+                .stockIssued(stock.getIssuedQuantity())
+                .stockRemaining(stock.getRemainingQuantity())
                 .dbActiveCount(dbActiveCount)
                 .dbExpiredCount(dbExpiredCount)
-                .dbDlqCount(null)
-                .maxSequenceNo(null)
-                .redisRemaining(null)
+                .dbDlqCount(dbDlqCount)
+                .maxSequenceNo(maxSequenceNo)
+                .redisRemaining(redisRemaining)
                 .result(details.isEmpty() ? ReconciliationResult.MATCHED : ReconciliationResult.MISMATCHED)
                 .build();
 
         details.forEach(d -> d.assignReport(report));
         return reconciliationReportRepository.save(report);
+    }
+
+    // 재고 키를 읽어 숫자로 바꾼다. 키가 없거나 숫자가 아니면 null — Lua가 재고 판정을 못 하는
+    // STOCK_NOT_INITIALIZED 상태와 같은 뜻이라, STOCK_MISMATCH 쪽에서 그대로 불일치로 잡는다.
+    private Integer readRedisStock(Long couponId) {
+        String raw = redisTemplate.opsForValue().get(CouponIssueRedisKeys.stock(couponId));
+
+        if (raw == null) {
+            return null;
+        }
+
+        try {
+            return Integer.valueOf(raw);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private long countDlqMessages(Long couponId) {
+        return ((Number) entityManager.createNativeQuery(
+                "SELECT COUNT(*) FROM issue_message WHERE coupon_id = :couponId AND status = 'DLQ'")
+                .setParameter("couponId", couponId)
+                .getSingleResult()).longValue();
+    }
+
+    private Long findMaxSequenceNo(Long couponId) {
+        Object result = entityManager.createNativeQuery(
+                "SELECT MAX(sequence_no) FROM coupon_issue WHERE coupon_id = :couponId")
+                .setParameter("couponId", couponId)
+                .getSingleResult();
+
+        return result == null ? null : ((Number) result).longValue();
     }
 
     private long countTotalIssues(Long couponId) {
@@ -185,5 +241,89 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                         .message("동일 유저에게 중복 발급된 이력이 있습니다")
                         .build())
                 .toList();
+    }
+
+    // STOCK_MISMATCH: DB coupon_stock.remaining_quantity 와 Redis 재고 키 값이 다른 경우.
+    // 쿠폰 전체에 대한 문제라 특정 발급 건을 가리키지 않으므로 couponIssueId/userId는 비운다.
+    private List<VerificationDetail> findStockMismatch(CouponStock stock, Integer redisRemaining) {
+        if (redisRemaining != null && redisRemaining == stock.getRemainingQuantity()) {
+            return List.of();
+        }
+
+        return List.of(VerificationDetail.builder()
+                .errorType(VerificationErrorType.STOCK_MISMATCH)
+                .expectedValue(String.valueOf(stock.getRemainingQuantity()))
+                .actualValue(redisRemaining == null ? "Redis 키 없음" : String.valueOf(redisRemaining))
+                .message("DB 재고와 Redis 재고가 일치하지 않습니다")
+                .build());
+    }
+
+    // SEQUENCE_GAP: coupon_issue.sequence_no가 1부터 연속이어야 하는데 중간에 비어있는 경우.
+    // Lua가 순번은 내줬지만(재고 예약) 그 요청이 DB에 끝내 반영되지 않았다는 뜻 — 몇 번이 빈 건지까지는
+    // 1차 버전에서 찾지 않고, 참고용으로 이 쿠폰의 DLQ/FAILED(재시도중) 건수를 같이 보여준다.
+    private List<VerificationDetail> findSequenceGap(Long couponId, Long maxSequenceNo) {
+        if (maxSequenceNo == null) {
+            return List.of();
+        }
+
+        long distinctCount = ((Number) entityManager.createNativeQuery(
+                "SELECT COUNT(DISTINCT sequence_no) FROM coupon_issue WHERE coupon_id = :couponId")
+                .setParameter("couponId", couponId)
+                .getSingleResult()).longValue();
+
+        if (distinctCount >= maxSequenceNo) {
+            return List.of();
+        }
+
+        long missingCount = maxSequenceNo - distinctCount;
+        Map<String, Long> messageCounts = countIssueMessagesByStatus(couponId, "DLQ", "FAILED");
+
+        return List.of(VerificationDetail.builder()
+                .errorType(VerificationErrorType.SEQUENCE_GAP)
+                .expectedValue("1~" + maxSequenceNo + " 연속")
+                .actualValue(distinctCount + "건 존재, " + missingCount + "개 번호 없음")
+                .message(
+                        "순번에 빈 구간이 있습니다 (참고: 이 쿠폰의 issue_message DLQ "
+                                + messageCounts.getOrDefault("DLQ", 0L) + "건, FAILED(재시도중) "
+                                + messageCounts.getOrDefault("FAILED", 0L) + "건)"
+                )
+                .build());
+    }
+
+    // STOCK_NOT_RESTORED: 재시도를 다 소진하고 최종 실패(DLQ)한 요청 — Lua가 예약해둔 재고 1개를
+    // 되돌려주는 restoreStock()이 아직 없어서, DLQ row 하나하나가 곧 미복구 재고 1개다.
+    private List<VerificationDetail> findStockNotRestored(Long couponId) {
+        List<Tuple> rows = entityManager.createNativeQuery("""
+                SELECT message_id, user_id FROM issue_message
+                 WHERE coupon_id = :couponId AND status = 'DLQ'
+                """, Tuple.class)
+                .setParameter("couponId", couponId)
+                .getResultList();
+
+        return rows.stream()
+                .map(row -> VerificationDetail.builder()
+                        .errorType(VerificationErrorType.STOCK_NOT_RESTORED)
+                        .userId(((Number) row.get(1)).longValue())
+                        .expectedValue("재고 복구됨")
+                        .actualValue("DLQ 확정 (message_id=" + row.get(0) + ")")
+                        .message("최종 실패했지만 예약된 재고가 복구되지 않았습니다")
+                        .build())
+                .toList();
+    }
+
+    private Map<String, Long> countIssueMessagesByStatus(Long couponId, String... statuses) {
+        List<Tuple> rows = entityManager.createNativeQuery("""
+                SELECT status, COUNT(*) FROM issue_message
+                 WHERE coupon_id = :couponId AND status IN (:statuses)
+                 GROUP BY status
+                """, Tuple.class)
+                .setParameter("couponId", couponId)
+                .setParameter("statuses", List.of(statuses))
+                .getResultList();
+
+        return rows.stream().collect(Collectors.toMap(
+                row -> (String) row.get(0),
+                row -> ((Number) row.get(1)).longValue()
+        ));
     }
 }
