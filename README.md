@@ -77,6 +77,7 @@ flowchart TD
 
     PUB -.발행 5회 소진.-> DLQ[[DLQ 토픽<br/>+ issue_message.status=DLQ]]
     KC -.소비 3회 소진.-> DLQ
+    KC -.최종 실패 확정.-> IDEM
     DLQ -.관리자 수동 재발행.-> KAFKA
 
     C -->|GET .../status?idempotencyKey| IDEM
@@ -156,7 +157,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 | Method | Path | 설명 |
 |---|---|---|
 | `POST` | `/coupons/{couponId}/issues` | 선착순 신청 (`Idempotency-Key` 헤더 필수) → `202` |
-| `GET` | `/coupons/{couponId}/status` | 쿠폰 실시간 요청 현황 (잔여 재고는 Redis 기준) |
+| `GET` | `/coupons/{couponId}/status` | 쿠폰 실시간 요청 현황 — 잔여 재고는 Redis 기준. `initialized`가 `false`면 아직 재고 키가 없다는 뜻이라 `remainingQuantity: 0`을 품절로 읽으면 안 된다 |
 | `GET` | `/users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 신청 결과 폴링 |
 | `GET` | `/users/{userId}/coupon-issue-requests` | 내 발급 신청 내역 |
 | `GET` | `/coupon-issues/{couponIssueId}` | 발급 쿠폰 상세 |
@@ -219,7 +220,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 | `KAFKA_BOOTSTRAP_SERVERS` | localhost:9092 | Kafka 브로커 |
 | `ADMIN_AUTH_CODE` | 개발용 기본값 | 관리자 세션 발급 코드. **배포 전 반드시 설정** |
 | `ADMIN_SESSION_TTL` | `PT8H` | 세션 토큰 유효 기간 (ISO-8601 Duration) |
-| `JPA_DDL_AUTO` | `update` | 스키마 확정 후 `validate` 전환 예정 |
+| `JPA_DDL_AUTO` | `update` | 엔티티 변경을 스키마에 자동 반영 |
 | `DB_POOL_SIZE` | 10 | HikariCP 풀. **워커 스레드와 함께 올려야 한다** |
 | `TOMCAT_MAX_THREADS` | 200 | Spring Boot 기본값 |
 | `ACTUATOR_ENDPOINTS` | `health,info,metrics` | 노출할 Actuator 엔드포인트 |
@@ -245,7 +246,7 @@ src/main/java/com/mycom/petcoupon/
 ├── idempotency/         API 레벨 멱등성 원장
 ├── messaging/           Outbox (issue_message)
 ├── reconciliation/      정합성 검증 배치
-├── notification/        알림 로그 (스키마만)
+├── notification/        알림 로그
 ├── user/                사용자
 └── global/              공통 응답 · 예외 · 설정
     └── auth/            관리자 세션 인증 (인터셉터 · 토큰 발급)
