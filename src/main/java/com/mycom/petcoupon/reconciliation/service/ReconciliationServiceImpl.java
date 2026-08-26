@@ -35,7 +35,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
 
     @Override
     @Transactional
-    public void reconcile(Long couponId) {
+    public ReconciliationReport reconcile(Long couponId) {
         Coupon coupon = couponRepository.findById(couponId)
                 .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
@@ -78,7 +78,7 @@ public class ReconciliationServiceImpl implements ReconciliationService {
                 .build();
 
         details.forEach(d -> d.assignReport(report));
-        reconciliationReportRepository.save(report);
+        return reconciliationReportRepository.save(report);
     }
 
     private long countTotalIssues(Long couponId) {
