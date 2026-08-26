@@ -6,9 +6,11 @@ import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.event.entity.Event;
 
 @Component
@@ -49,6 +51,24 @@ public class CouponConverter {
 				.validDays(coupon.getValidDays())
 				.totalQuantity(couponStock.getTotalQuantity())
 				.status(coupon.getStatus())
+				.build();
+	}
+
+	public CouponRealtimeStatusResponse toRealtimeStatusResponse(
+			Coupon coupon, CouponStock couponStock, CouponIssueRealtimeStock realtimeStock) {
+		int totalQuantity = couponStock.getTotalQuantity();
+
+		// Redis가 아직 초기화 안 된 상태(발급 시작 전)면 Lua가 발급 자체를 막아주므로
+		// 실제로는 아무도 발급받지 못한 게 맞다 — 잔여를 총수량 그대로 노출한다.
+		int remainingQuantity = realtimeStock.initialized() ? realtimeStock.remainingStock() : totalQuantity;
+		int issuedQuantity = totalQuantity - remainingQuantity;
+
+		return CouponRealtimeStatusResponse.builder()
+				.couponId(coupon.getCouponId())
+				.totalQuantity(totalQuantity)
+				.remainingQuantity(remainingQuantity)
+				.issuedQuantity(issuedQuantity)
+				.initialized(realtimeStock.initialized())
 				.build();
 	}
 

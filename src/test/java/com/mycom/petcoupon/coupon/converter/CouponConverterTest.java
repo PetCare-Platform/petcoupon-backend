@@ -11,11 +11,13 @@ import org.junit.jupiter.api.Test;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.event.entity.Event;
 
 class CouponConverterTest {
@@ -157,6 +159,48 @@ class CouponConverterTest {
 		CouponUpdateResponse response = couponConverter.toUpdateResponse(coupon, couponStock);
 
 		assertEquals(stockUpdatedAt, response.updatedAt());
+	}
+
+	@Test
+	void toRealtimeStatusResponseDerivesIssuedQuantityFromRemainingStock_whenInitialized() {
+		Coupon coupon = mock(Coupon.class);
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+				.initialized(true)
+				.remainingStock(60)
+				.build();
+
+		when(coupon.getCouponId()).thenReturn(1L);
+		when(couponStock.getTotalQuantity()).thenReturn(100);
+
+		CouponRealtimeStatusResponse response = couponConverter.toRealtimeStatusResponse(coupon, couponStock, realtimeStock);
+
+		assertEquals(1L, response.couponId());
+		assertEquals(100, response.totalQuantity());
+		assertEquals(60, response.remainingQuantity());
+		assertEquals(40, response.issuedQuantity());
+		assertEquals(true, response.initialized());
+	}
+
+	// Redis 재고 초기화 API가 아직 없어서(팀 API 문서 기준 미구현), 발급 시작 전 쿠폰은
+	// stock 키 자체가 없는 상태가 정상이다 — 이때 품절(0)로 보이면 안 되므로 총수량을 그대로 잔여로 노출한다.
+	@Test
+	void toRealtimeStatusResponseTreatsFullStockAsRemaining_whenNotInitialized() {
+		Coupon coupon = mock(Coupon.class);
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponIssueRealtimeStock realtimeStock = CouponIssueRealtimeStock.builder()
+				.initialized(false)
+				.remainingStock(0)
+				.build();
+
+		when(coupon.getCouponId()).thenReturn(1L);
+		when(couponStock.getTotalQuantity()).thenReturn(100);
+
+		CouponRealtimeStatusResponse response = couponConverter.toRealtimeStatusResponse(coupon, couponStock, realtimeStock);
+
+		assertEquals(100, response.remainingQuantity());
+		assertEquals(0, response.issuedQuantity());
+		assertEquals(false, response.initialized());
 	}
 
 	private Coupon couponWithUpdatedAt(LocalDateTime updatedAt) {

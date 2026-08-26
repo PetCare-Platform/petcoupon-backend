@@ -148,8 +148,17 @@ public class EventServiceImpl implements EventService {
 		}
 	}
 
+	// 임의의 활성 관리자를 대표로 조회한다. 인증 API가 없어서 임시로 둔 게 아니라,
+	// 지금 인증 방식으로는 이게 얻을 수 있는 최선이라서 남아 있다.
+	//
+	// ADMIN_AUTH_CODE는 팀이 공유하는 인증코드라 "관리자인지"만 증명하고 "어느 관리자인지"는
+	// 담지 못한다(#91에서 세션 발급 API 구현 완료). 게다가 Event.createdBy가 optional=false라
+	// AppUser 참조 자체가 필수여서, 값을 비워두는 선택지도 없다.
+	//
+	// 그래서 지금 EventStatusHistory.actorId는 "실제로 수정한 사람"이 아니라
+	// "대표 관리자 계정"이다. 감사 이력에 실제 신원이 필요해지면 로그인 기반 인증이
+	// 선행돼야 하고, 그때 이 메서드를 인증 컨텍스트에서 꺼낸 관리자로 교체하면 된다.
 	private AppUser findActiveAdmin() {
-		// TODO: ADMIN_AUTH_CODE 기반 인증 API 구현 후 임의 관리자 조회를 제거하고 인증된 관리자 ID를 사용한다.
 		return appUserRepository
 				.findFirstByRoleAndStatusOrderByUserIdAsc(UserRole.ROLE_ADMIN, UserStatus.ACTIVE)
 				.orElseThrow(() -> new GeneralException(CommonErrorCode.INTERNAL_SERVER_ERROR));
