@@ -50,13 +50,21 @@ SELECT '0-1. 검증 대상 쿠폰/재고 존재' AS 확인,
 -- 기대값으로 두면 그런 회차가 전부 FAIL 로 나온다. 접수된 요청 수와 총재고 중 작은 쪽을
 -- 기대값으로 잡아 과발급 회차와 소량 회차를 같은 쿼리로 본다.
 -- 접수 수는 idempotency_key 행 수로 센다 — 초기화 API 가 쿠폰별로 지우므로 이번 회차 값만 남는다.
+--
+-- SUCCEEDED 로 좁히는 이유: begin() 이 행을 먼저 만들고 그 뒤에 성공 · 실패가 갈린다.
+-- 조건 없이 세면 Redis 순단 등으로 500 이 난 건(failWithoutBody)까지 접수로 잡혀서,
+-- 재고가 병목이 아닌 소량 회차에서 기대값만 부풀고 없는 재고 유실처럼 FAIL 이 난다.
+-- response_status 로는 거를 수 없다 — 접수 때 202 로 넣은 값을 발급 확정 시
+-- CouponIssuePersister 가 succeed(recordId, 200, ...) 으로 덮어쓰기 때문에,
+-- 202 만 세면 정상 발급된 건이 통째로 빠진다. status 는 두 경우 다 SUCCEEDED 다.
 SELECT '1. 발급 건수 = MIN(접수 요청, 총재고)' AS 검증항목,
        CAST(LEAST(r.accepted, s.total_quantity) AS CHAR) AS 기대,
        CAST(i.cnt AS CHAR)                               AS 실제,
        IF(i.cnt = LEAST(r.accepted, s.total_quantity), 'PASS', 'FAIL') AS 결과
   FROM (SELECT total_quantity FROM coupon_stock WHERE coupon_id = @coupon_id) s
  CROSS JOIN (SELECT COUNT(*) AS cnt FROM coupon_issue WHERE coupon_id = @coupon_id) i
- CROSS JOIN (SELECT COUNT(*) AS accepted FROM idempotency_key WHERE coupon_id = @coupon_id) r
+ CROSS JOIN (SELECT COUNT(*) AS accepted FROM idempotency_key
+              WHERE coupon_id = @coupon_id AND status = 'SUCCEEDED') r
 
 UNION ALL
 -- uk_issue_coupon_user 가 막아주지만, 제약이 빠졌을 때를 대비해 실제 데이터로도 본다.
