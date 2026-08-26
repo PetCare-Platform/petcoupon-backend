@@ -27,6 +27,13 @@ SET @coupon_id = 1;
 --    SENT 는 Kafka 발행까지만 끝난 상태다. DB 저장이 끝나야 CONSUMED 가 되므로
 --    (CouponIssuePersister.markConsumed), 둘을 묶어서 보면 아직 처리 중인 건을 놓친다.
 --    대기 · 재시도대기 · 발행중 이 모두 0 이 될 때까지 이 블록만 반복 실행한 뒤 1번으로 내려간다.
+--
+--    Outbox 만으로는 부족하다. Outbox 에 행이 생기는 건 Stream Consumer 가 판정을 끝낸 뒤라,
+--    아직 Redis Stream 에 남아 있는 요청은 이 표에 아예 나타나지 않는다. 아래도 함께 0 이어야 한다.
+--
+--      docker exec petcoupon-redis redis-cli XINFO GROUPS coupon:issue:stream
+--        lag     아직 아무도 안 읽어간 메시지 수
+--        pending 읽어갔지만 ACK 안 된 메시지 수 (처리 실패로 남은 것)
 -- ---------------------------------------------------------------------
 SELECT '0. 처리 대기 중인 Outbox' AS 확인,
 	   COALESCE(SUM(status = 'PENDING'), 0)                    AS 대기,
@@ -51,12 +58,18 @@ SELECT '0-1. 검증 대상 쿠폰/재고 존재' AS 확인,
 -- 기대값으로 잡아 과발급 회차와 소량 회차를 같은 쿼리로 본다.
 -- 접수 수는 idempotency_key 행 수로 센다 — 초기화 API 가 쿠폰별로 지우므로 이번 회차 값만 남는다.
 --
--- SUCCEEDED 로 좁히는 이유: begin() 이 행을 먼저 만들고 그 뒤에 성공 · 실패가 갈린다.
--- 조건 없이 세면 Redis 순단 등으로 500 이 난 건(failWithoutBody)까지 접수로 잡혀서,
--- 재고가 병목이 아닌 소량 회차에서 기대값만 부풀고 없는 재고 유실처럼 FAIL 이 난다.
--- response_status 로는 거를 수 없다 — 접수 때 202 로 넣은 값을 발급 확정 시
--- CouponIssuePersister 가 succeed(recordId, 200, ...) 으로 덮어쓰기 때문에,
--- 202 만 세면 정상 발급된 건이 통째로 빠진다. status 는 두 경우 다 SUCCEEDED 다.
+-- 세는 기준은 "202 를 돌려받았는가" 다. 접수 자체가 500 으로 끝난 건만 빼고 전부 센다.
+--   begin() 이 행을 먼저 만들고 그 뒤에 결과가 갈리므로 조건 없이 세면 Redis 순단 등으로
+--   500 이 난 건까지 접수로 잡혀 기대값만 부풀고 없는 재고 유실처럼 FAIL 이 난다.
+--   그 건들은 failWithoutBody 로 기록돼 status = FAILED 이면서 response_status 가 NULL 이다.
+--
+-- SUCCEEDED 로 좁히면 안 된다. 접수는 됐지만 발급이 안 된 건(SOLD_OUT · 중복 · DLQ 확정)이
+-- FAILED 로 바뀌는데, 그러면 발급이 유실될수록 기대값도 같이 줄어 미달 발급을 못 잡는다.
+-- 재고 10,000 중 1,000 건이 DLQ 로 빠져 9,000 만 발급돼도 기대 9,000 · 실제 9,000 이 되어
+-- PASS 로 나온다. 접수 기준으로 세야 기대 10,000 · 실제 9,000 으로 FAIL 이 뜬다.
+--
+-- response_status 로 202 만 거르는 것도 안 된다 — 발급이 확정되면 CouponIssuePersister 가
+-- succeed(recordId, 200, ...) 으로 덮어써서 정상 발급 건이 통째로 빠진다.
 SELECT '1. 발급 건수 = MIN(접수 요청, 총재고)' AS 검증항목,
        CAST(LEAST(r.accepted, s.total_quantity) AS CHAR) AS 기대,
        CAST(i.cnt AS CHAR)                               AS 실제,
@@ -64,7 +77,8 @@ SELECT '1. 발급 건수 = MIN(접수 요청, 총재고)' AS 검증항목,
   FROM (SELECT total_quantity FROM coupon_stock WHERE coupon_id = @coupon_id) s
  CROSS JOIN (SELECT COUNT(*) AS cnt FROM coupon_issue WHERE coupon_id = @coupon_id) i
  CROSS JOIN (SELECT COUNT(*) AS accepted FROM idempotency_key
-              WHERE coupon_id = @coupon_id AND status = 'SUCCEEDED') r
+              WHERE coupon_id = @coupon_id
+                AND NOT (status = 'FAILED' AND response_status IS NULL)) r
 
 UNION ALL
 -- uk_issue_coupon_user 가 막아주지만, 제약이 빠졌을 때를 대비해 실제 데이터로도 본다.
@@ -87,11 +101,16 @@ SELECT '3. 순번 중복', '0',
 
 UNION ALL
 -- 순번은 Redis 가 매긴다. 1..N 이 끊기면 판정은 났는데 DB 확정이 빠진 건이 있다는 뜻이다.
+--
+-- 발급이 0 건이면 MIN·MAX 가 NULL 이고 NULL = 1 은 참도 거짓도 아닌 NULL 이라 IF 가 FAIL 로 떨어진다.
+-- 초기화 직후처럼 아직 아무것도 안 쏜 상태에서 없는 순번 버그를 있는 것처럼 보고하게 되므로
+-- 0 건은 검사 대상이 아닌 것으로 본다. "발급이 나왔어야 하는데 0 건인가" 는 1 번이 판정한다.
 SELECT '4. 순번 연속(1..N)',
        CONCAT('1..', CAST(COUNT(*) AS CHAR)),
        CONCAT(CAST(IFNULL(MIN(sequence_no), 0) AS CHAR), '..',
               CAST(IFNULL(MAX(sequence_no), 0) AS CHAR)),
-       IF(MIN(sequence_no) = 1 AND MAX(sequence_no) = COUNT(*), 'PASS', 'FAIL')
+       IF(COUNT(*) = 0
+          OR (MIN(sequence_no) = 1 AND MAX(sequence_no) = COUNT(*)), 'PASS', 'FAIL')
   FROM coupon_issue
  WHERE coupon_id = @coupon_id
 
@@ -147,11 +166,14 @@ SELECT '9. Outbox 건수 = 발급 건수',
  CROSS JOIN (SELECT COUNT(*) AS cnt FROM issue_message WHERE coupon_id = @coupon_id) m
 
 UNION ALL
+-- SENT 를 반드시 포함한다. 0 번과 같은 기준이어야 한다 — SENT 는 Kafka 발행까지만 끝나고
+-- DB 확정(CONSUMED)은 아직인 상태다. 빼면 0 번 출력을 놓친 사람이 아직 처리 중인 데이터를
+-- 완료된 것으로 읽고, 그 상태의 발급 건수·순번을 그대로 판정하게 된다.
 SELECT '10. 미처리 Outbox', '0',
        CAST(COUNT(*) AS CHAR), IF(COUNT(*) = 0, 'PASS', 'FAIL')
   FROM issue_message
  WHERE coupon_id = @coupon_id
-   AND status IN ('PENDING', 'FAILED', 'DLQ')
+   AND status IN ('PENDING', 'FAILED', 'SENT', 'DLQ')
 
 UNION ALL
 -- Consumer 가 발급을 저장하면서 같이 깎는 값이다. 발급 건수와 어긋나면 둘 중 하나가 새고 있다.
