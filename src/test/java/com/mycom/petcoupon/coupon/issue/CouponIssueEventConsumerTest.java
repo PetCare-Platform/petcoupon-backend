@@ -53,6 +53,7 @@ class CouponIssueEventConsumerTest {
 
 		verify(couponIssuePersister, never()).persist(EVENT);
 		verify(couponIssuePersister).confirmIdempotencySucceeded(existing, "issue:42");
+		verify(couponIssuePersister).markConsumed("issue:42");
 	}
 
 	@Test
@@ -77,6 +78,7 @@ class CouponIssueEventConsumerTest {
 		assertThatCode(() -> consumer.consume(EVENT)).doesNotThrowAnyException();
 
 		verify(couponIssuePersister).confirmIdempotencySucceeded(existing, "issue:42");
+		verify(couponIssuePersister).markConsumed("issue:42");
 	}
 
 	@Test
@@ -92,6 +94,7 @@ class CouponIssueEventConsumerTest {
 
 		assertThat(thrown).isSameAs(fkViolation);
 		verify(couponIssuePersister, never()).confirmIdempotencySucceeded(any(), eq("issue:42"));
+		verify(couponIssuePersister, never()).markConsumed(any());
 	}
 
 	@Test
