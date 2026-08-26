@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -14,11 +15,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
@@ -150,5 +154,63 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 		assertThat(queryCount)
 				.as("listDlqMessages 호출 시 실행된 쿼리 수 (JOIN FETCH 있으면 1이어야 함)")
 				.isEqualTo(1);
+	}
+
+	// abandon()의 claimForAbandon()은 커스텀 @Modifying JPQL이라, Mockito 단위 테스트로는
+	// 쿼리 문법·파라미터 바인딩이 실제로 맞는지 검증할 수 없다 — 실제 MySQL로 확인한다.
+	private IssueMessage saveDlqMessage(String requestIdPrefix) {
+		LocalDateTime now = LocalDateTime.now();
+
+		AppUser user = appUserRepository.saveAndFlush(
+				AppUser.builder().name("DLQ abandon 테스트 사용자")
+						.email("dlq-abandon-" + UUID.randomUUID() + "@test.com").phone("01012345678").build()
+		);
+
+		Event event = eventRepository.saveAndFlush(
+				Event.builder().createdBy(user).name("DLQ abandon 테스트 이벤트").description("설명")
+						.openAt(now.minusHours(1)).closeAt(now.plusDays(1)).build()
+		);
+
+		Coupon coupon = couponRepository.saveAndFlush(
+				Coupon.builder().event(event).name("DLQ abandon 테스트 쿠폰").discountType(DiscountType.values()[0])
+						.discountValue(1_000).minOrderAmount(10_000).maxDiscountAmount(null)
+						.issueStartAt(now.minusMinutes(10)).issueEndAt(now.plusHours(1)).validDays(7).build()
+		);
+		couponIds.add(coupon.getCouponId());
+
+		String requestId = requestIdPrefix + "-" + UUID.randomUUID();
+		IssueMessage issueMessage = issueMessageRepository.saveAndFlush(
+				IssueMessage.pending(coupon, user.getUserId(), 1L, requestId, "{}")
+		);
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error"
+		);
+
+		return issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+	}
+
+	@Test
+	void abandon는_DLQ_메시지를_ABANDONED로_전이하고_재고_복구를_시도한다() {
+		IssueMessage issueMessage = saveDlqMessage("dlq-abandon");
+
+		CouponIssueDlqAbandonResponse response = couponIssueDlqReprocessService.abandon(issueMessage.getMessageId());
+
+		assertThat(response.messageId()).isEqualTo(issueMessage.getMessageId());
+		assertThat(response.requestId()).isEqualTo(issueMessage.getMessageKey());
+
+		IssueMessage updated = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+		assertThat(updated.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+	}
+
+	@Test
+	void abandon는_이미_ABANDONED된_메시지를_다시_포기하려하면_예외를_던진다() {
+		IssueMessage issueMessage = saveDlqMessage("dlq-abandon-twice");
+
+		couponIssueDlqReprocessService.abandon(issueMessage.getMessageId());
+
+		assertThatThrownBy(() -> couponIssueDlqReprocessService.abandon(issueMessage.getMessageId()))
+				.isInstanceOf(GeneralException.class)
+				.extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.NOT_DLQ_STATUS);
 	}
 }

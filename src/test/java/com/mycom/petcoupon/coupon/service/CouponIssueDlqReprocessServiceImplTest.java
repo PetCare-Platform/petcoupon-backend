@@ -22,10 +22,15 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueDlqConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
+import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueEventProducer;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
@@ -42,6 +47,9 @@ class CouponIssueDlqReprocessServiceImplTest {
 
 	@Mock
 	private CouponIssueEventProducer couponIssueEventProducer;
+
+	@Mock
+	private CouponIssueLuaService couponIssueLuaService;
 
 	@InjectMocks
 	private CouponIssueDlqReprocessServiceImpl couponIssueDlqReprocessService;
@@ -111,5 +119,68 @@ class CouponIssueDlqReprocessServiceImplTest {
 				.isEqualTo(CouponErrorCode.NOT_DLQ_STATUS);
 
 		verify(couponIssueEventProducer, never()).publish(any());
+	}
+
+	@Test
+	void abandon는_DLQ_메시지를_원자적으로_선점한_뒤_재고를_복구한다() {
+		Coupon coupon = mock(Coupon.class);
+		when(coupon.getCouponId()).thenReturn(10L);
+
+		IssueMessage issueMessage = mock(IssueMessage.class);
+		when(issueMessage.getRetryCount()).thenReturn(1);
+		when(issueMessage.getCoupon()).thenReturn(coupon);
+		when(issueMessage.getUserId()).thenReturn(100L);
+		when(issueMessage.getMessageKey()).thenReturn("request-1");
+		when(issueMessage.getSequenceNo()).thenReturn(5L);
+
+		CouponIssueStockRestoreResult restoreResult = CouponIssueStockRestoreResult.builder()
+				.status(CouponIssueStockRestoreStatus.RESTORED)
+				.remainingStock(9)
+				.build();
+		CouponIssueDlqAbandonResponse response = CouponIssueDlqAbandonResponse.builder()
+				.messageId(1L)
+				.requestId("request-1")
+				.restoreStatus("RESTORED")
+				.remainingStock(9)
+				.build();
+
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED))
+				.thenReturn(1);
+		when(couponIssueLuaService.restoreStock(10L, 100L, "request-1", 5L)).thenReturn(restoreResult);
+		when(couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult)).thenReturn(response);
+
+		CouponIssueDlqAbandonResponse result = couponIssueDlqReprocessService.abandon(1L);
+
+		assertThat(result).isEqualTo(response);
+	}
+
+	@Test
+	void abandon는_메시지가_없으면_예외를_던진다() {
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.empty());
+
+		assertThatThrownBy(() -> couponIssueDlqReprocessService.abandon(1L))
+				.isInstanceOf(GeneralException.class)
+				.extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND);
+
+		verify(couponIssueLuaService, never()).restoreStock(any(), any(), any(), any());
+	}
+
+	@Test
+	void abandon는_선점에_실패하면_예외를_던지고_재고를_복구하지_않는다() {
+		IssueMessage issueMessage = mock(IssueMessage.class);
+		when(issueMessage.getRetryCount()).thenReturn(1);
+
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED))
+				.thenReturn(0);
+
+		assertThatThrownBy(() -> couponIssueDlqReprocessService.abandon(1L))
+				.isInstanceOf(GeneralException.class)
+				.extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.NOT_DLQ_STATUS);
+
+		verify(couponIssueLuaService, never()).restoreStock(any(), any(), any(), any());
 	}
 }
