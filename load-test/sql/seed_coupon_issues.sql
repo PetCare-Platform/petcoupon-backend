@@ -8,9 +8,10 @@
 --   - 앱을 한 번 띄워 테이블이 생성돼 있을 것 (ddl-auto=update)
 --
 -- 실행
---   docker compose up -d mysql
+--   docker compose up -d mysql redis
 --   docker cp seed_coupon_issues.sql petcoupon-mysql:/tmp/
 --   docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "source /tmp/seed_coupon_issues.sql"
+--   powershell -ExecutionPolicy Bypass -File load-test/scripts/init_seed_coupon_redis.ps1
 --
 --   PowerShell 은 `< file` 리다이렉션을 지원하지 않으므로 docker cp 로 넣고 source 로 실행한다.
 --
@@ -296,6 +297,21 @@ UPDATE coupon_stock s
        s.remaining_quantity = s.total_quantity - x.cnt,
        s.updated_at         = NOW(6)
  WHERE c.name LIKE 'SEED-%';
+
+
+-- ---------------------------------------------------------------------
+-- 6-1. Redis 재고 초기화
+--
+--    #111 정합성 배치는 DB coupon_stock.remaining_quantity와 Redis의
+--    coupon:issue:stock:{couponId} 값을 비교한다. SQL에서는 Redis에 직접 접근할 수 없으므로
+--    이 파일 실행이 끝난 뒤 아래 보조 스크립트를 반드시 실행한다.
+--
+--    powershell -ExecutionPolicy Bypass -File load-test/scripts/init_seed_coupon_redis.ps1
+--
+--    SEED 쿠폰은 500,000건이 모두 발급돼 remaining_quantity=0이며, 스크립트는 값을
+--    하드코딩하지 않고 DB에서 직접 읽어 Redis에 복사한다. Redis sequence 키는 #111 배치의
+--    검증 대상이 아니므로 만들지 않는다.
+-- ---------------------------------------------------------------------
 
 
 -- ---------------------------------------------------------------------
