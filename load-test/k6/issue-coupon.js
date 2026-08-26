@@ -263,8 +263,10 @@ export default function () {
 	const seq = exec.scenario.iterationInTest;
 	const index = cfg.INSTANCE_INDEX * cfg.INSTANCE_STRIDE + seq;
 
-	// rate 시나리오는 요청 수가 미리 정해지지 않아 목록을 넘어설 수 있다.
-	// 그때는 회원을 돌려쓴다 — 처리량 측정이 목적이라 1인 1매 검증에는 쓰지 않는다.
+	// setup() 이 rate 를 포함한 모든 시나리오에서 필요한 회원 수를 확보했는지 미리 검사하므로,
+	// 여기까지 왔다면 목록을 넘어서는 일은 없다. % 는 그 검사가 뚫렸을 때 배열 밖 접근으로
+	// undefined 를 보내는 대신 조용히 앞으로 돌아오게 하는 안전망일 뿐, 회원 재사용은 의도가 아니다.
+	// 회원을 돌려쓰면 1인 1매에 걸려 발급 경로를 타지 않고, 그만큼 처리량이 실제보다 높게 나온다.
 	const userId = MEMBERS[index % MEMBERS.length];
 
 	// Idempotency-Key 는 (user_id, idempotency_key) 로만 유니크하지만,
@@ -317,9 +319,10 @@ export default function () {
 		contractRate.add(res.body !== null && res.body.indexOf('"WAITING"') !== -1);
 	}
 
+	// 두 조건을 한 줄로 합친다. 나눠서 'WAITING' 쪽에 !ok 를 두면 500 · 400 이 쏟아져도
+	// 그 줄은 100% 성공으로 찍혀서, 요약만 보는 사람이 정상이라고 오독한다.
 	check(res, {
-		'접수 202': () => ok,
-		'status=WAITING': () => !ok || (res.body !== null && res.body.indexOf('"WAITING"') !== -1),
+		'접수 202 + status=WAITING': () => ok && res.body !== null && res.body.indexOf('"WAITING"') !== -1,
 	});
 }
 
