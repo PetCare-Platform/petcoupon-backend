@@ -26,6 +26,7 @@ public enum CouponErrorCode implements BaseErrorCode {
 	INVALID_COUPON_STATUS_FOR_UPDATE(HttpStatus.BAD_REQUEST, "COUPON400-7", "발급 대기 상태의 쿠폰만 수정할 수 있습니다."),
 	EMPTY_UPDATE_REQUEST(HttpStatus.BAD_REQUEST, "COUPON400-8", "수정할 항목이 없습니다."),
 	ISSUE_ALREADY_STARTED(HttpStatus.BAD_REQUEST, "COUPON400-9", "발급이 시작된 쿠폰은 수정할 수 없습니다."),
+	INVALID_STOCK_RESTORE_REQUEST(HttpStatus.BAD_REQUEST, "COUPON400-10", "유효하지 않은 쿠폰 재고 복구 요청입니다."),
 
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON409-0", "쿠폰 재고가 모두 소진되었습니다."),
     DUPLICATE_USER(HttpStatus.CONFLICT, "COUPON409-1", "이미 발급받은 쿠폰입니다."),
@@ -55,7 +56,8 @@ public enum CouponErrorCode implements BaseErrorCode {
 	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
 	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요."),
 	REALTIME_STOCK_READ_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-4", "쿠폰 실시간 재고를 조회하지 못했습니다."),
-
+	ISSUE_STOCK_RESTORE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-5", "쿠폰 발급 Redis 재고를 복구하지 못했습니다."),
+	
 	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다.");
 
     private final HttpStatus status;

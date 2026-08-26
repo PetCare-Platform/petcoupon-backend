@@ -228,7 +228,9 @@ class CouponIssuePipelineIntegrationTest {
 
 		CouponStock couponStock = couponStockRepository.findById(couponId).orElseThrow();
 
-		assertThat(outbox.getStatus()).isEqualTo(IssueMessageStatus.SENT);
+		// markConsumed()가 coupon_issue insert와 같은 트랜잭션에서 커밋되므로(CouponIssuePersister),
+		// 4번 대기 조건(existsByRequestId)이 통과한 시점엔 이미 SENT가 아니라 CONSUMED로 확정돼 있다.
+		assertThat(outbox.getStatus()).isEqualTo(IssueMessageStatus.CONSUMED);
 
 		assertThat(outbox.getRetryCount()).isZero();
 
