@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
+import com.mycom.petcoupon.event.dto.res.EventListResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
@@ -68,6 +69,22 @@ class EventConverterTest {
 		Event event = eventFixture();
 
 		EventDetailResponse response = eventConverter.toDetailResponse(event);
+
+		assertAllEventFields(
+				response.eventId(),
+				response.name(),
+				response.description(),
+				response.openAt(),
+				response.closeAt(),
+				response.status()
+		);
+	}
+
+	@Test
+	void toListResponseMapsAllEventFields() {
+		Event event = eventFixture();
+
+		EventListResponse response = eventConverter.toListResponse(event);
 
 		assertAllEventFields(
 				response.eventId(),

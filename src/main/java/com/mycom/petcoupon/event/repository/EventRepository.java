@@ -13,6 +13,9 @@ import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.enums.EventStatus;
 
 public interface EventRepository extends JpaRepository<Event, Long> {
+    List<Event> findAllByStatusOrderByCreatedAtDescEventIdDesc(EventStatus status);
+
+    List<Event> findAllByOrderByCreatedAtDescEventIdDesc();
 
 	@Query("select e.status from Event e where e.eventId = :eventId")
 	Optional<EventStatus> findStatusByEventId(@Param("eventId") Long eventId);

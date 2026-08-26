@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.event.service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,6 +13,7 @@ import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
+import com.mycom.petcoupon.event.dto.res.EventListResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
@@ -29,7 +32,9 @@ import com.mycom.petcoupon.user.entity.enums.UserStatus;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class EventServiceImpl implements EventService {
@@ -58,6 +63,32 @@ public class EventServiceImpl implements EventService {
 
 		return eventConverter.toCreateResponse(savedEvent);
 	}
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<EventListResponse> getOpenEvents() {
+        try {
+            return eventRepository.findAllByStatusOrderByCreatedAtDescEventIdDesc(EventStatus.OPEN).stream()
+                    .map(eventConverter::toListResponse)
+                    .toList();
+        } catch (DataAccessException e) {
+            log.error("공개 이벤트 목록 조회에 실패했습니다.", e);
+            throw new GeneralException(EventErrorCode.EVENT_LIST_QUERY_FAILED);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<EventListResponse> getAllEvents() {
+        try {
+            return eventRepository.findAllByOrderByCreatedAtDescEventIdDesc().stream()
+                    .map(eventConverter::toListResponse)
+                    .toList();
+        } catch (DataAccessException e) {
+            log.error("관리자 이벤트 목록 조회에 실패했습니다.", e);
+            throw new GeneralException(EventErrorCode.EVENT_LIST_QUERY_FAILED);
+        }
+    }
 
 	@Override
 	@Transactional(readOnly = true)

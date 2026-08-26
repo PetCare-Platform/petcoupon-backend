@@ -19,7 +19,9 @@ public enum EventErrorCode implements BaseErrorCode {
 
 	EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT404-0", "존재하지 않는 이벤트입니다."),
 
-	EVENT_STATUS_CONFLICT(HttpStatus.CONFLICT, "EVENT409-0", "다른 요청에 의해 이벤트 상태가 이미 변경되었습니다.");
+	EVENT_STATUS_CONFLICT(HttpStatus.CONFLICT, "EVENT409-0", "다른 요청에 의해 이벤트 상태가 이미 변경되었습니다."),
+
+    EVENT_LIST_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "EVENT500-0", "이벤트 목록 조회에 실패했습니다.");
 
 	private final HttpStatus status;
 	private final String code;

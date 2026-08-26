@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.event.controller;
 
+import java.util.List;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -15,6 +17,7 @@ import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
+import com.mycom.petcoupon.event.dto.res.EventListResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.service.EventService;
@@ -28,6 +31,13 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class AdminEventController {
 	private final EventService eventService;
+
+    @GetMapping
+    public CustomResponse<List<EventListResponse>> getAllEvents() {
+        List<EventListResponse> response = eventService.getAllEvents();
+
+        return CustomResponse.onSuccess(response);
+    }
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
