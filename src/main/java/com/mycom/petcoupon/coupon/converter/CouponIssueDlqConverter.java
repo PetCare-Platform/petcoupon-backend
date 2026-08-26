@@ -2,8 +2,10 @@ package com.mycom.petcoupon.coupon.converter;
 
 import org.springframework.stereotype.Component;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 
 @Component
@@ -25,6 +27,17 @@ public class CouponIssueDlqConverter {
 		return CouponIssueDlqReprocessResponse.builder()
 				.messageId(issueMessage.getMessageId())
 				.requestId(issueMessage.getMessageKey())
+				.build();
+	}
+
+	public CouponIssueDlqAbandonResponse toAbandonResponse(
+			IssueMessage issueMessage, CouponIssueStockRestoreResult restoreResult) {
+
+		return CouponIssueDlqAbandonResponse.builder()
+				.messageId(issueMessage.getMessageId())
+				.requestId(issueMessage.getMessageKey())
+				.restoreStatus(restoreResult.status().name())
+				.remainingStock(restoreResult.remainingStock())
 				.build();
 	}
 }
