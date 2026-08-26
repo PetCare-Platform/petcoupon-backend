@@ -29,11 +29,18 @@
 ```bash
 curl -X POST localhost:8080/admin/auth/sessions \
   -H "Content-Type: application/json" \
-  -d '{"code":"local-dev-admin-auth-code"}'
+  -d '{"authCode":"local-dev-admin-auth-code"}'
 ```
 
+**201**과 함께 토큰이 돌아온다.
+
 ```json
-{ "isSuccess": true, "result": { "token": "…", "expiresAt": "2026-08-27T01:00:00" } }
+{
+  "isSuccess": true,
+  "code": "201",
+  "message": "Created",
+  "result": { "token": "…", "expiresAt": "2026-08-27T01:00:00" }
+}
 ```
 
 받은 토큰을 이후 관리자 API 요청에 `X-ADMIN-KEY` 헤더로 싣는다.
