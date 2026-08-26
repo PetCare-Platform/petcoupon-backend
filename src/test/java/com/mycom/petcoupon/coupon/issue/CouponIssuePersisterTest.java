@@ -28,11 +28,14 @@ import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssuePersister;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
+import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.repository.CouponIssueHistoryRepository;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
+import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 import com.mycom.petcoupon.notification.entity.NotificationLog;
 import com.mycom.petcoupon.notification.entity.enums.Channel;
 import com.mycom.petcoupon.notification.entity.enums.NotificationStatus;
@@ -73,6 +76,9 @@ class CouponIssuePersisterTest {
 
 	@Mock
 	private ObjectMapper objectMapper;
+
+	@Mock
+	private IssueMessageRepository issueMessageRepository;
 
 	@Mock
 	private NotificationLogRepository notificationLogRepository;
@@ -123,6 +129,9 @@ class CouponIssuePersisterTest {
 		// requestId "issue:42"에서 idempotency_id 42를 뽑아내 SUCCEEDED로 확정한다
 		verify(idempotencyKeyService).succeed(42L, 200, "{\"isSuccess\":true}");
 
+		verify(issueMessageRepository)
+			.updateStatusByMessageKey(KafkaTopics.COUPON_ISSUE_EVENT, "issue:42", IssueMessageStatus.CONSUMED);
+
 		ArgumentCaptor<NotificationLog> notificationCaptor = ArgumentCaptor.forClass(NotificationLog.class);
 		verify(notificationLogRepository).save(notificationCaptor.capture());
 
@@ -155,7 +164,11 @@ class CouponIssuePersisterTest {
 		verify(couponIssueHistoryRepository).save(any());
 		verifyNoInteractions(idempotencyKeyService);
 
-		// 알림 기록은 idempotency_key 형식과 무관하게 항상 동작한다
+		// CONSUMED 배선은 idempotency_key 형식과 무관하게 항상 동작한다 (requestId를 그대로 message_key로 씀)
+		verify(issueMessageRepository)
+			.updateStatusByMessageKey(KafkaTopics.COUPON_ISSUE_EVENT, "pipeline-test-request", IssueMessageStatus.CONSUMED);
+
+		// 알림 기록도 idempotency_key 형식과 무관하게 항상 동작한다
 		verify(notificationLogRepository).save(any(NotificationLog.class));
 	}
 
@@ -175,8 +188,9 @@ class CouponIssuePersisterTest {
 
 		assertThat(thrown).isInstanceOf(IllegalStateException.class);
 		verify(couponIssueHistoryRepository, never()).save(org.mockito.ArgumentMatchers.any());
-		// 재고 갱신 실패로 이 시점 이후 로직(idempotency_key 확정, 알림 기록 포함)은 아예 실행되지 않는다
+		// 재고 갱신 실패로 이 시점 이후 로직(idempotency_key 확정, CONSUMED 배선, 알림 기록 포함)은 아예 실행되지 않는다
 		verifyNoInteractions(idempotencyKeyService);
+		verifyNoInteractions(issueMessageRepository);
 		verifyNoInteractions(notificationLogRepository);
 	}
 }

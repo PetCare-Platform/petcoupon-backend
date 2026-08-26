@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.issue.service;
 
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -10,7 +11,9 @@ import org.springframework.stereotype.Service;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
 import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueLuaResultStatus;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
@@ -22,7 +25,12 @@ import lombok.extern.slf4j.Slf4j;
 public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 
 	private final StringRedisTemplate redisTemplate;
+	
+	@Qualifier("couponIssueLuaScript")
     private final DefaultRedisScript<List> couponIssueLuaScript;
+	
+	@Qualifier("couponIssueRestoreLuaScript")
+    private final DefaultRedisScript<List> couponIssueRestoreLuaScript;
  
     private String issueKey(String suffix, Long couponId) {
         return "coupon:issue:" + suffix + ":{" + couponId + "}";
@@ -54,36 +62,17 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
 		}
 
-    	if (luaResult == null || luaResult.size() != 2) {
-    		log.error(
-    				"유효하지 않은 쿠폰 발급 Lua 실행 결과입니다. couponId={}, userId={}, requestId={}, result={}",
-    			couponId,
-    			userId,
-    			requestId,
-    			luaResult
-    		);
-    		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
-    	}
-
     	try {
-    		Object resultCodeValue = luaResult.get(0);
-    		Object sequenceNoValue = luaResult.get(1);
-
-    		if (!(resultCodeValue instanceof Number resultCodeNumber)
-    		        || !(sequenceNoValue instanceof Number sequenceNoNumber)) {
-
-    		    throw new IllegalArgumentException("Lua 결과 값이 숫자 형식이 아닙니다. result=" + luaResult);
-    		}
+    		LuaNumericResult parsedResult = parseLuaNumericResult(luaResult);
     		
-    		long resultCode = resultCodeNumber.longValue();
-            long sequenceNo = sequenceNoNumber.longValue();
+    		long resultCode = parsedResult.code();
+            long sequenceNo = parsedResult.value();
             
             CouponIssueLuaResultStatus status = CouponIssueLuaResultStatus.from(resultCode);
     	    
             Long issuedSequenceNo = null;
             
-            if (status == CouponIssueLuaResultStatus.SUCCESS
-                    || status == CouponIssueLuaResultStatus.SAME_REQUEST_RETRY) {
+            if (status == CouponIssueLuaResultStatus.SUCCESS || status == CouponIssueLuaResultStatus.SAME_REQUEST_RETRY) {
             	
             	if(sequenceNo <= 0) {
             		throw new IllegalArgumentException("성공 또는 재시도 결과에 유효한 순번이 없습니다. sequenceNo=" + sequenceNo);
@@ -180,4 +169,82 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
             throw new GeneralException(CouponErrorCode.REALTIME_STOCK_READ_FAILED);
         }
     }
+
+	@Override
+	public CouponIssueStockRestoreResult restoreStock(Long couponId, Long userId, String requestId, Long sequenceNo) {
+		
+		validateRestoreRequest(couponId, userId, requestId, sequenceNo);
+
+		List<?> luaResult;
+
+		try {
+			luaResult = redisTemplate.execute(
+					couponIssueRestoreLuaScript,
+					List.of(
+						issueKey("stock", couponId), 
+						issueKey("applicants", couponId),
+						issueKey("request-sequence", couponId)
+					),
+					userId.toString(), 
+					requestId, 
+					sequenceNo.toString()
+			);
+			
+		} catch (DataAccessException e) {
+			
+			log.error("쿠폰 발급 Redis 재고 복구에 실패했습니다. " + "couponId={}, userId={}, requestId={}, sequenceNo={}", couponId, userId, requestId, sequenceNo, e);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
+
+		try {
+			LuaNumericResult parsedResult = parseLuaNumericResult(luaResult);
+
+			CouponIssueStockRestoreStatus status = CouponIssueStockRestoreStatus.from(parsedResult.code());
+			
+			long remainingStock = parsedResult.value();
+			
+			if (remainingStock < 0 || remainingStock > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Redis 재고 복구 결과가 유효한 범위를 벗어났습니다. " + "remainingStock=" + remainingStock);
+            }
+
+			return CouponIssueStockRestoreResult.builder()
+					.status(status)
+					.remainingStock((int) remainingStock)
+					.build();
+
+		} catch (IllegalArgumentException e) {
+			
+			log.error("알 수 없는 Redis 재고 복구 결과입니다. " + "couponId={}, userId={}, requestId={}, result={}", couponId, userId, requestId, luaResult, e);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
+	}
+	
+	private void validateRestoreRequest(Long couponId, Long userId, String requestId, Long sequenceNo) {
+		
+		if (couponId == null || couponId <= 0 || userId == null || userId <= 0 || requestId == null
+				|| requestId.isBlank() || sequenceNo == null || sequenceNo <= 0) {
+
+			throw new GeneralException(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
+		}
+	}
+	
+	// Lua Script의 공통 반환 형식인 {상태 코드, 결과 값}을 검증하고 숫자로 변환한다.
+	private LuaNumericResult parseLuaNumericResult(List<?> luaResult) {
+		
+	    if (luaResult == null || luaResult.size() != 2) {
+	        throw new IllegalArgumentException("Lua 실행 결과의 형식이 올바르지 않습니다. result=" + luaResult);
+	    }
+
+	    Object codeValue = luaResult.get(0);
+	    Object resultValue = luaResult.get(1);
+
+	    if (!(codeValue instanceof Number codeNumber) || !(resultValue instanceof Number resultNumber)) {
+	        throw new IllegalArgumentException("Lua 실행 결과가 숫자 형식이 아닙니다. result=" + luaResult);
+	    }
+
+	    return new LuaNumericResult(codeNumber.longValue(), resultNumber.longValue());
+	}
+	
+	// Lua Script의 공통 반환값
+	private record LuaNumericResult(long code, long value) {}
 }
