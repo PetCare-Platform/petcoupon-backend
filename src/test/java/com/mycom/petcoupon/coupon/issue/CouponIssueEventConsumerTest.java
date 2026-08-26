@@ -69,19 +69,6 @@ class CouponIssueEventConsumerTest {
 	}
 
 	@Test
-	void 알림_기록이_실패해도_발급_처리_자체는_예외없이_끝난다() {
-		when(couponIssueRepository.findByRequestId("issue:42")).thenReturn(Optional.empty());
-		CouponIssue saved = mock(CouponIssue.class);
-		when(couponIssuePersister.persist(EVENT)).thenReturn(saved);
-		doThrow(new RuntimeException("notification insert failed"))
-			.when(couponIssuePersister).recordNotification(saved);
-
-		assertThatCode(() -> consumer.consume(EVENT)).doesNotThrowAnyException();
-
-		verify(couponIssuePersister).persist(EVENT);
-	}
-
-	@Test
 	void 저장중_재전달로_확인되면_예외없이_스킵하고_idempotency_key를_확정한다() {
 		CouponIssue existing = mock(CouponIssue.class);
 		when(couponIssueRepository.findByRequestId("issue:42"))

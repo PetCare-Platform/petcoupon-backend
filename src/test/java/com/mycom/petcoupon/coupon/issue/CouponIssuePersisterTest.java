@@ -91,7 +91,7 @@ class CouponIssuePersisterTest {
 		Coupon coupon = mock(Coupon.class);
 		AppUser user = mock(AppUser.class);
 
-		when(couponRepository.getReferenceById(1L)).thenReturn(coupon);
+		when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
 		when(appUserRepository.findById(10L)).thenReturn(Optional.of(user));
 
 		ArgumentCaptor<CouponIssue> couponIssueCaptor = ArgumentCaptor.forClass(CouponIssue.class);
@@ -158,6 +158,25 @@ class CouponIssuePersisterTest {
 	}
 
 	@Test
+	void recordNotification_저장이_실패해도_예외를_던지지_않는다() {
+		AppUser user = mock(AppUser.class);
+		when(user.getPhone()).thenReturn(null);
+
+		CouponIssue couponIssue = CouponIssue.builder()
+			.user(user)
+			.couponCode("COUPON-CODE-1")
+			.build();
+
+		when(notificationLogRepository.save(any(NotificationLog.class)))
+			.thenThrow(new org.springframework.dao.DataIntegrityViolationException("recipient_masked cannot be null"));
+
+		// persist()를 부르는 호출부가 각자 try/catch를 안 만들어도 되도록, 실패를 여기서 삼킨다
+		Throwable thrown = catchThrowable(() -> persister.recordNotification(couponIssue));
+
+		assertThat(thrown).isNull();
+	}
+
+	@Test
 	void requestId가_issue_형식이_아니면_idempotency_확정을_스킵하고_저장은_그대로_성공한다() {
 		// CouponIssueStreamProducer를 직접 호출하는 경로(통합 테스트 등)는 idempotency_key를 안 거치므로
 		// requestId가 "issue:{id}" 형식이 아닐 수 있다 — 이 경우 저장 자체는 정상적으로 끝나야 한다.
@@ -167,7 +186,7 @@ class CouponIssuePersisterTest {
 		Coupon coupon = mock(Coupon.class);
 		AppUser user = mock(AppUser.class);
 
-		when(couponRepository.getReferenceById(1L)).thenReturn(coupon);
+		when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
 		when(appUserRepository.findById(10L)).thenReturn(Optional.of(user));
 		when(couponIssueRepository.saveAndFlush(any(CouponIssue.class)))
 			.thenAnswer(invocation -> invocation.getArgument(0));
@@ -189,7 +208,7 @@ class CouponIssuePersisterTest {
 		Coupon coupon = mock(Coupon.class);
 		AppUser user = mock(AppUser.class);
 
-		when(couponRepository.getReferenceById(1L)).thenReturn(coupon);
+		when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
 		when(appUserRepository.findById(10L)).thenReturn(Optional.of(user));
 		when(couponIssueRepository.saveAndFlush(org.mockito.ArgumentMatchers.any(CouponIssue.class)))
 			.thenAnswer(invocation -> invocation.getArgument(0));

@@ -30,6 +30,7 @@ import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.notification.NotificationLogTestSupport;
 import com.mycom.petcoupon.notification.repository.NotificationLogRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
 
@@ -132,10 +133,7 @@ class CouponIssuePersisterIntegrationTest {
 	}
 
 	private void tearDownData() {
-		entityManager.createNativeQuery(
-				"DELETE n FROM notification_log n JOIN coupon_issue ci ON n.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id = :couponId")
-				.setParameter("couponId", couponId)
-				.executeUpdate();
+		NotificationLogTestSupport.deleteByCouponId(entityManager, couponId);
 		entityManager.createNativeQuery(
 				"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id = :couponId")
 				.setParameter("couponId", couponId)
@@ -157,11 +155,18 @@ class CouponIssuePersisterIntegrationTest {
 				.executeUpdate();
 	}
 
+	// coupon_code는 coupon_id 범위가 아니라 테이블 전체 기준 unique라, "CODE-1"처럼 고정 문자열을
+	// 재사용하면 이전 실행의 leftover 행과 충돌할 수 있다. 매번 값이 달라지게 임의 접미사를 붙인다
+	// (varchar(32) 한도 때문에 UUID는 앞 8자리만 사용).
 	private CouponIssueEvent newEvent(String requestId, long sequenceNo) {
 		return new CouponIssueEvent(
 			couponId, user.getUserId(), requestId, sequenceNo,
-			"CODE-" + sequenceNo, LocalDateTime.now().plusDays(7)
+			"CODE-" + sequenceNo + "-" + shortSuffix(), LocalDateTime.now().plusDays(7)
 		);
+	}
+
+	private String shortSuffix() {
+		return UUID.randomUUID().toString().substring(0, 8);
 	}
 
 	// NotificationLog.couponIssue, CouponIssue.coupon 둘 다 LAZY라 세션 밖에서 접근하면
@@ -186,52 +191,6 @@ class CouponIssuePersisterIntegrationTest {
 		entityManager.clear();
 
 		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
-	}
-
-	@Test
-	void phone이_없어도_발급은_정상_처리되고_알림_기록만_실패한다() {
-		AppUser userWithoutPhone = AppUser.builder()
-				.name("phone 없는 사용자")
-				.email("no-phone-" + UUID.randomUUID() + "@test.com")
-				.phone(null)
-				.build();
-		transactionTemplate.executeWithoutResult(status -> entityManager.persist(userWithoutPhone));
-
-		String requestId = "notification-no-phone-" + UUID.randomUUID();
-		CouponIssueEvent event = new CouponIssueEvent(
-			couponId, userWithoutPhone.getUserId(), requestId, 1L, "CODE-1", LocalDateTime.now().plusDays(7)
-		);
-
-		CouponIssue couponIssue = persister.persist(event);
-
-		entityManager.clear();
-
-		// 발급 자체는 정상 커밋됐다 — phone null로 인한 알림 저장 실패가 여기까지 영향을 주지 않는다
-		assertThat(couponIssueRepository.existsByRequestId(requestId)).isTrue();
-
-		assertThatThrownBy(() -> persister.recordNotification(couponIssue))
-				.isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
-
-		entityManager.clear();
-
-		// recordNotification()이 실패해도 이미 커밋된 발급(coupon_issue)은 그대로 남아있다
-		assertThat(couponIssueRepository.existsByRequestId(requestId)).isTrue();
-		assertThat(notificationCountOf(couponId)).isZero();
-
-		// tearDownData()가 couponId 기준으로 coupon_issue를 지우기 전에, 이 유저를 참조하는
-		// coupon_issue_history/coupon_issue를 먼저 지워야 app_user 삭제가 FK 위반 없이 끝난다
-		transactionTemplate.executeWithoutResult(status -> {
-			entityManager.createNativeQuery(
-					"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.request_id = :requestId")
-					.setParameter("requestId", requestId)
-					.executeUpdate();
-			entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE request_id = :requestId")
-					.setParameter("requestId", requestId)
-					.executeUpdate();
-			entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id = :userId")
-					.setParameter("userId", userWithoutPhone.getUserId())
-					.executeUpdate();
-		});
 	}
 
 	@Test
