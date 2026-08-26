@@ -156,7 +156,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
         validateCouponId(couponId);
 
         try {
-            String stockValue = redisTemplate.opsForValue().get(issueKey("stock", couponId));
+            String stockValue = redisTemplate.opsForValue().get(CouponIssueRedisKeys.stock(couponId));
 
             if (stockValue == null) {
                 return CouponIssueRealtimeStock.builder()
