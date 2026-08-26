@@ -55,21 +55,35 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "source /tmp/seed_u
 
 **회원 ID는 연속이 아닙니다.** 100만 건을 한 번에 넣으면 `auto_increment`가 띄엄띄엄 올라가고 관리자 계정도 중간에 끼어 있어서, 시작값에 1씩 더해 쓰면 없는 회원으로 404가 납니다. 실제 ID를 파일로 뽑아 씁니다.
 
+**`LIMIT`은 쏠 요청 수보다 넉넉하게** 잡습니다. 요청 하나당 회원 하나를 쓰므로 그 이상은 필요 없습니다. 아래는 본 측정(20,000건) 기준입니다.
+
 ```bash
-docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id" > load-test/k6/members.csv
+docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id LIMIT 30000" > load-test/k6/members.csv
 ```
 
 PowerShell에서는 인코딩을 지정해야 합니다.
 
 ```powershell
-docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id" | Out-File -Encoding ascii load-test/k6/members.csv
+docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_id FROM app_user WHERE role='ROLE_MEMBER' ORDER BY user_id LIMIT 30000" | Out-File -Encoding ascii load-test/k6/members.csv
 ```
 
-약 7MB이고 `.gitignore`에 들어 있습니다. 회원을 다시 넣었다면 이 파일도 다시 만듭니다.
+30,000줄이면 약 210KB입니다. `LIMIT` 없이 100만 건을 다 뽑으면 7MB가 되고, k6가 기동할 때마다 전부 파싱합니다. `.gitignore`에 들어 있어 커밋되지 않으며, 회원을 다시 넣었다면 이 파일도 다시 만듭니다.
+
+모자라면 `setup()`이 이렇게 알려주고 멈춥니다.
+
+```
+회원이 모자랍니다. 필요=20000 보유=10000
+```
 
 ### 5. 대상 쿠폰 준비
 
 관리자 API로 쿠폰을 하나 만들어 두고 그 ID를 `COUPON_ID`로 넘깁니다. 재고 규모는 초기화 API가 회차마다 바꿔주므로, 쿠폰을 여러 개 만들 필요는 없습니다.
+
+**아래 실행 예시의 `COUPON_ID=1`은 자리표시자입니다.** 각자 만든 쿠폰 ID로 바꿔야 하고, 안 바꾸면 전부 404가 납니다. 만들어 둔 쿠폰이 뭔지 모르겠으면 이렇게 확인합니다.
+
+```bash
+docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "SELECT c.coupon_id, c.name, c.status, s.total_quantity FROM coupon c JOIN coupon_stock s ON s.coupon_id = c.coupon_id"
+```
 
 ---
 
@@ -78,19 +92,19 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_
 ### 스모크 (10건, 스크립트가 도는지만 확인)
 
 ```bash
-k6 run -e SCENARIO=smoke -e COUPON_ID=612 -e TOTAL_QUANTITY=5 -e RUN_ID=smoke1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=smoke -e COUPON_ID=1 -e TOTAL_QUANTITY=5 -e RUN_ID=smoke1 load-test/k6/issue-coupon.js
 ```
 
 ### 본 측정 (재고 10,000에 요청 20,000)
 
 ```bash
-k6 run -e SCENARIO=burst -e VUS=2000 -e ITERATIONS_PER_VU=10 -e COUPON_ID=612 -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=burst -e VUS=2000 -e ITERATIONS_PER_VU=10 -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
 ```
 
 ### 처리량 한계 (초당 요청 수 고정)
 
 ```bash
-k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=612 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 load-test/k6/issue-coupon.js
 ```
 
 ### 환경변수
@@ -118,13 +132,97 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=61
 > ⚠️ **Redis는 아직 이 API가 건드리지 않습니다.** 이전 회차의 신청자 기록이 남아 있으면 다음 회차 요청이 전부 중복으로 판정돼 발급이 0건이 됩니다. 초기화 API에 Redis 정리를 붙이는 작업(#88)이 머지되기 전까지는 회차 사이에 직접 되돌립니다.
 >
 > ```bash
-> docker exec petcoupon-redis redis-cli DEL "coupon:issue:applicants:{612}" "coupon:issue:sequence:{612}" "coupon:issue:request-sequence:{612}"
-> docker exec petcoupon-redis redis-cli SET "coupon:issue:stock:{612}" 10000
+> docker exec petcoupon-redis redis-cli DEL "coupon:issue:applicants:{1}" "coupon:issue:sequence:{1}" "coupon:issue:request-sequence:{1}"
+> docker exec petcoupon-redis redis-cli SET "coupon:issue:stock:{1}" 10000
 > ```
 >
-> 재고 키는 **지우면 안 되고 값을 다시 넣어야** 합니다. 없으면 Lua가 `STOCK_NOT_INITIALIZED`로 전부 거절합니다. `{612}`는 쿠폰 ID이고, 중괄호는 Redis Cluster 해시 태그라 그대로 씁니다.
+> 재고 키는 **지우면 안 되고 값을 다시 넣어야** 합니다. 없으면 Lua가 `STOCK_NOT_INITIALIZED`로 전부 거절합니다. 중괄호 안의 `1`이 쿠폰 ID이므로 각자 값으로 바꾸고, **중괄호 자체는 Redis Cluster 해시 태그라 그대로 둡니다.**
 
 여러 대에서 나눠 쏠 때는 **1번 기기만** `RESET=true`로 두고, 나머지는 `RESET=false`에 `INSTANCE_INDEX`를 다르게 줍니다. 회원 구간과 멱등키가 겹치지 않습니다.
+
+### 🔴 초기화 전에 반드시 확인할 것 — 미처리 메시지
+
+초기화 API는 **DB와 Redis 발급 상태까지만** 되돌립니다. **Redis Stream과 Kafka에 쌓인 메시지는 지우지 않습니다.**
+
+앞 회차가 중간에 끊겼다면(앱 강제 종료, Consumer 다운, k6 Ctrl+C) 처리되지 않은 신청이 큐에 남습니다. 남는 방식이 **두 가지**이고 결과가 정반대이므로 나눠서 봅니다.
+
+| | 상태 | 다음 회차에 | 결과 |
+| --- | --- | --- | --- |
+| **A** | 배달됐지만 ACK 안 됨 (pending) | 아무도 안 가져감 | **신청 유실** |
+| **B** | 아직 처리 안 됨 (Stream 미배달 · Outbox 미발행 · Kafka 미소비) | 뒤늦게 처리됨 | **유령 발급** |
+
+**B가 지금 문제입니다.** 초기화가 `coupon_issue`를 모두 지운 뒤라 `uk_issue_coupon_user`·`uk_issue_sequence`·`request_id` 유니크 제약이 아무것도 막지 못합니다. 지난 회차 신청이 이번 회차 재고를 깎으며 저장됩니다.
+
+**A는 반대로 영원히 처리되지 않습니다.** 유령 발급은 안 만들지만, 값이 0이 아니라는 것 자체가 "앞 회차가 깨끗하게 안 끝났다"는 신호라 함께 확인합니다.
+
+B가 **파이프라인 세 지점**에 나뉘어 있다는 점이 중요합니다. 한 곳만 봐서는 부족합니다.
+
+```
+Redis Stream ──▶ Lua ──▶ Outbox(DB) ──▶ Kafka ──▶ Consumer ──▶ MySQL
+     ①                       ②            ③
+  아직 안 읽힘          아직 발행 안 됨   나갔지만 안 먹힘
+```
+
+특히 ②는 **Redis에도 Kafka에도 안 보입니다.** `issue_message`에 `PENDING`/`FAILED`로 앉아 있다가 Outbox poller가 **1초 안에** 집어서 Kafka로 보냅니다. 그리고 `kafkaTemplate.send()`는 DB 트랜잭션 밖이라, 초기화가 그 row를 지워도 **이미 나간 Kafka 메시지는 되돌릴 수 없습니다.**
+
+**아래 네 값이 모두 0인지 확인한 뒤에 초기화합니다.**
+
+```bash
+docker exec petcoupon-redis redis-cli XINFO GROUPS coupon:issue:stream
+```
+
+```bash
+docker exec petcoupon-redis redis-cli XPENDING coupon:issue:stream coupon-issue-group
+```
+
+```bash
+docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -e "SELECT COUNT(*) FROM issue_message WHERE status IN ('PENDING','FAILED')"
+```
+
+```bash
+docker exec petcoupon-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group petcoupon
+```
+
+| 명령 | 볼 값 | 무엇 |
+| --- | --- | --- |
+| `XINFO GROUPS` | `lag` | **B ①** — Stream 미배달 건수 |
+| `XPENDING` | 첫 줄 | **A** — Stream pending 건수 |
+| `SELECT COUNT(*)` | 결과 | **B ②** — Outbox 미발행 건수 |
+| `kafka-consumer-groups.sh` | 모든 파티션 `LAG` | **B ③** — Kafka 미소비 건수 |
+
+#### B가 남아 있다면
+
+**앱과 Consumer를 띄운 채로 네 값이 모두 0이 될 때까지 기다린 뒤** 초기화합니다. 정상 메시지라면 곧 처리되어 빠집니다. 기다리지 않고 초기화하면 그대로 유령 발급이 됩니다.
+
+②는 `retry_count`가 `max-retry-count`(기본 5)에 도달하면 poller가 더 이상 집지 않아 `FAILED`로 영원히 남습니다. 이때는 기다려도 0이 되지 않으므로, Kafka가 살아 있는지 확인하고 앱을 재시작해 재발행시키거나 해당 row를 지웁니다.
+
+#### A가 남아 있다면 (`XPENDING`)
+
+**⚠️ 앱을 재시작해도 없어지지 않습니다.** Consumer 이름이 `${HOSTNAME}-${random.uuid}`라 기동할 때마다 새 이름이 붙습니다. 새 Consumer는 `ReadOffset.lastConsumed()`로 **"그룹에 배달된 적 없는 메시지"만** 읽어서, 이전 이름으로 잡혀 있던 pending은 쳐다보지 않습니다. `XCLAIM`으로 소유권을 가져오는 코드도 없어 계속 쌓이기만 합니다.
+
+남은 ID를 확인해서 직접 ACK합니다.
+
+```bash
+docker exec petcoupon-redis redis-cli XPENDING coupon:issue:stream coupon-issue-group - + 100
+```
+
+```bash
+docker exec petcoupon-redis redis-cli XACK coupon:issue:stream coupon-issue-group 1787674082855-0
+```
+
+건수가 많으면 스트림을 통째로 비우고 그룹을 다시 만듭니다. A와 B가 한 번에 정리됩니다. **다른 사람의 테스트 기록까지 지워지므로 공용 환경에서는 먼저 물어보고 실행합니다.**
+
+```bash
+docker exec petcoupon-redis redis-cli DEL coupon:issue:stream
+```
+
+```bash
+docker exec petcoupon-redis redis-cli XGROUP CREATE coupon:issue:stream coupon-issue-group 0 MKSTREAM
+```
+
+`MKSTREAM` 없이 실행하면 키가 없다며 실패합니다. 그룹을 다시 만들지 않으면 다음 신청부터 Consumer가 `NOGROUP`으로 멈춥니다.
+
+> `issue_message` 테이블로는 이 확인을 대신할 수 없습니다. 상태가 `SENT`에서 멈추고 `CONSUMED`로 바꾸는 코드가 없어서, "Kafka에 넣었다"까지만 알 수 있고 처리 여부는 알 수 없습니다.
 
 ---
 
