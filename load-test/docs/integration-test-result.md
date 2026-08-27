@@ -44,14 +44,14 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 | 구간 | 전체 | ✅ | ❌ | ⏸ | — |
 | --- | --- | --- | --- | --- | --- |
-| A. 정상 흐름 | 17 | 0 | 0 | 0 | 17 |
+| A. 정상 흐름 | 17 | 17 | 0 | 0 | 0 |
 | B. 예외 흐름 | 19 | 19 | 0 | 0 | 0 |
 | C. 경계·동시성 | 7 | 5 | 0 | 0 | 2 |
-| D. 배치·정합성 | 16 | 14 | 0 | 0 | 2 |
+| D. 배치·정합성 | 16 | 15 | 0 | 0 | 1 |
 | E. 비동기 확정 | 10 | 8 | 0 | 0 | 2 |
 | F. 대량 데이터 | 6 | 5 | 0 | 0 | 1 |
 | G. 순서 보장 | 5 | 2 | 0 | 0 | 3 |
-| **합계** | **80** | **53** | **0** | **0** | **27** |
+| **합계** | **80** | **71** | **0** | **0** | **9** |
 
 > TC-63 · TC-70은 결번이라 집계에서 뺐다.
 
@@ -63,23 +63,23 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 | TC | 시나리오 | 결과 | 근거 |
 | --- | --- | --- | --- |
-| TC-01 | 이벤트 생성 | — | |
-| TC-02 | 이벤트 이름 수정 | — | |
-| TC-03 | 이벤트 설명 비우기 | — | |
-| TC-04 | 이벤트 기간 수정 | — | |
-| TC-05 | 쿠폰 생성 | — | |
-| TC-06 | 이벤트 오픈 | — | |
-| TC-07 | 쿠폰 발급 신청 (접수) | — | |
-| TC-08 | 비동기 확정 후 결과 조회 | — | |
-| TC-09 | 발급 상세 조회 | — | |
-| TC-10 | 내 발급 내역 목록 | — | |
-| TC-11 | 쿠폰 사용 | — | |
-| TC-12 | 사용 취소 | — | |
-| TC-13 | 신청 결과 폴링 — 접수 완료·확정 전 | — | |
-| TC-14 | 신청 결과 폴링 — 확정 후 | — | |
-| TC-15 | 신청 결과 폴링 — 없는 키 | — | |
-| TC-16 | 실시간 요청 현황 조회 | — | |
-| TC-17 | 실시간 현황 — 재고 미초기화 | — | |
+| TC-01 | 이벤트 생성 | ✅ | 201 · `status=SCHEDULED` |
+| TC-02 | 이벤트 이름 수정 | ✅ | 200 · 이름 변경 반영 |
+| TC-03 | 이벤트 설명 비우기 | ✅ | 빈 문자열 전송 → `description` NULL |
+| TC-04 | 이벤트 기간 수정 | ✅ | 200 · `openAt`·`closeAt` 반영 |
+| TC-05 | 쿠폰 생성 | ✅ | 201 · `coupon_stock.remaining_quantity = 10` |
+| TC-06 | 이벤트 오픈 | ✅ | 200 · `event_status_history`에 `SCHEDULED→OPEN` 정확히 1건 |
+| TC-07 | 쿠폰 발급 신청 (접수) | ✅ | 202 · `status=WAITING` · Redis 재고 차감 |
+| TC-08 | 비동기 확정 후 결과 조회 | ✅ | 폴링으로 `couponIssueId` 획득 → `GET /coupon-issues/{id}/status` → `ISSUED` |
+| TC-09 | 발급 상세 조회 | ✅ | `couponCode`·`expiresAt` 포함 · `isUsable=true` |
+| TC-10 | 내 발급 내역 목록 | ✅ | 200 · 발급 건 조회됨 |
+| TC-11 | 쿠폰 사용 | ✅ | 200 · `status=USED` · `ISSUED→USED` 이력 1건 |
+| TC-12 | 사용 취소 | ✅ | 200 · `status=ISSUED` 복귀 · `USED→ISSUED` 이력 1건 |
+| TC-13 | 신청 결과 폴링 — 접수 완료·확정 전 | ✅ | **202 · `WAITING` 재현** (#125에서 정정한 기대값과 일치) |
+| TC-14 | 신청 결과 폴링 — 확정 후 | ✅ | **200 · `sequenceNo` 1 · `couponIssueId` 채워짐**. 다만 `status` 가 `null` (§5 참고) |
+| TC-15 | 신청 결과 폴링 — 없는 키 | ✅ | 404 `COUPON404-2` |
+| TC-16 | 실시간 요청 현황 조회 | ✅ | `totalQuantity 10` · `issuedQuantity 3` · `remainingQuantity 7` · `initialized true` |
+| TC-17 | 실시간 현황 — 재고 미초기화 | ✅ | `initialized false` · `issuedQuantity 0` · `remainingQuantity = totalQuantity`. 위험성이 실제로 드러남 (§5 참고) |
 
 ### B. 예외 흐름 — TC-20 ~ TC-38
 
@@ -135,7 +135,7 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | TC-61 | 정합성 배치 — 재현성 | ✅ | 쿠폰 612 재실행 → 리포트 77·78의 전 수치 동일 |
 | TC-62 | 정합성 배치 — STOCK_MISMATCH | ✅ | Redis 재고를 7→5로 조작 → 기대 7 / 실제 5 탐지 |
 | TC-64 | 정합성 배치 — SEQUENCE_GAP | ✅ | 순번 99 주입 → "4건 존재, 95개 번호 없음" 탐지 |
-| TC-65 | 정합성 배치 — STOCK_NOT_RESTORED | — | `fix/149-stock-not-restored-abandon` 머지 후 실행 |
+| TC-65 | 정합성 배치 — STOCK_NOT_RESTORED | ✅ | `#149` 머지 후 실행. `stock_restored_at` 을 NULL 로 만들어 복구 실패 재현 → 탐지. 정상 abandon 건은 오탐 없음 (§5 참고) |
 | TC-66 | 정합성 배치 트리거 | ✅ | `POST /admin/coupons/{id}/reconcile` → 즉시 실행되고 리포트 생성 (`BATCH_JOB_EXECUTION` 신규 행 확인) |
 
 ### E. 비동기 확정 — TC-71 ~ TC-79 · TC-95
@@ -200,16 +200,49 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 회원별 보유량이 1~5장으로 갈려 있어 "내 쿠폰 목록 조회"에 편차가 있다. 쿠폰을 6개로 나눈 목적(`uk_issue_coupon_user` 때문에 쿠폰당 최대 100만 건)이 의도대로 달성됐다.
 
-### ⚠️ 차단 요인 — 멱등키 확정 누락
+### ✅ 해소됨 — 멱등키 확정 누락 (`#136`)
 
-`fix/idempotency-persist-issue-message`가 머지돼야 **TC-08 · TC-13 ~ 15 · TC-43의 재현 응답 검증**이 가능하다.
+발급이 DB까지 확정돼도 `idempotency_key` 가 `202 WAITING` 에 멈춰 있고 `couponIssueId`·`sequenceNo` 가 `NULL` 로 남던 문제가 `#136` 으로 해소됐다. 원인은 두 가지가 겹쳐 있었다.
 
-지금은 발급이 DB까지 확정돼도 `idempotency_key`가 `202 WAITING`에 멈춰 있고 `couponIssueId`·`sequenceNo`가 `NULL`로 남는다. 원인은 두 가지가 겹쳐 있다.
+1. `updateStatusByMessageKey` 의 `@Modifying(clearAutomatically = true)` 가 `persist()` 트랜잭션의 1차 캐시를 flush 전에 비워 `idempotency_key` 의 더티체킹 UPDATE 가 유실됐다.
+2. 컨트롤러의 뒤늦은 `202` 쓰기가 파이프라인이 먼저 쓴 `200` 을 덮어썼다.
 
-1. `updateStatusByMessageKey`의 `@Modifying(clearAutomatically = true)`가 `persist()` 트랜잭션의 1차 캐시를 flush 전에 비워 `idempotency_key`의 더티체킹 UPDATE가 유실된다.
-2. 컨트롤러의 뒤늦은 `202` 쓰기가 파이프라인이 먼저 쓴 `200`을 덮어쓴다.
+머지 후 확인한 결과 **`response_status` 가 `200`, `sequenceNo` 가 채워진다.** 이걸로 TC-08 · TC-13 ~ 15 가 열렸고 전부 통과했다.
 
-단독 요청(응답 540ms)에서도 재현되는 결정적 결함이다. `CouponIssueApiIntegrationTest` 2건이 실패하는 원인도 이것이다.
+**다만 `idempotency_key.coupon_issue_id` 컬럼은 여전히 `NULL` 이다.** 응답 본문에는 발급 정보가 들어가므로 조회·폴링에는 지장이 없지만, 멱등키에서 발급 건을 역참조하는 용도로는 못 쓴다.
+
+### ⚠️ TC-14 — 확정 후 응답의 `status` 가 `null` 이다
+
+```json
+{"code":"200","result":{"status":null,"sequenceNo":1,"couponIssueId":6317771}}
+```
+
+발급 정보는 정상적으로 채워지는데 `status` 만 비어 있다. `#125` 리뷰에서 "API 계약을 확정해야 한다"고 짚었던 부분이 그대로 남아 있다.
+
+**프론트가 `status` 로 발급 성공을 판단하면 동작하지 않는다.** `ISSUED` 를 내려줄지 정해야 한다.
+
+### ⚠️ TC-17 — 미초기화 쿠폰이 "재고 가득"으로 보인다
+
+`SEED-쿠폰-1`(발급 50만 완료, DB 잔여 0)을 조회한 결과다.
+
+```json
+{"totalQuantity":500000,"remainingQuantity":500000,"issuedQuantity":0,"initialized":false}
+```
+
+**DB 는 완전 소진인데 API 는 재고 만땅으로 응답한다.** Redis 키가 없으면 잔여를 DB 총재고로 채워 내보내기 때문이다.
+
+`initialized: false` 를 함께 보지 않으면 다 팔린 쿠폰이 발급 가능해 보인다. `#125` 에서 정정한 설명이 실측으로 확인됐다.
+
+### TC-65 — `#149` 수정이 오탐·미탐 양쪽으로 검증됨
+
+`#149` 는 판정 기준을 `status='ABANDONED'` 에서 **`status='ABANDONED' AND stock_restored_at IS NULL`** 로 바꿨다. 두 방향을 다 확인했다.
+
+| 상태 | 결과 |
+| --- | --- |
+| 정상 abandon (`stock_restored_at` 채워짐) | **탐지 안 함** — 오탐 없음 |
+| `stock_restored_at` 을 NULL 로 주입 | **탐지함** — 미탐 없음 |
+
+`status` 만 봤다면 정상적으로 복구된 절대다수를 전부 미복구로 오탐했을 것이다. 확인 후 주입한 값은 원복했다.
 
 ### 테스트로 대체 검증 — TC-45 · TC-46 · TC-50 ~ TC-53
 
