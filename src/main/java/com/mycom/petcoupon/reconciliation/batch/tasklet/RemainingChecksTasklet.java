@@ -24,11 +24,15 @@ import com.mycom.petcoupon.reconciliation.service.ReconciliationDetectionQueries
 import lombok.RequiredArgsConstructor;
 
 /**
- * Step2 — 소량 검증 4종(DUPLICATE_ISSUE/STOCK_MISMATCH/SEQUENCE_GAP/STOCK_NOT_RESTORED).
- * 청크 Step(HISTORY_MISMATCH/INVALID_STATUS)보다 반드시 먼저 실행돼야 한다 — assignReport()가
- * report.getVerificationDetails()에 append하는데, 이게 지연로딩 컬렉션이라 청크 Step이 대량으로
- * 써놓은 뒤에 호출하면 그 전체를 메모리로 끌어올린다. 여기서는 컬렉션이 비어있는 시점에 호출해
- * 그 문제를 피한다.
+ * Step2 — 소량 검증 3종(DUPLICATE_ISSUE/STOCK_MISMATCH/SEQUENCE_GAP).
+ * 청크 Step(HISTORY_MISMATCH/INVALID_STATUS/STOCK_NOT_RESTORED)보다 반드시 먼저 실행돼야
+ * 한다 — assignReport()가 report.getVerificationDetails()에 append하는데, 이게 지연로딩
+ * 컬렉션이라 청크 Step이 대량으로 써놓은 뒤에 호출하면 그 전체를 메모리로 끌어올린다.
+ * 여기서는 컬렉션이 비어있는 시점에 호출해 그 문제를 피한다.
+ *
+ * STOCK_NOT_RESTORED는 원래 여기서 findStockNotRestored()로 함께 처리했으나, DLQ가 대량으로
+ * 쌓이는 실제 장애 상황(300만 건 규모)에서는 getResultList()로 전체를 한 번에 읽는 이 방식
+ * 자체가 OOM 위험이라 stockNotRestoredStep(청크)으로 옮겼다 — ReconciliationJobConfig 참고.
  */
 @Component
 @StepScope
@@ -59,7 +63,6 @@ public class RemainingChecksTasklet implements Tasklet {
         details.addAll(queries.findDuplicateIssues(couponId, asOfAt));
         details.addAll(queries.findStockMismatch(stock, report.getRedisRemaining()));
         details.addAll(queries.findSequenceGap(couponId, report.getMaxSequenceNo(), asOfAt));
-        details.addAll(queries.findStockNotRestored(couponId, asOfAt));
 
         details.forEach(d -> d.assignReport(report));
 

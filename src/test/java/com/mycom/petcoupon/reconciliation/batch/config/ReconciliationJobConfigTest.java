@@ -290,11 +290,13 @@ class ReconciliationJobConfigTest {
     }
 
     @Test
-    void RemainingChecksTasklet이_실제_Job_실행으로_SEQUENCE_GAP과_STOCK_NOT_RESTORED를_찾아_저장한다() throws Exception {
-        // 죽은 코드(ReconciliationServiceImpl) 정리하면서 이 두 검증은 ReconciliationDetectionQueriesTest로
-        // 쿼리 단위(queries.findSequenceGap/findStockNotRestored 직접 호출)만 옮겨두고, RemainingChecksTasklet을
-        // 통한 실제 Job 실행 검증은 빠져 있었다 — STOCK_MISMATCH가 같은 Tasklet·같은 경로로 이미
-        // 검증됐다는 이유로 구조적으로만 판단하고 넘어갔었는데, 실제로 Job을 돌려 확인한다.
+    void 실제_Job_실행으로_SEQUENCE_GAP과_STOCK_NOT_RESTORED를_찾아_저장한다() throws Exception {
+        // SEQUENCE_GAP은 RemainingChecksTasklet(소량, assignReport()), STOCK_NOT_RESTORED는
+        // stockNotRestoredStep(청크, entityManager.getReference())로 서로 다른 경로를 거치지만
+        // 최종적으로 같은 report에 쌓이는지를 실제 Job 실행으로 확인한다 — STOCK_NOT_RESTORED는
+        // 원래 RemainingChecksTasklet 안에서 findStockNotRestored()(getResultList()로 전체 로드)로
+        // 처리했으나, DLQ 대량 적체 시 OOM 위험 때문에 청크 Step으로 옮겼다(ReconciliationJobConfig
+        // 클래스 Javadoc 참고). 이 테스트는 그 이관 후에도 결과가 report에 정상 저장됨을 검증한다.
         transactionTemplate.executeWithoutResult(status -> {
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-1", "NONE", "ISSUED"); // sequenceNo=1
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-2", "NONE", "ISSUED"); // sequenceNo=2

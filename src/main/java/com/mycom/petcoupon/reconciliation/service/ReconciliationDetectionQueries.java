@@ -184,28 +184,6 @@ public class ReconciliationDetectionQueries {
                 .build());
     }
 
-    // STOCK_NOT_RESTORED: 재시도를 다 소진하고 최종 실패(DLQ)한 요청 — Lua가 예약해둔 재고 1개를
-    // 되돌려주는 restoreStock()이 아직 없어서, DLQ row 하나하나가 곧 미복구 재고 1개다.
-    public List<VerificationDetail> findStockNotRestored(Long couponId, LocalDateTime asOfAt) {
-        List<Tuple> rows = entityManager.createNativeQuery("""
-                SELECT message_id, user_id FROM issue_message
-                 WHERE coupon_id = :couponId AND status = 'DLQ' AND created_at <= :asOfAt
-                """, Tuple.class)
-                .setParameter("couponId", couponId)
-                .setParameter("asOfAt", asOfAt)
-                .getResultList();
-
-        return rows.stream()
-                .map(row -> VerificationDetail.builder()
-                        .errorType(VerificationErrorType.STOCK_NOT_RESTORED)
-                        .userId(((Number) row.get(1)).longValue())
-                        .expectedValue("재고 복구됨")
-                        .actualValue("DLQ 확정 (message_id=" + row.get(0) + ")")
-                        .message("최종 실패했지만 예약된 재고가 복구되지 않았습니다")
-                        .build())
-                .toList();
-    }
-
     public Map<String, Long> countIssueMessagesByStatus(Long couponId, LocalDateTime asOfAt, String... statuses) {
         List<Tuple> rows = entityManager.createNativeQuery("""
                 SELECT status, COUNT(*) FROM issue_message

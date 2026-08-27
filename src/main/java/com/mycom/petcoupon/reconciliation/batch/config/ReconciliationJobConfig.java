@@ -25,6 +25,8 @@ import com.mycom.petcoupon.reconciliation.batch.chunk.HistoryMismatchItemProcess
 import com.mycom.petcoupon.reconciliation.batch.chunk.HistoryMismatchRow;
 import com.mycom.petcoupon.reconciliation.batch.chunk.InvalidTransitionItemProcessor;
 import com.mycom.petcoupon.reconciliation.batch.chunk.InvalidTransitionRow;
+import com.mycom.petcoupon.reconciliation.batch.chunk.StockNotRestoredItemProcessor;
+import com.mycom.petcoupon.reconciliation.batch.chunk.StockNotRestoredRow;
 import com.mycom.petcoupon.reconciliation.batch.tasklet.FinalizeReportTasklet;
 import com.mycom.petcoupon.reconciliation.batch.tasklet.PreconditionCheckTasklet;
 import com.mycom.petcoupon.reconciliation.batch.tasklet.RemainingChecksTasklet;
@@ -37,14 +39,18 @@ import lombok.RequiredArgsConstructor;
  * 정합성 검증 배치. 6개 검증 규칙 자체는 ReconciliationDetectionQueries에 그대로 있고,
  * 여기서는 그 규칙들을 Job → Step → (일부는 청크) 구조로 실행하는 순서만 조립한다.
  *
- * 순서가 중요하다: remainingChecksStep(소량)이 반드시 historyMismatchStep/invalidTransitionStep
- * (청크, 대용량)보다 먼저 와야 한다 — RemainingChecksTasklet가 쓰는 assignReport()는 부모
- * report의 지연로딩 컬렉션에 append하는데, 청크 Step이 먼저 대량으로 써놨으면 그 전체를
- * 메모리로 끌어오게 된다.
+ * 순서가 중요하다: remainingChecksStep(소량 — DUPLICATE_ISSUE/STOCK_MISMATCH/SEQUENCE_GAP)이
+ * 반드시 historyMismatchStep/invalidTransitionStep/stockNotRestoredStep(청크, 대용량)보다
+ * 먼저 와야 한다 — RemainingChecksTasklet가 쓰는 assignReport()는 부모 report의 지연로딩
+ * 컬렉션에 append하는데, 청크 Step이 먼저 대량으로 써놨으면 그 전체를 메모리로 끌어오게 된다.
+ * STOCK_NOT_RESTORED는 원래 remainingChecksStep 안에서 같이 처리했으나, DLQ가 대량으로
+ * 쌓이는 실제 장애 상황(300만 건 규모)에서는 assignReport() 경로 자체가 OOM 위험이라
+ * stockNotRestoredStep으로 분리했다.
  *
- * historyMismatchStep/invalidTransitionStep의 Reader는 JdbcPagingItemReader다 — MySQL
- * provider는 OFFSET이 아니라 정렬 키(coupon_issue_id/history_id) 기준 keyset 방식으로 다음
- * 페이지를 가져와서, 300만 건 규모에서도 뒤 페이지로 갈수록 느려지지 않는다.
+ * historyMismatchStep/invalidTransitionStep/stockNotRestoredStep의 Reader는
+ * JdbcPagingItemReader다 — MySQL provider는 OFFSET이 아니라 정렬 키(coupon_issue_id/
+ * history_id/message_id) 기준 keyset 방식으로 다음 페이지를 가져와서, 300만 건 규모에서도
+ * 뒤 페이지로 갈수록 느려지지 않는다.
  */
 @Configuration
 @RequiredArgsConstructor
@@ -67,6 +73,7 @@ public class ReconciliationJobConfig {
     private final ItemWriter<VerificationDetail> verificationDetailItemWriter;
     private final HistoryMismatchItemProcessor historyMismatchItemProcessor;
     private final InvalidTransitionItemProcessor invalidTransitionItemProcessor;
+    private final StockNotRestoredItemProcessor stockNotRestoredItemProcessor;
 
     @Bean
     public Job reconciliationJob() {
@@ -76,6 +83,7 @@ public class ReconciliationJobConfig {
                 .next(remainingChecksStep())
                 .next(historyMismatchStep())
                 .next(invalidTransitionStep())
+                .next(stockNotRestoredStep())
                 .next(finalizeReportStep())
                 .build();
     }
@@ -248,6 +256,68 @@ public class ReconciliationJobConfig {
             return reader;
         } catch (Exception e) {
             throw new IllegalStateException("invalidTransitionReader 초기화에 실패했습니다.", e);
+        }
+    }
+
+    @Bean
+    public Step stockNotRestoredStep() {
+        return new ChunkOrientedStepBuilder<StockNotRestoredRow, VerificationDetail>("stockNotRestoredStep", jobRepository, chunkSize)
+                .transactionManager(transactionManager)
+                .reader(stockNotRestoredReader(null, null))
+                .processor(stockNotRestoredItemProcessor)
+                .writer(verificationDetailItemWriter)
+                .build();
+    }
+
+    // STOCK_NOT_RESTORED: 재시도를 다 소진하고 최종 실패(DLQ)한 요청 — DLQ row 하나하나가 곧
+    // 미복구 재고 1개다. message_id 기준 keyset 페이징으로 chunkSize씩 읽는다.
+    //
+    // 원래는 ReconciliationDetectionQueries.findStockNotRestored()가 getResultList()로 전체를
+    // 한 번에 읽어 RemainingChecksTasklet의 assignReport()로 쌓았다 — DLQ가 대량으로 쌓이는
+    // 실제 장애 상황(이 배치가 원래 대비하려는 300만 건 규모)에서는 이 한 줄이 그대로
+    // OOM 경로가 된다. 다른 대용량 검증(historyMismatchStep/invalidTransitionStep)과 같은
+    // 청크 Step으로 옮겨서, 대량이어도 메모리에 한 번에 쌓이지 않게 한다.
+    //
+    // issue_message에는 coupon_id로 시작하는 인덱스가 uk_message_sequence(coupon_id,
+    // sequence_no) 하나뿐이라, coupon_id 조건은 이 인덱스로 타지만(EXPLAIN: type=ref) 정렬 키인
+    // message_id와는 순서가 달라 필요하다. keyset 페이징 쿼리는 페이지마다 "message_id > 마지막값
+    // ORDER BY message_id LIMIT chunkSize" 형태라 실제로 정렬되는 건 페이지당 최대 chunkSize건뿐이고,
+    // 전체 DLQ 건수와 무관하게 coupon_id 인덱스로 대상 자체를 좁혀놓고 시작하므로 이 정도
+    // filesort는 허용 범위로 판단해 별도 인덱스를 추가하지 않았다.
+    @Bean
+    @StepScope
+    public JdbcPagingItemReader<StockNotRestoredRow> stockNotRestoredReader(
+            @Value("#{jobParameters['couponId']}") Long couponId,
+            @Value("#{jobParameters['asOfAt']}") LocalDateTime asOfAt) {
+        try {
+            SqlPagingQueryProviderFactoryBean queryProviderFactory = new SqlPagingQueryProviderFactoryBean();
+            queryProviderFactory.setDataSource(dataSource);
+            queryProviderFactory.setSelectClause("message_id, user_id");
+            queryProviderFactory.setFromClause("issue_message");
+            queryProviderFactory.setWhereClause("""
+                    coupon_id = :couponId
+                      AND status = 'DLQ'
+                      AND created_at <= :asOfAt
+                    """);
+            queryProviderFactory.setSortKey("message_id");
+
+            Map<String, Object> params = new HashMap<>();
+            params.put("couponId", couponId);
+            params.put("asOfAt", asOfAt);
+
+            JdbcPagingItemReader<StockNotRestoredRow> reader =
+                    new JdbcPagingItemReader<>(dataSource, queryProviderFactory.getObject());
+            reader.setName("stockNotRestoredReader");
+            reader.setParameterValues(params);
+            reader.setPageSize(chunkSize);
+            reader.setRowMapper((rs, rowNum) -> new StockNotRestoredRow(
+                    rs.getLong("message_id"),
+                    rs.getLong("user_id")
+            ));
+            reader.afterPropertiesSet();
+            return reader;
+        } catch (Exception e) {
+            throw new IllegalStateException("stockNotRestoredReader 초기화에 실패했습니다.", e);
         }
     }
 

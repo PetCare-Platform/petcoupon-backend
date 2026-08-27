@@ -103,17 +103,6 @@ class ReconciliationDetectionQueriesTest {
                 });
     }
 
-    @Test
-    void DLQ_메시지가_있으면_STOCK_NOT_RESTORED를_탐지한다() {
-        CouponIssue issue = createIssueWithHistory(IssueStatus.ISSUED, "DLQ-1", "NONE", "ISSUED");
-        insertIssueMessage(issue.getUser().getUserId(), "dlq-req-1", "DLQ");
-
-        LocalDateTime asOfAt = LocalDateTime.now();
-        List<VerificationDetail> details = queries.findStockNotRestored(coupon.getCouponId(), asOfAt);
-
-        assertThat(details).anyMatch(d -> d.getErrorType() == VerificationErrorType.STOCK_NOT_RESTORED);
-    }
-
     private void insertIssueMessage(Long userId, String requestId, String status) {
         messageSequenceCounter++;
 
