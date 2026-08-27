@@ -188,15 +188,17 @@ class IssueMessageRepositoryTest {
 	}
 
 	// FAILED는 Outbox Poller가 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가
-	// 아니다 — failedCount에 잡히면 안 된다(PR #156 리뷰 반영). issuedCount에도 당연히 안 잡힌다.
+	// 아니다 — failedCount에 잡히면 안 된다(PR #156 리뷰 반영). issuedCount에도 당연히 안
+	// 잡히고, 대신 "아직 확정 안 됨" 묶음인 inProgressCount에 잡혀야 한다.
 	@Test
-	void findThroughputByHour는_재시도_대기중인_FAILED를_실패로_세지_않는다() {
+	void findThroughputByHour는_재시도_대기중인_FAILED를_실패_대신_진행중으로_센다() {
 		LocalDateTime bucketTime = LocalDateTime.now().withMinute(45).withSecond(0).withNano(0);
 		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
 		LocalDateTime since = bucketTime.minusHours(1);
 
 		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
 		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
 
 		IssueMessage failed = IssueMessage.pending(coupon, 30L, 30L, "throughput-retrying-failed-1", "{}");
 		entityManager.persist(failed);
@@ -213,9 +215,61 @@ class IssueMessageRepositoryTest {
 
 		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
 		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
 
 		assertThat(issuedAfter - issuedBefore).isZero();
 		assertThat(failedAfter - failedBefore).isZero();
+		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
+	}
+
+	// PR 리뷰 반영 — issuedCount+failedCount+inProgressCount가 그 버킷의 총 접수량과 항상
+	// 일치해야 프론트가 누적 막대 그래프를 그려도 어긋나지 않는다. 6개 상태(PENDING/SENT/
+	// CONSUMED/FAILED/DLQ/ABANDONED)를 하나씩 넣어 세 카운트의 합이 6건과 같은지 확인한다.
+	@Test
+	void findThroughputByHour는_세_카운트의_합이_총_접수량과_같다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(15).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long totalBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage pending = IssueMessage.pending(coupon, 40L, 40L, "total-pending", "{}");
+		entityManager.persist(pending);
+		IssueMessage sent = IssueMessage.pending(coupon, 41L, 41L, "total-sent", "{}");
+		entityManager.persist(sent);
+		IssueMessage consumed = IssueMessage.pending(coupon, 42L, 42L, "total-consumed", "{}");
+		entityManager.persist(consumed);
+		IssueMessage failed = IssueMessage.pending(coupon, 43L, 43L, "total-failed", "{}");
+		entityManager.persist(failed);
+		IssueMessage dlq = IssueMessage.pending(coupon, 44L, 44L, "total-dlq", "{}");
+		entityManager.persist(dlq);
+		IssueMessage abandoned = IssueMessage.pending(coupon, 45L, 45L, "total-abandoned", "{}");
+		entityManager.persist(abandoned);
+		entityManager.flush();
+
+		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test");
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(abandoned.getMessageId(), IssueMessageStatus.ABANDONED, "test");
+
+		for (IssueMessage message : List.of(pending, sent, consumed, failed, dlq, abandoned)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+					.setParameter("bucketTime", bucketTime)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long totalAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		assertThat(totalAfter - totalBefore).isEqualTo(6L);
 	}
 
 	private long findBucketCount(

@@ -43,7 +43,7 @@ class IssueStatisticsControllerTest {
         IssueStatisticsResponse response = IssueStatisticsResponse.builder()
                 .timeSeries(List.of(
                         IssueThroughputBucketResponse.builder()
-                                .bucket("2026-08-27 10:00:00").issuedCount(12).failedCount(3).build()
+                                .bucket("2026-08-27 10:00:00").issuedCount(12).failedCount(3).inProgressCount(5).build()
                 ))
                 .distribution(List.of(
                         IssueStatusDistributionResponse.builder()
@@ -61,6 +61,7 @@ class IssueStatisticsControllerTest {
                 .andExpect(jsonPath("$.result.timeSeries[0].bucket").value("2026-08-27 10:00:00"))
                 .andExpect(jsonPath("$.result.timeSeries[0].issuedCount").value(12))
                 .andExpect(jsonPath("$.result.timeSeries[0].failedCount").value(3))
+                .andExpect(jsonPath("$.result.timeSeries[0].inProgressCount").value(5))
                 .andExpect(jsonPath("$.result.distribution[0].status").value("CONSUMED"))
                 .andExpect(jsonPath("$.result.distribution[0].count").value(100))
                 .andExpect(jsonPath("$.result.distribution[1].status").value("DLQ"))

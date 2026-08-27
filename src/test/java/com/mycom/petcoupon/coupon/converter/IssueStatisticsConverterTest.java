@@ -22,12 +22,14 @@ class IssueStatisticsConverterTest {
         when(bucket.getBucket()).thenReturn("2026-08-27 10:00:00");
         when(bucket.getIssuedCount()).thenReturn(12L);
         when(bucket.getFailedCount()).thenReturn(3L);
+        when(bucket.getInProgressCount()).thenReturn(7L);
 
         IssueThroughputBucketResponse response = converter.toBucketResponse(bucket);
 
         assertThat(response.bucket()).isEqualTo("2026-08-27 10:00:00");
         assertThat(response.issuedCount()).isEqualTo(12L);
         assertThat(response.failedCount()).isEqualTo(3L);
+        assertThat(response.inProgressCount()).isEqualTo(7L);
     }
 
     @Test
