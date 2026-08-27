@@ -269,15 +269,21 @@ public class ReconciliationJobConfig {
                 .build();
     }
 
-    // STOCK_NOT_RESTORED: 관리자가 재처리를 포기(abandon)한 요청 — ABANDONED row 하나하나가 곧
-    // 미복구 재고 1개다. message_id 기준 keyset 페이징으로 chunkSize씩 읽는다.
+    // STOCK_NOT_RESTORED: 관리자가 재처리를 포기(abandon)했는데 재고 복구가 확인되지 않은 요청 —
+    // 이런 row 하나하나가 곧 미복구 재고 1개다. message_id 기준 keyset 페이징으로 chunkSize씩 읽는다.
     //
-    // DLQ가 아니라 ABANDONED를 본다(#149). DLQ 확정 시점(CouponIssueEventRecoverer.restoreStock())은
-    // 실제로는 아무것도 안 하고 로그만 남긴다 — 관리자가 reprocess로 되살릴 수 있어, 여기서
-    // 즉시 복구하면 나중에 재처리가 성공했을 때 초과발급으로 이어지기 때문이다. 재고 복구는
-    // 관리자가 abandon으로 재처리를 포기한다고 명시적으로 결정했을 때(CouponIssueDlqReprocessServiceImpl)
-    // 만 일어난다. 그래서 DLQ를 그대로 보면, 아직 관리자 결정을 기다리는 정상적인 건까지
-    // 전부 "미복구"로 오탐한다 — 진짜 봐야 할 건 ABANDONED인데 복구가 안 된 경우다.
+    // status='ABANDONED'만으로는 부족하다(#149에서 한 번 이렇게 잘못 냈다가 다시 고침) —
+    // CouponIssueDlqReprocessServiceImpl.abandon()은 claimForAbandon()으로 status를 먼저
+    // ABANDONED로 커밋한 뒤에 restoreStock()을 호출한다. restoreStock()이 실패해도(Redis 장애 등)
+    // status는 이미 ABANDONED로 남으므로, status만 보면 "정상적으로 복구된 절대다수의 건"까지
+    // 전부 미복구로 오탐한다. 그래서 abandon()이 복구 성공(RESTORED/ALREADY_RESTORED)을 확인한
+    // 뒤에만 채우는 별도 컬럼 stock_restored_at을 같이 봐야 한다 — status='ABANDONED'인데
+    // stock_restored_at이 아직 null인 건만 진짜 "포기했지만 복구 안 됨"이다.
+    //
+    // DLQ가 아니라 ABANDONED를 보는 이유는 그대로다: DLQ 확정 시점(CouponIssueEventRecoverer.
+    // restoreStock())은 실제로는 아무것도 안 하고 로그만 남긴다 — 관리자가 reprocess로 되살릴 수
+    // 있어, 여기서 즉시 복구하면 나중에 재처리가 성공했을 때 초과발급으로 이어지기 때문이다.
+    // DLQ를 그대로 보면 아직 관리자 결정을 기다리는 정상적인 건까지 전부 미복구로 오탐한다.
     //
     // 원래는 ReconciliationDetectionQueries.findStockNotRestored()가 getResultList()로 전체를
     // 한 번에 읽어 RemainingChecksTasklet의 assignReport()로 쌓았다 — 이런 요청이 대량으로 쌓이는
@@ -308,6 +314,7 @@ public class ReconciliationJobConfig {
             queryProviderFactory.setWhereClause("""
                     coupon_id = :couponId
                       AND status = 'ABANDONED'
+                      AND stock_restored_at IS NULL
                       AND created_at <= :asOfAt
                     """);
             queryProviderFactory.setSortKey("message_id");

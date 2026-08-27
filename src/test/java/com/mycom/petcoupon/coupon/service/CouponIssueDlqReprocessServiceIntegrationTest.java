@@ -225,6 +225,9 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 
 		IssueMessage updated = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
 		assertThat(updated.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+		// restoreStock()이 RESTORED/ALREADY_RESTORED로 확인된 뒤에만 채워지는 컬럼(#149) —
+		// 정합성 검증 배치가 status만으로는 복구 성공 여부를 구분 못 해서 별도로 남긴다.
+		assertThat(updated.getStockRestoredAt()).isNotNull();
 	}
 
 	@Test

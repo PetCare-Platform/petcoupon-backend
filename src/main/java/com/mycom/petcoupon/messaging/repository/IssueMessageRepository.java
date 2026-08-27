@@ -144,4 +144,14 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("expectedRetryCount") int expectedRetryCount,
 			@Param("newStatus") IssueMessageStatus newStatus
 	);
+
+	// abandon()이 restoreStock() 성공(RESTORED/ALREADY_RESTORED)을 확인한 뒤에만 호출한다(#149).
+	// status(ABANDONED)만으로는 재고 복구 성공 여부를 알 수 없어 — claimForAbandon()이 먼저
+	// status를 커밋하고 그 다음에 restoreStock()을 호출하는 구조라, restoreStock()이 실패해도
+	// status는 이미 ABANDONED로 남는다. 이 컬럼이 null인 ABANDONED 건만 정합성 검증 배치
+	// (stockNotRestoredReader)가 "미복구"로 잡는다.
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("UPDATE IssueMessage im SET im.stockRestoredAt = :restoredAt WHERE im.messageId = :messageId")
+	int markStockRestored(@Param("messageId") Long messageId, @Param("restoredAt") LocalDateTime restoredAt);
 }

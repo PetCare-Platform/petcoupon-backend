@@ -1,5 +1,6 @@
 package com.mycom.petcoupon.coupon.service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -99,6 +100,10 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 		);
 
 		validateRestoreResult(messageId, issueMessage.getMessageKey(), restoreResult);
+
+		// 복구가 확인된 뒤에만 기록한다(#149) — status(ABANDONED)만으로는 정합성 검증 배치가
+		// 복구 성공 여부를 구분할 수 없어서, 이 컬럼이 별도의 "복구 확정" 신호가 된다.
+		issueMessageRepository.markStockRestored(messageId, LocalDateTime.now());
 
 		return couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult);
 	}
