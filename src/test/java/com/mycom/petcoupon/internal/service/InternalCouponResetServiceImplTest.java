@@ -7,23 +7,28 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
-import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.data.redis.connection.stream.Consumer;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.ReadOffset;
+import org.springframework.data.redis.connection.stream.StreamOffset;
+import org.springframework.data.redis.connection.stream.StreamReadOptions;
+import org.springframework.data.redis.core.StreamOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
-
-import com.mycom.petcoupon.coupon.issue.config.CouponIssueLuaConfig;
-import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
-import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaServiceImpl;
-import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainCheckerImpl;
+import org.springframework.test.context.TestPropertySource;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
@@ -33,6 +38,10 @@ import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueLuaConfig;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaServiceImpl;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainCheckerImpl;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.idempotency.entity.IdempotencyKey;
@@ -68,6 +77,11 @@ import jakarta.persistence.PersistenceContext;
 // 잔여 메시지 검사가 Stream 키·그룹 이름을 알아야 한다. 슬라이스라 애플리케이션 클래스의
 // @EnableConfigurationProperties 가 적용되지 않으므로 여기서 다시 켠다.
 @EnableConfigurationProperties(CouponIssueStreamProperties.class)
+@TestPropertySource(properties = {
+	"coupon.issue.stream.key=coupon:issue:stream:reset-test",
+	"coupon.issue.stream.group=coupon-issue-reset-test-group",
+	"coupon.issue.stream.consumer=reset-test-consumer"
+})
 class InternalCouponResetServiceImplTest {
 
 	@PersistenceContext
@@ -78,6 +92,9 @@ class InternalCouponResetServiceImplTest {
 
 	@Autowired
 	private StringRedisTemplate redisTemplate;
+	
+	@Autowired
+	private CouponIssueStreamProperties streamProperties;
 
 	private Coupon coupon;
 	private AppUser user;
@@ -120,6 +137,11 @@ class InternalCouponResetServiceImplTest {
 		entityManager.persist(stock);
 
 		entityManager.flush();
+	}
+	
+	@AfterEach
+	void tearDownRedisStream() {
+		redisTemplate.delete(streamProperties.getKey());
 	}
 
 	@Test
@@ -310,6 +332,57 @@ class InternalCouponResetServiceImplTest {
 	}
 
 	@Test
+	@DisplayName("Redis Stream Pending 메시지가 있으면 초기화를 거절한다 - 회수 스케줄러가 뒤늦게 처리할 수 있다")
+	void resetRejectedWhenStreamHasPendingMessages() {
+		Pending_메시지를_만든다();
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> internalCouponResetService.reset(
+						coupon.getCouponId(),
+						new CouponResetRequest(null, null)
+				)
+		);
+
+		assertEquals(
+				CouponErrorCode.RESET_PRECONDITION_NOT_MET,
+				exception.getErrorCode()
+		);
+
+		Long pendingCount = redisTemplate.opsForStream()
+				.pending(
+						streamProperties.getKey(),
+						streamProperties.getGroup()
+				)
+				.getTotalPendingMessages();
+
+		// 초기화를 거절했으므로 Pending 메시지도 그대로 남아 있어야 한다.
+		assertEquals(1L, pendingCount);
+	}
+	
+	@Test
+	@DisplayName("Stream 메시지는 있지만 Consumer Group이 없으면 초기화를 거절한다")
+	void resetRejectedWhenStreamExistsWithoutConsumerGroup() {
+		String streamKey = streamProperties.getKey();
+
+		redisTemplate.opsForStream().add(
+			MapRecord.create(
+				streamKey,
+				Map.of("requestId", "group-missing-request","couponId", coupon.getCouponId().toString(),"userId", user.getUserId().toString())
+			)
+		);
+
+		GeneralException exception = assertThrows(
+			GeneralException.class,
+			() -> internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null))
+		);
+
+		assertEquals(CouponErrorCode.RESET_PRECONDITION_NOT_MET, exception.getErrorCode());
+
+		assertTrue(redisTemplate.hasKey(streamKey));
+	}
+	
+	@Test
 	@DisplayName("force 를 주면 미발행 메시지가 있어도 초기화한다 - 되찾을 수 없는 잔여물을 사람이 넘길 때")
 	void resetProceedsWhenForced() {
 		미발행_메시지를_만든다();
@@ -434,5 +507,44 @@ class InternalCouponResetServiceImplTest {
 		return entityManager.createQuery(jpql, Long.class)
 				.setParameter("couponId", coupon.getCouponId())
 				.getSingleResult();
+	}
+	
+	private void Pending_메시지를_만든다() {
+		String streamKey = streamProperties.getKey();
+		String group = streamProperties.getGroup();
+
+		StreamOperations<String, String, String> streamOps = redisTemplate.opsForStream();
+
+		MapRecord<String, String, String> record = MapRecord.create(
+			streamKey,
+			Map.of(	
+				"requestId", "reset-pending-request",	
+				"couponId", coupon.getCouponId().toString(),
+				"userId", user.getUserId().toString()
+			)
+		);
+
+		streamOps.add(record);
+
+		// 0-0부터 읽도록 Group을 생성한다.
+		streamOps.createGroup(streamKey, ReadOffset.from("0-0"), group);
+
+		/*
+		 * 죽은 Consumer가 메시지를 가져간 뒤 ACK하지 않은 상황을 만든다.
+		 * XREADGROUP이 실행되면 메시지가 Pending Entries List에 들어간다.
+		 */
+		List<MapRecord<String, String, String>> delivered =
+			streamOps.read(
+				Consumer.from(group, "stopped-reset-test-consumer"),
+				StreamReadOptions.empty().count(1),
+				StreamOffset.create(streamKey, ReadOffset.lastConsumed())
+			);
+
+		assertNotNull(delivered);
+		assertEquals(1, delivered.size());
+
+		Long pendingCount = streamOps.pending(streamKey, group).getTotalPendingMessages();
+
+		assertEquals(1L, pendingCount);
 	}
 }

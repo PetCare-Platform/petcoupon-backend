@@ -125,9 +125,46 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		);
     		throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
 		}
-		
+
 	}
-    
+
+    // 부하 테스트 초기화 전용 — 발급 상태를 지우고 재고를 다시 세운다.
+    // 재고 키 포맷을 호출부로 흘리지 않으려고 삭제 · 세팅 · 확인을 여기서 함께 처리한다.
+    // (예전에는 InternalCouponResetServiceImpl 이 키 문자열을 상수로 복사해 직접 조작했다.)
+    //
+    // 반환값의 null 은 "키가 없다 = 초기화가 끝나지 않았다"만 뜻한다.
+    // 방금 숫자를 SET 했는데 숫자가 아닌 값이 읽히는 건 미완료가 아니라 동시 변경이나 상태 오염이므로,
+    // null 로 뭉개지 않고 예외로 올린다 — 200 OK + redisStock=null 로 응답하면 성공 여부가 모호해진다.
+    @Override
+    public Integer resetIssueState(Long couponId, int totalQuantity) {
+        clearIssueState(couponId);
+
+        try {
+            String stockKey = CouponIssueRedisKeys.stock(couponId);
+            redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
+
+            String raw = redisTemplate.opsForValue().get(stockKey);
+
+            if (raw == null) {
+                return null;
+            }
+
+            return Integer.valueOf(raw);
+
+        } catch (DataAccessException e) {
+            log.error("쿠폰 재고 키 초기화 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+
+        } catch (NumberFormatException e) {
+            log.error(
+                "쿠폰 재고 키 값이 숫자 형식이 아닙니다. 방금 세팅한 값이 아닌 것이 읽혔습니다. couponId={}",
+                couponId,
+                e
+            );
+            throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+        }
+    }
+
     private void validateCouponId(Long couponId) {
         if (couponId == null || couponId <= 0) {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);

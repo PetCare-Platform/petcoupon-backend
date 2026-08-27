@@ -2,7 +2,6 @@ package com.mycom.petcoupon.internal.service;
 
 import java.time.LocalDateTime;
 
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,19 +33,11 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class InternalCouponResetServiceImpl implements InternalCouponResetService {
 
-	/**
-	 * Lua 가 재고를 읽고 쓰는 키. 형식의 원본은 {@code CouponIssueLuaServiceImpl.issueKey()} 인데
-	 * private 이라 여기서 다시 쓴다. 재고 키를 설정하는 공개 메서드가 생기면 이 상수를 지우고
-	 * 그 메서드를 호출하도록 바꾼다.
-	 */
-	private static final String STOCK_KEY_FORMAT = "coupon:issue:stock:{%d}";
-
 	@PersistenceContext
 	private EntityManager entityManager;
 
 	private final CouponStockRepository couponStockRepository;
 	private final CouponIssueLuaService couponIssueLuaService;
-	private final StringRedisTemplate redisTemplate;
 	private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
 
 	@Override
@@ -117,8 +108,9 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 * 되돌릴 방법이 없다. 그 상태로 지우면 지난 회차 신청이 뒤늦게 확정되면서 이번 회차 재고를 깎는데,
 	 * {@code coupon_issue} 를 모두 지운 뒤라 유니크 제약도 이를 막지 못한다.
 	 *
-	 * <p>실제 잔여 판단 기준(어떤 상태를 왜 막는지)은 {@link CouponIssuePipelineDrainChecker} 참고.
-	 * 여기서는 그 결과(검사 실패 포함)를 받아 무조건 거절만 한다 — 강행이 필요하면 {@code force} 로 넘긴다.
+	 * <p>실제 잔여 판단 기준(어떤 상태를 왜 막는지 — Stream 미배달/Outbox PENDING·FAILED·SENT/
+	 * Stream pending 전부)은 {@link CouponIssuePipelineDrainChecker} 참고. 여기서는 그 결과
+	 * (검사 실패 포함)를 받아 무조건 거절만 한다 — 강행이 필요하면 {@code force} 로 넘긴다.
 	 *
 	 * <p><b>알려진 한계 — 체크와 리셋 사이에 락이 없다.</b> 여기서 드레인 여부를 확인한 시점과
 	 * 실제 DELETE 가 실행되는 시점 사이에는 아무 락도 없다. 그 사이에 새 발급 요청이 들어오면
@@ -158,40 +150,19 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 * 다시 읽어서 실제로 저장된 값을 응답에 싣는다. 호출자는 이 값이 {@code totalQuantity} 와
 	 * 같은지 확인해 초기화 성공 여부를 판정할 수 있다.
 	 *
-	 * <p>읽기에 실패하거나 값이 숫자가 아니면 {@code null} 을 반환한다. 응답 필드가
-	 * {@code Integer} 인 이유이며, {@code null} 은 <b>초기화가 끝나지 않았다</b>는 뜻이다.
+	 * <p>키가 없으면 {@code null} 을 반환한다. 응답 필드가 {@code Integer} 인 이유이며,
+	 * {@code null} 은 <b>초기화가 끝나지 않았다</b>는 뜻이다. 값이 숫자가 아닌 경우는
+	 * 미완료가 아니라 상태 오염이므로 Lua 서비스가 예외로 올린다.
+	 *
+	 * <p>재고 키를 직접 만지지 않고 Lua 서비스에 맡긴다. 키 포맷의 원본이 거기에 있어서,
+	 * 여기서 문자열을 다시 조립하면 규칙이 바뀔 때 두 곳을 고쳐야 한다.
 	 *
 	 * <p>Redis 는 DB 트랜잭션에 참여하지 않는다. 여기서 실패하면 DB 는 롤백되지만
 	 * Redis 는 이미 지워진 상태로 남을 수 있으므로, 그 경우 초기화 API 를 다시 호출하면 된다.
 	 * 부하 테스트 전용 API 라 재실행으로 복구되는 것으로 충분하다고 보고 별도 보상은 두지 않았다.
 	 */
 	private Integer resetIssueState(Long couponId, int totalQuantity) {
-		couponIssueLuaService.clearIssueState(couponId);
-
-		String stockKey = String.format(STOCK_KEY_FORMAT, couponId);
-		redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
-
-		return readRedisStock(stockKey);
-	}
-
-	/**
-	 * 재고 키를 읽어 숫자로 바꾼다. 키가 없거나 숫자가 아니면 {@code null}.
-	 *
-	 * <p>검증용 값이라 여기서 예외를 던지지 않는다. 초기화 자체는 이미 끝났고,
-	 * 읽기에 실패했다는 사실은 {@code null} 로 호출자에게 그대로 전달하는 편이 낫다.
-	 */
-	private Integer readRedisStock(String stockKey) {
-		String raw = redisTemplate.opsForValue().get(stockKey);
-
-		if (raw == null) {
-			return null;
-		}
-
-		try {
-			return Integer.valueOf(raw);
-		} catch (NumberFormatException e) {
-			return null;
-		}
+		return couponIssueLuaService.resetIssueState(couponId, totalQuantity);
 	}
 
 	private long deleteHistories(Long couponId) {
