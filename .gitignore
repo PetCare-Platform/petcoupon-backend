@@ -42,3 +42,6 @@ out/
 ### load test ###
 # 회원 ID 목록은 DB 에서 만들어 쓰는 파일이라 커밋하지 않는다 (약 7MB)
 load-test/k6/members.csv
+
+# 로그 출력 (LOG_FILE 로 켤 때만 생성)
+logs/
