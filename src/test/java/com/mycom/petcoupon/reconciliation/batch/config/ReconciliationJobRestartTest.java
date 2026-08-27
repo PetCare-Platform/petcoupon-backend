@@ -22,6 +22,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -30,9 +31,11 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
 import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.VerificationDetail;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
@@ -71,6 +74,11 @@ import static org.mockito.Mockito.when;
         "coupon.issue.stream.enabled=false"
 })
 @Import(ReconciliationJobRestartTest.PoisonWriterConfig.class)
+// PoisonWriterConfig의 callCount/alreadyFailed는 컨텍스트에 딱 한 번 만들어지는 빈 안의
+// 상태라, 테스트 메서드가 두 개 이상이면 먼저 실행된 테스트가 "이미 한 번 실패시켰음"을
+// 남겨서 다음 테스트의 poison writer가 더 이상 안 던진다 — 메서드마다 컨텍스트를 새로
+// 띄워 이 상태를 초기화한다.
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class ReconciliationJobRestartTest {
 
     @Autowired
@@ -242,6 +250,52 @@ class ReconciliationJobRestartTest {
         entityManager.clear();
         ReconciliationReport finalReport = reconciliationReportRepository.findById(report.getReportId()).orElseThrow();
         assertThat(finalReport.getErrorCount()).isEqualTo(5L);
+    }
+
+    // preconditionCheckStep에 allowStartIfComplete(true)를 걸지 않으면, 1차 실행에서 이미
+    // COMPLETED된 이 Step은 재시작 시 Spring Batch가 그대로 건너뛴다 — 그 사이 파이프라인이
+    // 다시 오염돼도(DLQ 재처리·늦은 Kafka 메시지 등) 재시작이 이를 못 잡고 체크포인트부터
+    // 계속 진행해버린다. 이 테스트는 재시작 직전에 드레인 상태를 다시 "막힘"으로 바꿔서,
+    // 재시작이 이어서 처리하지 않고 사전조건에서 다시 거절되는지 확인한다.
+    @Test
+    void 재시작_전에_파이프라인이_다시_막히면_사전조건에서_다시_거절한다() throws Exception {
+        var jobParameters = new JobParametersBuilder()
+                .addLong("couponId", coupon.getCouponId())
+                .addLocalDateTime("asOfAt", LocalDateTime.now())
+                .toJobParameters();
+
+        // 1차 실행 — 두 번째 청크(historyMismatchStep)에서 의도적으로 실패(기존 테스트와 동일).
+        JobExecution firstExecution = jobOperator.start(reconciliationJob, jobParameters);
+        assertThat(firstExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        entityManager.clear();
+        ReconciliationReport report = reconciliationReportRepository.findAll().stream()
+                .filter(r -> r.getCoupon().getCouponId().equals(coupon.getCouponId()))
+                .findFirst()
+                .orElseThrow();
+
+        long countAfterFirstFailure = verificationDetailRepository.countByReport_ReportId(report.getReportId());
+        assertThat(countAfterFirstFailure).isEqualTo(2L);
+
+        // 재시작 전, 파이프라인이 다시 막혔다고 가정한다 — 예: DLQ 재처리로 Outbox에 미확정
+        // 메시지가 다시 생김.
+        when(pipelineDrainChecker.check(any())).thenReturn(new PipelineDrainStatus(1, 0, 0, false));
+
+        // 재시작 — preconditionCheckStep이 건너뛰어지지 않고 다시 돌아서, 여기서 즉시 거절돼야 한다.
+        JobExecution secondExecution = jobOperator.start(reconciliationJob, jobParameters);
+        assertThat(secondExecution.getStatus()).isEqualTo(BatchStatus.FAILED);
+
+        List<Throwable> failures = secondExecution.getAllFailureExceptions();
+        assertThat(failures).anyMatch(failure ->
+                failure instanceof GeneralException generalException
+                        && generalException.getErrorCode() == CouponErrorCode.RECONCILIATION_PIPELINE_NOT_DRAINED
+        );
+
+        // 사전조건에서 막혔으므로 뒤쪽 Step(체크포인트 이어받기)은 전혀 진행되지 않아야 한다 —
+        // verification_detail 건수가 1차 실패 시점(2건)에서 그대로여야 한다.
+        entityManager.clear();
+        long countAfterSecondAttempt = verificationDetailRepository.countByReport_ReportId(report.getReportId());
+        assertThat(countAfterSecondAttempt).isEqualTo(2L);
     }
 
     private void createMismatchedIssue(String couponCode) {

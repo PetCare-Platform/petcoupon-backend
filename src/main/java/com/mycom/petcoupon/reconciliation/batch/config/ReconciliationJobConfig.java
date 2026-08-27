@@ -80,10 +80,20 @@ public class ReconciliationJobConfig {
                 .build();
     }
 
+    // allowStartIfComplete(true) — 이 Step만은 재시작해도 건너뛰지 않고 매번 다시 돈다.
+    // 기본값(false)이면 1차 실행에서 이미 COMPLETED된 Step은 같은 JobInstance로 재시작할 때
+    // Spring Batch가 그대로 건너뛴다. 이 Step은 드레인 여부를 확인만 하고 아무것도 쓰지 않아
+    // 다시 돌아도 중복 부작용이 없다 — 반면 뒤쪽 Step(reportInitStep 등)은 리포트 row를 만드는
+    // 부작용이 있어 재실행되면 안 된다(체크포인트 이어받기가 깨짐). 그래서 이 Step에만 건다.
+    //
+    // 1차 실행이 뒤쪽 Step에서 실패한 뒤 DLQ 재처리·늦은 Kafka 메시지로 파이프라인이 다시
+    // 활성화될 수 있다 — 이 Step을 건너뛰면 그 사이 재오염된 상태를 못 잡고 재시작이 그대로
+    // 이어져 버린다.
     @Bean
     public Step preconditionCheckStep() {
         return new StepBuilder("preconditionCheckStep", jobRepository)
                 .tasklet(preconditionCheckTasklet, transactionManager)
+                .allowStartIfComplete(true)
                 .build();
     }
 
