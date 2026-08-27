@@ -11,6 +11,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -126,7 +127,25 @@ public class GlobalExceptionHandler {
                 .body(errorCode.getErrorResponse());
     }
     
-    // 처리하지 않은 모든 예외 처리 
+    // 매칭되는 핸들러가 없는 경로
+    // 이 핸들러가 없으면 아래 catch-all(Exception)이 대신 잡아 500으로 나간다 —
+    // NoResourceFoundException도 Exception의 하위라서다. 그러면 오타 URL과 서버 장애가
+    // 응답으로 구분되지 않는다.
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<CustomResponse<Void>> handleNoResourceFound(NoResourceFoundException ex) {
+
+    	// 스택 트레이스를 남기지 않는다. 잘못된 주소로 들어온 요청이라 서버 결함이 아니고,
+    	// 스캐너가 없는 경로를 훑으면 로그가 그것만으로 가득 찬다.
+    	log.warn("[NoResourceFound] 매칭되는 핸들러 없음: {}", ex.getResourcePath());
+
+    	BaseErrorCode errorCode = CommonErrorCode.NOT_FOUND;
+
+    	return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
+    }
+
+    // 처리하지 않은 모든 예외 처리
     @ExceptionHandler(Exception.class)
     public ResponseEntity<CustomResponse<Void>> handleAllException(Exception ex) {
 
