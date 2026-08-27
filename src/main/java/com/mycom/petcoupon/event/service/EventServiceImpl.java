@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.event.service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.function.Supplier;
 
 import org.springframework.dao.DataAccessException;
@@ -10,6 +11,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
 import com.mycom.petcoupon.event.dto.req.EventPageRequest;
@@ -21,6 +24,7 @@ import com.mycom.petcoupon.event.dto.res.EventListResponse;
 import com.mycom.petcoupon.event.dto.res.EventPageResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
+import com.mycom.petcoupon.event.dto.res.PublicEventDetailResponse;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.entity.EventStatusHistory;
 import com.mycom.petcoupon.event.entity.enums.ActorType;
@@ -46,6 +50,7 @@ public class EventServiceImpl implements EventService {
 	private final EventRepository eventRepository;
 	private final EventStatusHistoryRepository eventStatusHistoryRepository;
 	private final AppUserRepository appUserRepository;
+	private final CouponRepository couponRepository;
 	private final EventConverter eventConverter;
 
 	@Override
@@ -98,6 +103,24 @@ public class EventServiceImpl implements EventService {
 				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
 		return eventConverter.toDetailResponse(event);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public PublicEventDetailResponse getPublicEventDetail(Long eventId) {
+		Event event = eventRepository.findById(eventId)
+				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
+
+		// 일반 사용자에게는 진행 중(OPEN)인 이벤트만 공개한다. SCHEDULED·CLOSED는 EVENT_NOT_OPEN으로 막는다.
+		if (event.getStatus() != EventStatus.OPEN) {
+			throw new GeneralException(EventErrorCode.EVENT_NOT_OPEN);
+		}
+
+		// eventId로 쿠폰 기본정보를 SELECT 한 번에 읽는다(연관관계 없이 쿼리로 묶어 N+1 회피).
+		// 연결된 쿠폰이 없으면 빈 목록이 그대로 coupons: []로 나간다.
+		List<Coupon> coupons = couponRepository.findAllByEventId(eventId);
+
+		return eventConverter.toPublicEventDetailResponse(event, coupons);
 	}
 
 	@Override
