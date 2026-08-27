@@ -213,6 +213,16 @@ class IdempotencyKeyServiceImplTest {
     }
 
     @Test
+    void findStatus_응답없는_FAILED면_아직_최종결과_없는_것으로_보고_IN_PROGRESS를_반환한다() {
+        when(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), null, null)));
+
+        IdempotencyKeyStatusResult result = idempotencyKeyService.findStatus(USER_ID, KEY);
+
+        assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
+    }
+
+    @Test
     void succeed_정상_호출시_상태와_응답을_SUCCEEDED로_완료한다() {
         IdempotencyKey record = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
         when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));

@@ -107,10 +107,11 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
                 .ifPresent(record -> {
                     // 비동기 파이프라인(Kafka Consumer/Stream Consumer)이 먼저 최종 성공(200 OK) 또는
                     // 실패(FAILED)로 확정한 경우, HTTP 스레드의 뒤늦은 202 ACCEPTED(WAITING) 접수 응답이
-                    // 최종 결과를 덮어쓰지 않도록 방어한다.
+                    // 최종 결과를 덮어쓰지 않도록 방어한다. "이미 터미널 상태(IN_PROGRESS가 아님)"로
+                    // 판단한다 — status/responseStatus 조합을 개별로 나열하면 새 호출처가 추가될 때
+                    // 놓치기 쉽다.
                     if (responseStatus == HttpStatus.ACCEPTED.value()
-                            && (record.getStatus() == IdempotencyStatus.FAILED
-                            || (record.getResponseStatus() != null && record.getResponseStatus() == HttpStatus.OK.value()))) {
+                            && record.getStatus() != IdempotencyStatus.IN_PROGRESS) {
                         return;
                     }
                     record.complete(IdempotencyStatus.SUCCEEDED, responseStatus, responseBody);
