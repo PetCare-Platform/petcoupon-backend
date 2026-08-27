@@ -84,12 +84,10 @@ export const RUN_ID = __ENV.RUN_ID || 'local';
 export const RESET = bool('RESET', true);
 
 // 값을 안 주면 null. 부하 측정에는 쓰지 않고 통합 테스트 전용 모드를 켜는 스위치라,
-// "기본값"이 아니라 "꺼짐"이 필요하기 때문에 num()/bool() 과 다르게 처리한다.
+// "기본값"이 아니라 "꺼짐"이 필요하다. num() 이 미지정·빈 문자열에 fallback 을 돌려주므로
+// fallback 을 null 로 주면 그대로 "꺼짐"이 된다 — 이름을 따로 두는 건 호출부에서 의도가
+// 드러나게 하려는 것뿐이고, 숫자 검증은 num() 에 그대로 맡긴다.
 function optionalNum(name) {
-	const raw = __ENV[name];
-	if (raw === undefined || raw === '') {
-		return null;
-	}
 	return num(name, null);
 }
 
