@@ -156,6 +156,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 
 | Method | Path | 설명 |
 |---|---|---|
+| `GET` | `/events` | 공개 이벤트 목록 — `OPEN` 상태만 최신 등록순으로 조회 |
 | `POST` | `/coupons/{couponId}/issues` | 선착순 신청 (`Idempotency-Key` 헤더 필수) → `202` |
 | `GET` | `/coupons/{couponId}/status` | 쿠폰 실시간 요청 현황 — 잔여 재고는 Redis 기준. `initialized`가 `false`면 아직 재고 키가 없다는 뜻이라 `remainingQuantity: 0`을 품절로 읽으면 안 된다 |
 | `GET` | `/users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 신청 결과 폴링 |
@@ -171,6 +172,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 |---|---|---|
 | `POST` | `/admin/auth/sessions` | 세션 토큰 발급 (**토큰 불필요**) |
 | `DELETE` | `/admin/auth/sessions` | 세션 폐기 |
+| `GET` | `/admin/events` | 전체 이벤트 목록 — 모든 상태를 최신 등록순으로 조회 |
 | `POST` | `/admin/events` | 이벤트 생성 |
 | `GET` | `/admin/events/{eventId}` | 이벤트 상세 |
 | `GET` | `/admin/events/{eventId}/status` | 이벤트 상태 |

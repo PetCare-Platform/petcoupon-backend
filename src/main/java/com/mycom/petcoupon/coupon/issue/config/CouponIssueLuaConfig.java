@@ -29,4 +29,14 @@ public class CouponIssueLuaConfig {
 
         return script;
     }
+	
+	@Bean
+	public DefaultRedisScript<String> couponIssuePendingToDlqLuaScript() {
+		DefaultRedisScript<String> script = new DefaultRedisScript<>();
+
+		script.setLocation(new ClassPathResource("lua/coupon-issue-pending-to-dlq.lua"));
+		script.setResultType(String.class);
+
+		return script;
+	}
 }

@@ -69,8 +69,9 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 		}
 	}
 
+	// 메인 토픽(CouponIssueEventProducer)과 동일하게 couponId로 키잉해 파티션 키 규칙을 통일한다.
 	private void publishToDlqTopic(CouponIssueEvent event) {
-		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, event.requestId(), event);
+		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, String.valueOf(event.couponId()), event);
 	}
 
 	private void markDlq(CouponIssueEvent event, Exception exception) {

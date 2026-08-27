@@ -31,6 +31,7 @@ import com.mycom.petcoupon.coupon.repository.CouponIssueHistoryRepository;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.notification.NotificationLogTestSupport;
 import com.mycom.petcoupon.user.entity.AppUser;
 
 import jakarta.persistence.EntityManager;
@@ -138,6 +139,9 @@ class CouponIssueEventConsumerConcurrencyIntegrationTest {
 	}
 
 	private void tearDownData() {
+		// #119(쿠폰 발급 알림 로그)에서 coupon_issue를 FK로 무는 notification_log가 추가돼서,
+		// coupon_issue 삭제보다 먼저 지워야 한다.
+		NotificationLogTestSupport.deleteByCouponId(entityManager, couponId);
 		entityManager.createNativeQuery(
 				"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id = :couponId")
 				.setParameter("couponId", couponId)
@@ -151,9 +155,13 @@ class CouponIssueEventConsumerConcurrencyIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
 				.setParameter("couponId", couponId)
 				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
-				.setParameter("eventId", event.getEventId())
-				.executeUpdate();
+		// user persist 단계에서 setUp이 실패하면 event는 null인 채로 tearDown에 들어온다 —
+		// getEventId() 호출 전에 가드한다(CouponIssuePipelineIntegrationTest와 동일한 패턴).
+		if (event != null) {
+			entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
+					.setParameter("eventId", event.getEventId())
+					.executeUpdate();
+		}
 		List<Long> allUserIds = new ArrayList<>(extraUserIds);
 		allUserIds.add(user.getUserId());
 		entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id IN (:userIds)")
