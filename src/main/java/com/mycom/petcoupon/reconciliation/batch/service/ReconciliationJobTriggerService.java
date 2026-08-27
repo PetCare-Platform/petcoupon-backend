@@ -22,6 +22,7 @@ import org.springframework.batch.core.launch.JobExecutionAlreadyRunningException
 import org.springframework.batch.core.launch.JobInstanceAlreadyCompleteException;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.launch.JobRestartException;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
@@ -54,7 +55,11 @@ public class ReconciliationJobTriggerService {
     private final ReconciliationReportRepository reconciliationReportRepository;
     private final VerificationDetailRepository verificationDetailRepository;
     private final ReconciliationBatchExecutionLogger batchExecutionLogger;
-    private final DataSource dataSource;
+
+    // 메인 DataSource가 아니라 락 전용 소형 풀이다 — 이유는
+    // ReconciliationLockDataSourceConfig 클래스 주석 참고.
+    @Qualifier("reconciliationLockDataSource")
+    private final DataSource lockDataSource;
 
     /**
      * resolveJobParameters()는 "실행 중인지 확인 → asOfAt 결정"을 하지만 이 조회와
@@ -71,7 +76,7 @@ public class ReconciliationJobTriggerService {
      * DataSource에서 커넥션을 직접 하나 빌려 쓰는 이유다.
      */
     public ReconciliationBatchResult reconcile(Long couponId) {
-        try (Connection lockConnection = dataSource.getConnection()) {
+        try (Connection lockConnection = lockDataSource.getConnection()) {
             if (!tryLock(lockConnection, couponId)) {
                 throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
             }
