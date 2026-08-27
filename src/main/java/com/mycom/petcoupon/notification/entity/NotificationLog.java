@@ -24,6 +24,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.AccessLevel;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -65,14 +66,31 @@ public class NotificationLog {
 	@Column(length = 500) 
 	private String content; 
 	
-	@Enumerated(EnumType.STRING) 
-	@Column(nullable = false, length = 20) 
-	private NotificationStatus status=NotificationStatus.PENDING;
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
+	private NotificationStatus status = NotificationStatus.PENDING;
 	 
 	@Column(name = "sent_at") 
 	private LocalDateTime sentAt; 
 	
 	@CreatedDate
-	@Column(name = "created_at", nullable = false, updatable = false) 
+	@Column(name = "created_at", nullable = false, updatable = false)
 	private LocalDateTime createdAt;
+
+	@Builder
+	private NotificationLog(CouponIssue couponIssue, AppUser user, Channel channel,
+			String recipientMasked, String content, NotificationStatus status, LocalDateTime sentAt) {
+		this.couponIssue = couponIssue;
+		this.user = user;
+		this.channel = channel;
+		this.recipientMasked = recipientMasked;
+		this.content = content;
+		// status 필드의 인라인 기본값(PENDING)이 빌더 생성자에서 무조건 덮어써지지 않도록 null이면 유지.
+		// @Builder.Default는 @Builder가 클래스 레벨에 있어야 동작하는데, 이 엔티티는 노출할 필드를
+		// 제한하려고 @Builder를 생성자에만 붙이는 패턴이라 적용할 수 없다(실측 확인 — 컴파일 에러 남).
+		if (status != null) {
+			this.status = status;
+		}
+		this.sentAt = sentAt;
+	}
 }

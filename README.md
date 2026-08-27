@@ -156,6 +156,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 
 | Method | Path | 설명 |
 |---|---|---|
+| `GET` | `/events` | 공개 이벤트 목록 — `OPEN` 상태만 최신 등록순으로 조회 |
 | `POST` | `/coupons/{couponId}/issues` | 선착순 신청 (`Idempotency-Key` 헤더 필수) → `202` |
 | `GET` | `/coupons/{couponId}/status` | 쿠폰 실시간 요청 현황 — 잔여 재고는 Redis 기준. `initialized`가 `false`면 아직 재고 키가 없다는 뜻이라 `remainingQuantity: 0`을 품절로 읽으면 안 된다 |
 | `GET` | `/users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 신청 결과 폴링 |
@@ -171,6 +172,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 |---|---|---|
 | `POST` | `/admin/auth/sessions` | 세션 토큰 발급 (**토큰 불필요**) |
 | `DELETE` | `/admin/auth/sessions` | 세션 폐기 |
+| `GET` | `/admin/events` | 전체 이벤트 목록 — 모든 상태를 최신 등록순으로 조회 |
 | `POST` | `/admin/events` | 이벤트 생성 |
 | `GET` | `/admin/events/{eventId}` | 이벤트 상세 |
 | `GET` | `/admin/events/{eventId}/status` | 이벤트 상태 |
@@ -178,9 +180,31 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 | `PATCH` | `/admin/events/{eventId}/status` | 이벤트 상태 변경 |
 | `POST` | `/admin/events/{eventId}/coupons` | 쿠폰 생성 |
 | `PATCH` | `/admin/events/{eventId}/coupons/{couponId}` | 쿠폰 수정 (발급 시작 전에만) |
+| `GET` | `/admin/coupons` | 쿠폰 목록 — 페이지 단위. 선택 필터 `eventId`·`status`, 미지정 시 전체. 재고는 DB(`coupon_stock`) 확정값 |
+| `GET` | `/admin/coupons/{couponId}/status` | 쿠폰 실시간 현황 — 잔여 재고는 Redis 기준 |
 | `GET` | `/admin/coupon-issue/dlq` | DLQ 메시지 목록 |
 | `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | DLQ 수동 재발행 |
 | `POST` | `/admin/coupons/{couponId}/reconcile` | 정합성 검증 배치 실행 |
+
+목록과 단건은 재고의 출처가 다르다. 목록은 Kafka 소비까지 끝난 **확정 발급 현황**(`coupon_stock`)이라
+발급이 몰리는 동안에는 실시간 잔여와 어긋난다. 실시간 값이 필요하면 단건 조회를 쓴다.
+목록에서 쿠폰마다 Redis를 읽으면 20건 목록에 왕복이 20회 생기고, 쿠폰 한 건의 정합성 오류가
+페이지 전체를 실패시키기 때문이다.
+
+목록에는 그 수치의 기준 시각(`stockUpdatedAt`)을 함께 싣는다. 발급 확정에 쓰는
+`increaseIssuedQuantity`가 벌크 UPDATE라 `coupon_stock.updated_at`이 갱신되지 않는 문제가
+있었는데, 그 메서드가 시각을 직접 갱신하도록 고친 뒤에야 이 필드를 실었다(이슈 #146).
+
+```bash
+curl -s "localhost:8080/admin/coupons?eventId=1&status=ACTIVE&page=0&size=20" -H "X-ADMIN-KEY: {발급받은_토큰}"
+```
+
+`page`는 0부터, `size`는 `10`·`20`·`50`·`100` 중 하나다(기본 20). 벗어나면 `COUPON400-11`이고,
+페이지 응답 형식(`content`·`page`·`size`·`totalElements`·`totalPages`·`first`·`last`)은 이벤트 목록과 같다.
+없는 `eventId`로 필터하면 빈 목록이 아니라 `EVENT404-0`으로 답한다.
+
+`status=SOLD_OUT`은 재고 소진 즉시가 아니라 상태 전이 스케줄러 주기(최대 60초) 이후에 반영된다.
+판정 기준이 Redis 실시간 값이 아니라 DB(`coupon_stock`) 확정값이기 때문이다.
 
 ### 내부 — `prod` 프로파일에서 비활성
 
@@ -199,7 +223,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 | 작업 | 주기 | 설명 |
 |---|---|---|
 | Outbox 발행 | 1초 (fixed delay) | `PENDING`·`FAILED` 메시지를 Kafka로 |
-| 쿠폰 상태 전이 | 60초 | `READY → ACTIVE → ENDED` |
+| 쿠폰 상태 전이 | 60초 | `READY → ACTIVE → SOLD_OUT → ENDED` (재고 소진은 DB 확정값 기준, `ACTIVE → ENDED`도 가능) |
 | 이벤트 상태 전이 | 매분 | `SCHEDULED → OPEN → CLOSED` |
 | 쿠폰 만료 | 매일 01:00 | 만료 건을 `EXPIRED`로 (청크 처리) |
 | 멱등키 정리 | 매일 04:00 | 보관기간 7일 경과분 삭제 |

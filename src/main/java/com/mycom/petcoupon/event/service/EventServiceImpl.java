@@ -1,16 +1,24 @@
 package com.mycom.petcoupon.event.service;
 
 import java.time.LocalDateTime;
+import java.util.function.Supplier;
 
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.event.converter.EventConverter;
 import com.mycom.petcoupon.event.dto.req.EventCreateRequest;
+import com.mycom.petcoupon.event.dto.req.EventPageRequest;
 import com.mycom.petcoupon.event.dto.req.EventStatusUpdateRequest;
 import com.mycom.petcoupon.event.dto.req.EventUpdateRequest;
 import com.mycom.petcoupon.event.dto.res.EventCreateResponse;
 import com.mycom.petcoupon.event.dto.res.EventDetailResponse;
+import com.mycom.petcoupon.event.dto.res.EventListResponse;
+import com.mycom.petcoupon.event.dto.res.EventPageResponse;
 import com.mycom.petcoupon.event.dto.res.EventStatusResponse;
 import com.mycom.petcoupon.event.dto.res.EventUpdateResponse;
 import com.mycom.petcoupon.event.entity.Event;
@@ -29,7 +37,9 @@ import com.mycom.petcoupon.user.entity.enums.UserStatus;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class EventServiceImpl implements EventService {
@@ -57,6 +67,28 @@ public class EventServiceImpl implements EventService {
 		eventStatusHistoryRepository.save(initialHistory);
 
 		return eventConverter.toCreateResponse(savedEvent);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public EventPageResponse getOpenEvents(EventPageRequest pageRequest) {
+		Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
+
+		return queryEvents(
+				() -> eventRepository.findAllByStatusOrderByCreatedAtDescEventIdDesc(EventStatus.OPEN, pageable),
+				"공개 이벤트 목록 조회에 실패했습니다."
+		);
+	}
+
+	@Override
+	@Transactional(readOnly = true)
+	public EventPageResponse getAllEvents(EventPageRequest pageRequest) {
+		Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
+
+		return queryEvents(
+				() -> eventRepository.findAllByOrderByCreatedAtDescEventIdDesc(pageable),
+				"관리자 이벤트 목록 조회에 실패했습니다."
+		);
 	}
 
 	@Override
@@ -140,6 +172,17 @@ public class EventServiceImpl implements EventService {
 
 	private void validatePeriod(EventCreateRequest request) {
 		validatePeriod(request.openAt(), request.closeAt());
+	}
+
+	private EventPageResponse queryEvents(Supplier<Page<Event>> query, String failureMessage) {
+		try {
+			Page<EventListResponse> responsePage = query.get().map(eventConverter::toListResponse);
+
+			return EventPageResponse.from(responsePage);
+		} catch (DataAccessException e) {
+			log.error(failureMessage, e);
+			throw new GeneralException(EventErrorCode.EVENT_LIST_QUERY_FAILED);
+		}
 	}
 
 	private void validatePeriod(LocalDateTime openAt, LocalDateTime closeAt) {

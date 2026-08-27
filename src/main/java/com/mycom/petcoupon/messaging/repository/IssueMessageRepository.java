@@ -131,4 +131,20 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("expectedStatus") IssueMessageStatus expectedStatus,
 			@Param("expectedRetryCount") int expectedRetryCount
 	);
+
+	// 관리자가 DLQ 재처리를 포기하고 재고를 복구할 때 사용 — claimForReprocess와 동일하게
+	// retryCount를 낙관적 락으로 써서, 재처리 요청과 동시에 들어와도 둘 중 하나만 선점하게 한다.
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+			UPDATE IssueMessage im
+			   SET im.status = :newStatus
+			 WHERE im.messageId = :messageId AND im.status = :expectedStatus AND im.retryCount = :expectedRetryCount
+			""")
+	int claimForAbandon(
+			@Param("messageId") Long messageId,
+			@Param("expectedStatus") IssueMessageStatus expectedStatus,
+			@Param("expectedRetryCount") int expectedRetryCount,
+			@Param("newStatus") IssueMessageStatus newStatus
+	);
 }

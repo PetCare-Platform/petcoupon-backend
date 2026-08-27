@@ -32,9 +32,19 @@ import lombok.NoArgsConstructor;
 @Table(
 	name = "issue_message",
 	indexes = {
-		@Index( 
-			name = "idx_issue_message_publish", 
+		@Index(
+			name = "idx_issue_message_publish",
 			columnList = "status, retry_count, message_id"
+		),
+		// 정합성 검증 배치(stockNotRestoredStep, ReconciliationJobConfig 참고)가
+		// coupon_id+status='DLQ'로 좁힌 뒤 message_id 순으로 keyset 페이징한다. 이 인덱스가
+		// 없으면 coupon_id만 태우는 uk_message_sequence(coupon_id, sequence_no)로 좁힌 뒤
+		// 매 페이지 남은 후보 전체를 스캔+정렬해야 해서(Using filesort) 페이지 수가 늘수록
+		// 비용이 O(N²/chunkSize)로 커진다 — coupon_id, status, message_id 순으로 만들면
+		// 이 필터+정렬을 인덱스 하나로 커버해 페이지당 chunkSize만큼만 훑는다.
+		@Index(
+			name = "idx_issue_message_coupon_dlq",
+			columnList = "coupon_id, status, message_id"
 		)
 	},
 	uniqueConstraints = {

@@ -154,7 +154,7 @@ class CouponIssueQueryServiceImplTest {
     }
 
     @Test
-    void getIssueRequests_returnsList_whenUserExists() {
+    void getIssueRequests_returnsList_whenUserExistsAndNoStatusFilter() {
         CouponIssue couponIssue = CouponIssue.builder()
                 .couponCode("COUPON-0003")
                 .status(IssueStatus.ISSUED)
@@ -170,10 +170,11 @@ class CouponIssueQueryServiceImplTest {
                 .build();
 
         when(appUserRepository.existsById(1L)).thenReturn(true);
-        when(couponIssueRepository.findAllByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(couponIssue));
+        when(couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(1L, null))
+                .thenReturn(List.of(couponIssue));
         when(couponIssueConverter.toRequestResponse(couponIssue)).thenReturn(expected);
 
-        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(1L);
+        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(1L, null);
 
         assertThat(response).containsExactly(expected);
     }
@@ -182,7 +183,7 @@ class CouponIssueQueryServiceImplTest {
     void getIssueRequests_throwsException_whenUserNotFound() {
         when(appUserRepository.existsById(999L)).thenReturn(false);
 
-        assertThatThrownBy(() -> couponIssueQueryService.getIssueRequests(999L))
+        assertThatThrownBy(() -> couponIssueQueryService.getIssueRequests(999L, null))
                 .isInstanceOf(GeneralException.class)
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(UserErrorCode.USER_NOT_FOUND);
@@ -191,9 +192,47 @@ class CouponIssueQueryServiceImplTest {
     @Test
     void getIssueRequests_returnsEmptyList_whenUserHasNoIssues() {
         when(appUserRepository.existsById(2L)).thenReturn(true);
-        when(couponIssueRepository.findAllByUserIdOrderByCreatedAtDesc(2L)).thenReturn(List.of());
+        when(couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(2L, null))
+                .thenReturn(List.of());
 
-        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(2L);
+        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(2L, null);
+
+        assertThat(response).isEmpty();
+    }
+
+    @Test
+    void getIssueRequests_passesStatusToRepository_whenStatusGiven() {
+        CouponIssue usedIssue = CouponIssue.builder()
+                .couponCode("COUPON-0004")
+                .status(IssueStatus.USED)
+                .expiresAt(LocalDateTime.now().plusDays(1))
+                .build();
+        CouponIssueRequestResponse expected = CouponIssueRequestResponse.builder()
+                .couponIssueId(usedIssue.getCouponIssueId())
+                .couponCode(usedIssue.getCouponCode())
+                .status("USED")
+                .issuedAt(usedIssue.getCreatedAt())
+                .usedAt(usedIssue.getUsedAt())
+                .expiresAt(usedIssue.getExpiresAt())
+                .build();
+
+        when(appUserRepository.existsById(3L)).thenReturn(true);
+        when(couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(3L, IssueStatus.USED))
+                .thenReturn(List.of(usedIssue));
+        when(couponIssueConverter.toRequestResponse(usedIssue)).thenReturn(expected);
+
+        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(3L, IssueStatus.USED);
+
+        assertThat(response).containsExactly(expected);
+    }
+
+    @Test
+    void getIssueRequests_returnsEmptyList_whenStatusHasNoMatches() {
+        when(appUserRepository.existsById(4L)).thenReturn(true);
+        when(couponIssueRepository.findAllByUserIdAndStatusOrderByCreatedAtDesc(4L, IssueStatus.EXPIRED))
+                .thenReturn(List.of());
+
+        List<CouponIssueRequestResponse> response = couponIssueQueryService.getIssueRequests(4L, IssueStatus.EXPIRED);
 
         assertThat(response).isEmpty();
     }

@@ -9,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 
 import com.mycom.petcoupon.coupon.config.CouponStatusSchedulerRegistrar;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssuePendingRecoveryScheduler;
 import com.mycom.petcoupon.event.config.EventSchedulingRunner;
 
 /**
@@ -65,6 +66,53 @@ class SchedulerToggleTest {
 		@Test
 		void couponStatusSchedulerIsEnabledByDefault() {
 			assertThat(context.getBeanNamesForType(CouponStatusSchedulerRegistrar.class)).hasSize(1);
+		}
+	}
+	
+	@Nested
+	@SpringBootTest(properties = {
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.stream.enabled=true",
+		"coupon.issue.stream.pending-recovery.enabled=false",
+		"coupon.issue.stream.key=coupon:issue:stream:scheduler-toggle-disabled",
+		"coupon.issue.stream.group=scheduler-toggle-disabled-group",
+		"coupon.issue.stream.consumer=scheduler-toggle-disabled-consumer",
+		"coupon.issue.outbox.enabled=false",
+		"spring.kafka.listener.auto-startup=false"
+	})
+	class WhenPendingRecoveryDisabled {
+
+		@Autowired
+		private ApplicationContext context;
+
+		@Test
+		void pendingRecoverySchedulerBeanIsNotRegistered() {
+			assertThat(context.getBeanNamesForType(CouponIssuePendingRecoveryScheduler.class)).isEmpty();
+		}
+	}
+
+	@Nested
+	@SpringBootTest(properties = {
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.stream.enabled=true",
+		"coupon.issue.stream.pending-recovery.enabled=true",
+		"coupon.issue.stream.pending-recovery.fixed-delay=PT1H",
+		"coupon.issue.stream.key=coupon:issue:stream:scheduler-toggle-enabled",
+		"coupon.issue.stream.group=scheduler-toggle-enabled-group",
+		"coupon.issue.stream.consumer=scheduler-toggle-enabled-consumer",
+		"coupon.issue.outbox.enabled=false",
+		"spring.kafka.listener.auto-startup=false"
+	})
+	class WhenPendingRecoveryEnabled {
+
+		@Autowired
+		private ApplicationContext context;
+
+		@Test
+		void pendingRecoverySchedulerBeanIsRegistered() {
+			assertThat(context.getBeanNamesForType(CouponIssuePendingRecoveryScheduler.class)).hasSize(1);
 		}
 	}
 }

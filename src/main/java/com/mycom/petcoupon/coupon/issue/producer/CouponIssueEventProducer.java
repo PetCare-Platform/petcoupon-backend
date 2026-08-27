@@ -121,8 +121,9 @@ public class CouponIssueEventProducer {
 		}
 	}
 
-	// TODO: Redis 재고 보상(restoreStock) 정책 구현 — DLQ 전이된 메시지에 대해 관리자가
-	// 수동으로 재고 복구를 트리거하는 방식으로 논의 중 (CouponIssueLuaService.restoreStock() 대기)
+	// DLQ 전이 자체는 재고를 건드리지 않는다 — 재발행(reprocess)으로 아직 성공할 여지가 있는 메시지의
+	// 재고를 성급히 복구하면 이후 재발행이 성공했을 때 초과 발급으로 이어질 수 있다. 재고 복구는 관리자가
+	// CouponIssueDlqAdminController의 abandon API로 "포기"를 명시적으로 선택했을 때만 실행된다.
 
 	private String errorMessage(Throwable throwable) {
 	    String message = throwable.getMessage();

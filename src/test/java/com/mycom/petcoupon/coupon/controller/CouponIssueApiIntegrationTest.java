@@ -32,6 +32,7 @@ import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.idempotency.entity.enums.IdempotencyStatus;
 import com.mycom.petcoupon.idempotency.repository.IdempotencyKeyRepository;
+import com.mycom.petcoupon.notification.NotificationLogTestSupport;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
 
@@ -57,6 +58,8 @@ import tools.jackson.databind.ObjectMapper;
 		"coupon.issue.outbox.publish-fixed-delay-ms=100",
 		"coupon.issue.outbox.batch-size=10",
 		"spring.kafka.consumer.auto-offset-reset=earliest",
+		// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서, 테스트 도중 스케줄러가
+		// event_status_history를 만들어 tearDown의 event 삭제가 FK 위반으로 실패하는 걸 막는다.
 		"event.status.scheduler.enabled=false",
 		"coupon.status.enabled=false"
 })
@@ -185,6 +188,9 @@ class CouponIssueApiIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM issue_message WHERE coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)
 				.executeUpdate();
+		// #119(쿠폰 발급 알림 로그)에서 coupon_issue를 FK로 무는 notification_log가 추가돼서,
+		// 위와 같은 이유로 coupon_issue 삭제보다 먼저 지워야 한다.
+		NotificationLogTestSupport.deleteByCouponIds(entityManager, couponIds);
 		entityManager.createNativeQuery(
 				"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)
@@ -198,6 +204,7 @@ class CouponIssueApiIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)
 				.executeUpdate();
+		// 스케줄러를 꺼도, 방어적으로 event 삭제보다 먼저 지운다 (다른 통합테스트들과 동일한 패턴).
 		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
 				.setParameter("eventId", event.getEventId())
 				.executeUpdate();

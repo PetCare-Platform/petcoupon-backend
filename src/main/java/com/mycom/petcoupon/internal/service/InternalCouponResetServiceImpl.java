@@ -1,19 +1,15 @@
 package com.mycom.petcoupon.internal.service;
 
 import java.time.LocalDateTime;
-import java.util.Objects;
 
-import org.springframework.dao.DataAccessException;
-import org.springframework.data.redis.connection.stream.StreamInfo;
-import org.springframework.data.redis.core.StreamOperations;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
-import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.internal.dto.req.CouponResetRequest;
@@ -37,20 +33,12 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class InternalCouponResetServiceImpl implements InternalCouponResetService {
 
-	/**
-	 * Lua 가 재고를 읽고 쓰는 키. 형식의 원본은 {@code CouponIssueLuaServiceImpl.issueKey()} 인데
-	 * private 이라 여기서 다시 쓴다. 재고 키를 설정하는 공개 메서드가 생기면 이 상수를 지우고
-	 * 그 메서드를 호출하도록 바꾼다.
-	 */
-	private static final String STOCK_KEY_FORMAT = "coupon:issue:stock:{%d}";
-
 	@PersistenceContext
 	private EntityManager entityManager;
 
 	private final CouponStockRepository couponStockRepository;
 	private final CouponIssueLuaService couponIssueLuaService;
-	private final StringRedisTemplate redisTemplate;
-	private final CouponIssueStreamProperties streamProperties;
+	private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
 
 	@Override
 	@Transactional
@@ -120,97 +108,34 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 * 되돌릴 방법이 없다. 그 상태로 지우면 지난 회차 신청이 뒤늦게 확정되면서 이번 회차 재고를 깎는데,
 	 * {@code coupon_issue} 를 모두 지운 뒤라 유니크 제약도 이를 막지 못한다.
 	 *
-	 * <p>막는 것과 알리기만 하는 것을 나눈다. 남는 방식에 따라 결과가 정반대이기 때문이다.
+	 * <p>실제 잔여 판단 기준(어떤 상태를 왜 막는지 — Stream 미배달/Outbox PENDING·FAILED·SENT/
+	 * Stream pending 전부)은 {@link CouponIssuePipelineDrainChecker} 참고. 여기서는 그 결과
+	 * (검사 실패 포함)를 받아 무조건 거절만 한다 — 강행이 필요하면 {@code force} 로 넘긴다.
 	 *
-	 * <table border="1">
-	 *   <caption>잔여 메시지의 두 종류</caption>
-	 *   <tr><th>상태</th><th>다음 회차에</th><th>결과</th><th>처리</th></tr>
-	 *   <tr><td>Stream 미배달</td><td>새 Consumer 가 읽어감</td><td>유령 발급</td><td><b>거절</b></td></tr>
-	 *   <tr><td>Outbox 미발행</td><td>poller 가 Kafka 로 보냄</td><td>유령 발급</td><td><b>거절</b></td></tr>
-	 *   <tr><td>Stream pending</td><td>아무도 안 가져감</td><td>신청 유실</td><td>경고만</td></tr>
-	 * </table>
+	 * <p><b>알려진 한계 — 체크와 리셋 사이에 락이 없다.</b> 여기서 드레인 여부를 확인한 시점과
+	 * 실제 DELETE 가 실행되는 시점 사이에는 아무 락도 없다. 그 사이에 새 발급 요청이 들어오면
+	 * 지워지는 중인(또는 막 지워진) 데이터에 반영되거나, 리셋 직후의 새 회차 재고를 이전 요청이
+	 * 갉아먹을 수 있다. 완전히 막으려면 발급 API({@code CouponController.issue()} 또는 그 안의
+	 * Lua) 자체가 "정비 중" 락을 확인하도록 발급 hot path 를 건드려야 하는데, 이 초기화 API 하나의
+	 * 스코프를 넘는 변경이라 여기서는 하지 않는다.
 	 *
-	 * <p>pending 으로 막지 않는 이유가 있다. Consumer 이름이 기동할 때마다 새로 생겨서
-	 * 죽은 Consumer 가 잡고 있던 pending 은 아무도 회수하지 않는다. 그런 잔여물은 계속 쌓이기만 하고
-	 * 재처리되지 않으므로 유령 발급을 만들지 않는데, 이걸로 막으면 초기화가 영구히 거절된다.
-	 *
-	 * <p>Kafka 로 이미 나간 메시지는 여기서 볼 수 없다. 다만 Outbox 가 비었으면 새로 나갈 것이 없고,
-	 * 이미 나간 것은 Consumer 가 곧 소비한다. 완전한 보증은 아니라서
-	 * {@code load-test/README.md} 의 Kafka LAG 확인 절차를 함께 지켜야 한다.
-	 *
-	 * <p>Stream 은 쿠폰별로 나뉘어 있지 않아 검사도 전역이다. 다른 쿠폰의 잔여물이라도
-	 * 환경이 깨끗하지 않다는 신호이므로 그대로 막는다.
-	 *
-	 * <p><b>검사 자체가 실패해도 막는다.</b> Redis 에 닿지 못했다는 건 "남은 게 없다"가 아니라
-	 * "남았는지 모른다"는 뜻이다. 모르는 채로 지우면 확인 절차를 둔 의미가 없으므로,
-	 * 확인할 수 없을 때는 초기화하지 않는다. 강행이 필요하면 {@code force} 로 넘긴다.
+	 * <p>고치지 않는 이유 — 이 API 는 부하테스트 전용({@code /internal/...}) 이고 통제된 세션에서
+	 * 전용 테스트 쿠폰({@code SEED-*})에만 쓴다. 실제 발급 트래픽과 같은 쿠폰에 동시에 겹칠 상황이
+	 * 실무에서 거의 없고, 겹치더라도 영향 범위가 그 테스트 회차 데이터로 한정돼 프로덕션 데이터엔
+	 * 닿지 않는다.
 	 */
 	private void validatePipelineDrained(Long couponId) {
-		long outboxUnpublished = countUnpublishedMessages(couponId);
-		long streamUndelivered = 0L;
+		PipelineDrainStatus status = pipelineDrainChecker.check(couponId);
 
-		try {
-			StreamOperations<String, Object, Object> streamOps = redisTemplate.opsForStream();
-			String streamKey = streamProperties.getKey();
-
-			// 스트림이 아직 안 만들어졌으면 남은 메시지도 없다.
-			if (Boolean.TRUE.equals(redisTemplate.hasKey(streamKey))) {
-				// XINFO GROUPS 는 미배달 건수를 직접 주지 않는다. 마지막으로 쌓인 ID 와
-				// 그룹이 마지막으로 배달한 ID 가 다르면 아직 아무도 안 가져간 신청이 있다는 뜻이다.
-				String lastGeneratedId = streamOps.info(streamKey).lastGeneratedId();
-
-				streamUndelivered = streamOps.groups(streamKey).stream()
-						.filter(group -> group.groupName().equals(streamProperties.getGroup()))
-						.peek(this::warnIfPendingRemains)
-						.filter(group -> !Objects.equals(group.lastDeliveredId(), lastGeneratedId))
-						.count();
-			}
-		} catch (DataAccessException e) {
-			// 검사에 실패했다는 건 "남은 게 없다"가 아니라 "남았는지 모른다"는 뜻이다.
-			// 모르는 채로 지우면 지난 회차 신청이 뒤늦게 확정되며 이번 회차 재고를 깎는다.
-			// 확인할 수 없을 때는 진행하지 않는다. 정말 강행해야 하면 force 로 넘긴다.
-			log.error("[Reset] 파이프라인 잔여 검사에 실패해 초기화를 중단한다. couponId={}", couponId, e);
-			throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
-		}
-
-		if (outboxUnpublished == 0 && streamUndelivered == 0) {
+		if (!status.isBlocked()) {
 			return;
 		}
 
 		log.warn(
-				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} Outbox미발행={}",
-				couponId, streamUndelivered, outboxUnpublished
+				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} Stream처리중={} Outbox미확정={} 검사실패={}",
+				couponId, status.streamUndelivered(), status.streamActivePending(), status.outboxUnconsumed(), status.checkFailed()
 		);
 		throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
-	}
-
-	/**
-	 * 회수되지 않는 pending 은 막지 않고 알리기만 한다. 재처리되지 않아 유령 발급을 만들지는 않지만,
-	 * 그만큼의 신청이 판정도 못 받고 사라졌다는 뜻이라 측정 결과를 읽을 때 감안해야 한다.
-	 */
-	private void warnIfPendingRemains(StreamInfo.XInfoGroup group) {
-		Long pending = group.pendingCount();
-
-		if (pending != null && pending > 0) {
-			log.warn(
-					"[Reset] 회수되지 않은 Stream pending 이 {}건 있다. 그만큼의 신청이 판정 없이 사라졌다는 뜻이다. "
-							+ "정리 방법은 load-test/README.md 참고.",
-					pending
-			);
-		}
-	}
-
-	/** Outbox 에 아직 Kafka 로 안 나간 건. poller 가 다음 주기에 집어 간다. */
-	private long countUnpublishedMessages(Long couponId) {
-		return entityManager.createQuery("""
-						SELECT COUNT(m) FROM IssueMessage m
-						 WHERE m.coupon.couponId = :couponId
-						   AND m.status IN (
-						       com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.PENDING,
-						       com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.FAILED)
-						""", Long.class)
-				.setParameter("couponId", couponId)
-				.getSingleResult();
 	}
 
 	/**
@@ -225,40 +150,19 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	 * 다시 읽어서 실제로 저장된 값을 응답에 싣는다. 호출자는 이 값이 {@code totalQuantity} 와
 	 * 같은지 확인해 초기화 성공 여부를 판정할 수 있다.
 	 *
-	 * <p>읽기에 실패하거나 값이 숫자가 아니면 {@code null} 을 반환한다. 응답 필드가
-	 * {@code Integer} 인 이유이며, {@code null} 은 <b>초기화가 끝나지 않았다</b>는 뜻이다.
+	 * <p>키가 없으면 {@code null} 을 반환한다. 응답 필드가 {@code Integer} 인 이유이며,
+	 * {@code null} 은 <b>초기화가 끝나지 않았다</b>는 뜻이다. 값이 숫자가 아닌 경우는
+	 * 미완료가 아니라 상태 오염이므로 Lua 서비스가 예외로 올린다.
+	 *
+	 * <p>재고 키를 직접 만지지 않고 Lua 서비스에 맡긴다. 키 포맷의 원본이 거기에 있어서,
+	 * 여기서 문자열을 다시 조립하면 규칙이 바뀔 때 두 곳을 고쳐야 한다.
 	 *
 	 * <p>Redis 는 DB 트랜잭션에 참여하지 않는다. 여기서 실패하면 DB 는 롤백되지만
 	 * Redis 는 이미 지워진 상태로 남을 수 있으므로, 그 경우 초기화 API 를 다시 호출하면 된다.
 	 * 부하 테스트 전용 API 라 재실행으로 복구되는 것으로 충분하다고 보고 별도 보상은 두지 않았다.
 	 */
 	private Integer resetIssueState(Long couponId, int totalQuantity) {
-		couponIssueLuaService.clearIssueState(couponId);
-
-		String stockKey = String.format(STOCK_KEY_FORMAT, couponId);
-		redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
-
-		return readRedisStock(stockKey);
-	}
-
-	/**
-	 * 재고 키를 읽어 숫자로 바꾼다. 키가 없거나 숫자가 아니면 {@code null}.
-	 *
-	 * <p>검증용 값이라 여기서 예외를 던지지 않는다. 초기화 자체는 이미 끝났고,
-	 * 읽기에 실패했다는 사실은 {@code null} 로 호출자에게 그대로 전달하는 편이 낫다.
-	 */
-	private Integer readRedisStock(String stockKey) {
-		String raw = redisTemplate.opsForValue().get(stockKey);
-
-		if (raw == null) {
-			return null;
-		}
-
-		try {
-			return Integer.valueOf(raw);
-		} catch (NumberFormatException e) {
-			return null;
-		}
+		return couponIssueLuaService.resetIssueState(couponId, totalQuantity);
 	}
 
 	private long deleteHistories(Long couponId) {

@@ -8,17 +8,23 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueDlqConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
+import com.mycom.petcoupon.coupon.issue.dto.enums.CouponIssueStockRestoreStatus;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueEventProducer;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReprocessService {
@@ -26,6 +32,7 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 	private final IssueMessageRepository issueMessageRepository;
 	private final CouponIssueDlqConverter couponIssueDlqConverter;
 	private final CouponIssueEventProducer couponIssueEventProducer;
+	private final CouponIssueLuaService couponIssueLuaService;
 
 	// Outbox 발행 대상 조회(coupon.issue.outbox.batch-size)와 동일한 방식으로 목록 크기를 제한
 	@Value("${coupon.issue.dlq.list-size:100}")
@@ -61,5 +68,53 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 		couponIssueEventProducer.publish(issueMessage);
 
 		return couponIssueDlqConverter.toReprocessResponse(issueMessage);
+	}
+
+	@Override
+	public CouponIssueDlqAbandonResponse abandon(Long messageId) {
+		IssueMessage issueMessage = issueMessageRepository.findById(messageId)
+				.orElseThrow(() -> new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
+
+		// reprocess()와 동일하게 retryCount를 낙관적 락으로 써서, 재처리 요청과 동시에 들어와도
+		// 둘 중 하나만 선점하게 한다 — 재고 복구와 재발행이 같은 메시지에 동시에 일어나는 걸 막는다.
+		int claimedRows = issueMessageRepository.claimForAbandon(
+				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount(), IssueMessageStatus.ABANDONED
+		);
+
+		if (claimedRows == 0) {
+			throw new GeneralException(CouponErrorCode.NOT_DLQ_STATUS);
+		}
+
+		// 순서를 반대로(재고 복구 → 선점) 하면 안 된다 — reprocess()가 먼저 재처리를 선점해 실제로
+		// 발급에 성공하는 것과 동시에 여기서 재고까지 복구해버리면, 정상 발급된 건의 재고를 잘못
+		// 되돌리는 더 심각한 버그가 된다. 지금 순서라면 선점에 실패한 쪽은 재고 복구 자체를 안 한다.
+		// 대신 여기서 restoreStock()이 실패하면(Redis 장애 등) status는 이미 ABANDONED로 커밋된 뒤라
+		// DLQ 목록에서 사라져 재시도 UI가 없다 — 예외가 그대로 호출자에게 전파(503)되니 조용히 묻히진
+		// 않지만, 그 이후엔 수동으로 Redis 상태를 확인해야 한다.
+		CouponIssueStockRestoreResult restoreResult = couponIssueLuaService.restoreStock(
+				issueMessage.getCoupon().getCouponId(),
+				issueMessage.getUserId(),
+				issueMessage.getMessageKey(),
+				issueMessage.getSequenceNo()
+		);
+
+		validateRestoreResult(messageId, issueMessage.getMessageKey(), restoreResult);
+
+		return couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult);
+	}
+
+	// status는 이미 ABANDONED로 커밋된 뒤라 여기서 DB를 되돌릴 방법은 없다 — 대신 REQUEST_MISMATCH/
+	// STOCK_NOT_INITIALIZED/INCONSISTENT_STATE처럼 정상 복구가 아닌 경우 응답을 성공(200)으로 주지
+	// 않고 예외(503)로 명확히 알린다. ALREADY_RESTORED는 같은 요청이 이미 한 번 복구된 정상적인
+	// 케이스라 실패로 보지 않는다.
+	private void validateRestoreResult(Long messageId, String requestId, CouponIssueStockRestoreResult restoreResult) {
+		if (restoreResult.status() != CouponIssueStockRestoreStatus.RESTORED
+				&& restoreResult.status() != CouponIssueStockRestoreStatus.ALREADY_RESTORED) {
+			log.warn(
+					"[DLQ Abandon] 재고 복구가 정상 완료되지 않았습니다. messageId={}, requestId={}, restoreStatus={}, remainingStock={}",
+					messageId, requestId, restoreResult.status(), restoreResult.remainingStock()
+			);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
 	}
 }

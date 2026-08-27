@@ -69,8 +69,9 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 		}
 	}
 
+	// 메인 토픽(CouponIssueEventProducer)과 동일하게 couponId로 키잉해 파티션 키 규칙을 통일한다.
 	private void publishToDlqTopic(CouponIssueEvent event) {
-		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, event.requestId(), event);
+		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, String.valueOf(event.couponId()), event);
 	}
 
 	private void markDlq(CouponIssueEvent event, Exception exception) {
@@ -99,10 +100,14 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 		});
 	}
 
-	// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
+	// 여기서는 재고를 복구하지 않는다 — DLQ로 전이돼도 관리자가 CouponIssueDlqAdminController의
+	// reprocess API로 이 메시지를 다시 살릴 수 있어, 여기서 즉시 복구하면 나중에 재처리가 성공했을 때
+	// 초과발급으로 이어질 수 있다(재고는 복구됐는데 원래 요청도 뒤늦게 성공). 재고 복구는 관리자가
+	// abandon API로 재처리를 포기한다고 명시적으로 결정했을 때만 실행된다.
 	private void restoreStock(CouponIssueEvent event) {
 		log.warn(
-			"[CouponIssueEvent] 최종 실패로 재고 보상이 필요하지만 아직 구현되지 않음. couponId={}, userId={}, requestId={}",
+			"[CouponIssueEvent] 최종 실패로 DLQ 확정, 재고는 아직 보상하지 않음(관리자 abandon 결정 대기). "
+				+ "couponId={}, userId={}, requestId={}",
 			event.couponId(), event.userId(), event.requestId()
 		);
 	}
