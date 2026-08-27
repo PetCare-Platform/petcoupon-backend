@@ -210,4 +210,27 @@ class CouponIssueEventProducerTest {
 		
 		verify(issueMessageRepository).markSent(eq(1L), eq(IssueMessageStatus.SENT), any(LocalDateTime.class));
 	}
+
+	@Test
+	void 중첩_예외가_발생하면_원인_체인의_상세_메시지를_포함하여_에러를_기록한다() {
+		when(issueMessage.getMessageId()).thenReturn(1L);
+		when(issueMessage.getPayload()).thenReturn("{}");
+		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
+
+		CompletableFuture<SendResult<String, Object>> failed = new CompletableFuture<>();
+		Exception rootCause = new IllegalStateException("Timeout waiting for broker response");
+		Exception wrapperException = new RuntimeException("Send failed", rootCause);
+		failed.completeExceptionally(wrapperException);
+
+		when(kafkaTemplate.send(eq(KafkaTopics.COUPON_ISSUE_EVENT), eq(String.valueOf(EVENT.couponId())), eq(EVENT)))
+			.thenReturn(failed);
+
+		catchThrowable(() -> producer.publish(issueMessage).join());
+
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L),
+			eq(IssueMessageStatus.FAILED),
+			eq("RuntimeException: Send failed (Caused by: IllegalStateException: Timeout waiting for broker response)")
+		);
+	}
 }
