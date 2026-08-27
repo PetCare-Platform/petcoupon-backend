@@ -172,4 +172,55 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("restoredAt") LocalDateTime restoredAt,
 			@Param("expectedStatus") IssueMessageStatus expectedStatus
 	);
+
+	// 발급 처리량 조회(#156)용 — 시간대(1시간 단위)별로 발급 성공(CONSUMED)/최종 실패(DLQ·
+	// ABANDONED) 건수를 집계한다. DATE_FORMAT으로 시간 버킷을 만드는 건 JPQL로 표현이 안 돼서
+	// 네이티브 쿼리를 쓴다. [from, to) 범위만 대상으로 해서 대시보드가 "최근 N시간" 같은
+	// 범위로 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	//
+	// [PR 리뷰 반영] since를 그냥 now().minus(24h)로만 잡으면 정각에 안 맞아서, 시:분에 따라
+	// 맨 앞 버킷이 예를 들어 30분치만 담긴 채로 나머지 정각 버킷들과 나란히 그려진다 —
+	// 그래프에서 그 시간대만 유독 낮아 보이는 왜곡이 생긴다. 그래서 서비스(IssueStatisticsService)가
+	// 정각으로 자른 from/to를 넘겨서, 맨 앞 버킷도 항상 정각~정각 1시간 단위가 되게 한다
+	// (가장 최근 버킷만 "진행 중이라 아직 안 찬" 상태인 게 자연스럽고, 그건 이 방식으로도 그대로 남는다).
+	//
+	// [지표 정의 — PR 리뷰 반영] created_at(메시지 생성 시각) 기준으로 버킷을 나누고, 그
+	// 버킷 안의 메시지들이 "조회 시점 현재" 어떤 상태인지를 센다. 즉 "그 시간대에 들어온
+	// 요청들의 최신 결과"(요청 유입량 기준)이지, "그 시간대에 실제로 처리 완료된 건수"(완료
+	// 시각 기준)가 아니다 — processedAt은 Kafka 발행(SENT) 성공 시각일 뿐 완료 시각이 아니라
+	// 대체할 수 없다. 그래서 이 값은 확정된 이력이 아니라 스냅샷이다 — 예를 들어 10시에 생성된
+	// 메시지가 FAILED였다가 11시 재시도로 CONSUMED되면, 10시 버킷을 다시 조회했을 때
+	// failedCount는 줄고 issuedCount가 는다. "언제 처리가 끝났는지"가 아니라 "언제 들어온
+	// 요청인지"를 축으로 삼기로 한 의도적 설계다(완료 시각 기준으로 바꾸려면 별도 컬럼이
+	// 필요 — #156 PR 리뷰 코멘트 참고).
+	//
+	// FAILED는 실패에서 뺐다 — Outbox Poller(findByStatusInAndRetryCountLessThan)가 PENDING과
+	// 함께 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가 아니다. 최종 실패는
+	// DLQ(관리자 확인 대기)·ABANDONED(포기 확정)뿐이다.
+	//
+	// [PR 리뷰 반영] issuedCount/failedCount만 있으면 PENDING/SENT/FAILED(전부 "아직 확정 안
+	// 됨" 상태)가 어느 쪽에도 안 잡혀서, 방금 들어온 요청이 많은 버킷(최근 시간대)일수록
+	// 실제보다 적어 보인다 — 누적 막대 그래프를 그리면 어긋난다. inProgressCount로 이 셋을
+	// 같이 묶어서, issuedCount+failedCount+inProgressCount = 그 버킷의 총 접수량이 항상
+	// 맞게 만든다. FAILED도 여기 포함한 이유는 위에서 이미 "확정 아님"으로 분류했기 때문 —
+	// failedCount에서 뺀 것과 짝을 맞춘다.
+	@Query(value = """
+			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
+			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			  FROM issue_message
+			 WHERE created_at >= :from
+			   AND created_at < :to
+			 GROUP BY bucket
+			 ORDER BY bucket ASC
+			""", nativeQuery = true)
+	List<IssueThroughputBucket> findThroughputByHour(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+	// 상태 분포 조회(#156)용 — 시간 범위로 좁히지 않고 전체를 대상으로 한다. PENDING/DLQ 같은
+	// 상태는 "지금 이 시점에 몇 건이 그 상태로 남아있는지"(현재 잔량)가 의미 있는 지표라,
+	// findThroughputByHour처럼 최근 N시간으로 좁히면 오래전에 DLQ로 빠진 뒤 그대로 방치된
+	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
+	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
+	List<IssueStatusCount> countGroupedByStatus();
 }

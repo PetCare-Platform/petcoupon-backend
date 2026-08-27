@@ -3,7 +3,10 @@ package com.mycom.petcoupon.messaging.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,9 +26,11 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * Outbox Poller(findByStatusInAndRetryCountLessThan)가 DLQ 상태 메시지를 실제로
- * 조회 대상에서 제외하는지 검증. DLQ 수동 재처리가 실패해도 poison message가
- * 다시 자동 재시도 대상에 걸리면 안 된다는 리뷰 코멘트를 근거로 추가.
+ * IssueMessageRepository의 커스텀 쿼리 검증. 처음엔 Outbox Poller(findByStatusInAndRetryCountLessThan)가
+ * DLQ 상태 메시지를 재시도 대상에서 실제로 제외하는지 확인하려고 만들었고(DLQ 수동 재처리가
+ * 실패해도 poison message가 다시 자동 재시도에 걸리면 안 된다는 리뷰 코멘트 근거),
+ * 이후 발급 처리량/상태 분포 조회(#156, findThroughputByHour/countGroupedByStatus)
+ * 검증도 여기 추가됐다.
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
@@ -97,5 +102,236 @@ class IssueMessageRepositoryTest {
 				.extracting(IssueMessage::getMessageKey)
 				.contains("pending-request")
 				.doesNotContain("dlq-request");
+	}
+
+	// countGroupedByStatus()는 특정 쿠폰/시간대로 좁히지 않는 전체 집계라, 공유 DB에
+	// 다른 테스트가 남긴 행이 섞여 있을 수 있다 — 절대값이 아니라 "이 테스트가 새로 넣은 만큼
+	// 늘었는지"(before/after 델타)로 검증해야 다른 테스트 데이터에 흔들리지 않는다.
+	// JPQL 프로젝션이 IssueMessageStatus enum을 실제로 올바르게 매핑하는지도 이 테스트가
+	// 확인한다(그냥 SQL로는 확인 안 되는, Spring Data 프로젝션 매핑 자체의 문제일 수 있어서).
+	@Test
+	void countGroupedByStatus는_상태별_건수를_정확히_집계한다() {
+		Map<IssueMessageStatus, Long> before = issueMessageRepository.countGroupedByStatus().stream()
+				.collect(Collectors.toMap(IssueStatusCount::getStatus, IssueStatusCount::getCount));
+
+		IssueMessage pending1 = IssueMessage.pending(coupon, 10L, 10L, "status-count-pending-1", "{}");
+		entityManager.persist(pending1);
+		IssueMessage pending2 = IssueMessage.pending(coupon, 11L, 11L, "status-count-pending-2", "{}");
+		entityManager.persist(pending2);
+
+		IssueMessage consumed = IssueMessage.pending(coupon, 12L, 12L, "status-count-consumed", "{}");
+		entityManager.persist(consumed);
+		entityManager.flush();
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		IssueMessage dlq = IssueMessage.pending(coupon, 13L, 13L, "status-count-dlq", "{}");
+		entityManager.persist(dlq);
+		entityManager.flush();
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
+
+		entityManager.flush();
+		entityManager.clear();
+
+		Map<IssueMessageStatus, Long> after = issueMessageRepository.countGroupedByStatus().stream()
+				.collect(Collectors.toMap(IssueStatusCount::getStatus, IssueStatusCount::getCount));
+
+		assertThat(after.getOrDefault(IssueMessageStatus.PENDING, 0L)
+				- before.getOrDefault(IssueMessageStatus.PENDING, 0L)).isEqualTo(2L);
+		assertThat(after.getOrDefault(IssueMessageStatus.CONSUMED, 0L)
+				- before.getOrDefault(IssueMessageStatus.CONSUMED, 0L)).isEqualTo(1L);
+		assertThat(after.getOrDefault(IssueMessageStatus.DLQ, 0L)
+				- before.getOrDefault(IssueMessageStatus.DLQ, 0L)).isEqualTo(1L);
+	}
+
+	// findThroughputByHour()는 raw SQL로 로직만 확인했었지, 실제 Spring Data 프로젝션
+	// (IssueThroughputBucket)을 거쳐 값이 제대로 들어오는지는 검증한 적이 없었다 — 특히
+	// SUM(CASE...)는 MySQL에서 DECIMAL로 나올 수 있어 Long 매핑이 깨질 위험이 있다(리뷰 반영).
+	// created_at은 @CreatedDate가 persist 시점 값을 넣으므로, 원하는 시간대에 테스트 데이터를
+	// 두려면 네이티브 UPDATE로 덮어써야 한다. 같은 시간 버킷에 다른 테스트/실행이 남긴 데이터가
+	// 섞일 수 있어 절대값이 아니라 delta로 검증한다.
+	@Test
+	void findThroughputByHour는_SUM_CASE_결과를_Long으로_정확히_매핑한다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(30).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		IssueMessage consumed1 = IssueMessage.pending(coupon, 20L, 20L, "throughput-consumed-1", "{}");
+		entityManager.persist(consumed1);
+		IssueMessage consumed2 = IssueMessage.pending(coupon, 21L, 21L, "throughput-consumed-2", "{}");
+		entityManager.persist(consumed2);
+		// failedCount는 최종 실패(DLQ/ABANDONED)만 세고 재시도 대기중인 FAILED는 안 세므로,
+		// DLQ로 넣어야 이 케이스가 failedCount에 잡힌다(PR 리뷰 반영).
+		IssueMessage dlq = IssueMessage.pending(coupon, 22L, 22L, "throughput-dlq-1", "{}");
+		entityManager.persist(dlq);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(consumed1.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.updateStatus(consumed2.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
+
+		for (IssueMessage message : List.of(consumed1, consumed2, dlq)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+					.setParameter("bucketTime", bucketTime)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		assertThat(issuedAfter - issuedBefore).isEqualTo(2L);
+		assertThat(failedAfter - failedBefore).isEqualTo(1L);
+	}
+
+	// FAILED는 Outbox Poller가 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가
+	// 아니다 — failedCount에 잡히면 안 된다(PR #156 리뷰 반영). issuedCount에도 당연히 안
+	// 잡히고, 대신 "아직 확정 안 됨" 묶음인 inProgressCount에 잡혀야 한다.
+	@Test
+	void findThroughputByHour는_재시도_대기중인_FAILED를_실패_대신_진행중으로_센다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(45).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage failed = IssueMessage.pending(coupon, 30L, 30L, "throughput-retrying-failed-1", "{}");
+		entityManager.persist(failed);
+		entityManager.flush();
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test retrying failed");
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+				.setParameter("bucketTime", bucketTime)
+				.setParameter("id", failed.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		assertThat(issuedAfter - issuedBefore).isZero();
+		assertThat(failedAfter - failedBefore).isZero();
+		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
+	}
+
+	// PR 리뷰 반영 — issuedCount+failedCount+inProgressCount가 그 버킷의 총 접수량과 항상
+	// 일치해야 프론트가 누적 막대 그래프를 그려도 어긋나지 않는다. 6개 상태(PENDING/SENT/
+	// CONSUMED/FAILED/DLQ/ABANDONED)를 하나씩 넣어 세 카운트의 합이 6건과 같은지 확인한다.
+	@Test
+	void findThroughputByHour는_세_카운트의_합이_총_접수량과_같다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(15).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long totalBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage pending = IssueMessage.pending(coupon, 40L, 40L, "total-pending", "{}");
+		entityManager.persist(pending);
+		IssueMessage sent = IssueMessage.pending(coupon, 41L, 41L, "total-sent", "{}");
+		entityManager.persist(sent);
+		IssueMessage consumed = IssueMessage.pending(coupon, 42L, 42L, "total-consumed", "{}");
+		entityManager.persist(consumed);
+		IssueMessage failed = IssueMessage.pending(coupon, 43L, 43L, "total-failed", "{}");
+		entityManager.persist(failed);
+		IssueMessage dlq = IssueMessage.pending(coupon, 44L, 44L, "total-dlq", "{}");
+		entityManager.persist(dlq);
+		IssueMessage abandoned = IssueMessage.pending(coupon, 45L, 45L, "total-abandoned", "{}");
+		entityManager.persist(abandoned);
+		entityManager.flush();
+
+		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test");
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(abandoned.getMessageId(), IssueMessageStatus.ABANDONED, "test");
+
+		for (IssueMessage message : List.of(pending, sent, consumed, failed, dlq, abandoned)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+					.setParameter("bucketTime", bucketTime)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long totalAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount)
+				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		assertThat(totalAfter - totalBefore).isEqualTo(6L);
+	}
+
+	// PR 리뷰 반영 — from만 있고 to가 없던 구조가 맨 앞 버킷이 부분치만 담기는 문제의
+	// 근본 원인이었다. to가 실제로 배타적 상한(created_at < to)으로 동작하는지 —
+	// to 정각 그 자체는 다음 구간으로 빠지고, to 1초 전은 이번 구간에 포함되는지 —
+	// 두 메시지를 각각 그 경계에 놓고 inProgressCount 델타로 확인한다.
+	@Test
+	void findThroughputByHour는_to_경계를_배타적으로_적용한다() {
+		LocalDateTime to = LocalDateTime.now().withMinute(0).withSecond(0).withNano(0).plusHours(1);
+		LocalDateTime from = to.minusHours(1);
+		String bucketKey = from.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+
+		long inProgressBefore = findBucketCountInRange(from, to, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage justBeforeTo = IssueMessage.pending(coupon, 50L, 50L, "boundary-included", "{}");
+		entityManager.persist(justBeforeTo);
+		IssueMessage exactlyAtTo = IssueMessage.pending(coupon, 51L, 51L, "boundary-excluded", "{}");
+		entityManager.persist(exactlyAtTo);
+		entityManager.flush();
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", to.minusSeconds(1))
+				.setParameter("id", justBeforeTo.getMessageId())
+				.executeUpdate();
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", to)
+				.setParameter("id", exactlyAtTo.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long inProgressAfter = findBucketCountInRange(from, to, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		// to 1초 전 것만 잡혀야 한다(+1) — to 그 자체인 것까지 잡히면(+2) 배타적 상한이
+		// 깨진 것이다.
+		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
+	}
+
+	private long findBucketCountInRange(
+			LocalDateTime from, LocalDateTime to, String bucketKey,
+			java.util.function.ToLongFunction<IssueThroughputBucket> extractor
+	) {
+		return issueMessageRepository.findThroughputByHour(from, to).stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.mapToLong(extractor::applyAsLong)
+				.findFirst()
+				.orElse(0L);
+	}
+
+	// to는 넉넉한 미래로 잡아서(이 테스트들은 to 경계를 검증 대상으로 삼지 않는다) since 이후
+	// 전부가 조회되게 한다 — findThroughputByHour(from, to)의 to 경계 자체를 검증하는 건
+	// 바로 위 findThroughputByHour는_to_경계를_배타적으로_적용한다() 전용이다.
+	private long findBucketCount(
+			LocalDateTime since, String bucketKey, java.util.function.ToLongFunction<IssueThroughputBucket> extractor
+	) {
+		return issueMessageRepository.findThroughputByHour(since, LocalDateTime.now().plusDays(1)).stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.mapToLong(extractor::applyAsLong)
+				.findFirst()
+				.orElse(0L);
 	}
 }
