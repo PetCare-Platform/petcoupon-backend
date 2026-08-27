@@ -319,8 +319,8 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --batch --skip-column-
 | TC-40 | 재고 1, 동시 2명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=2 -e TOTAL_QUANTITY=1 -e RUN_ID=tc40` | SQL 1번 = 1건 |
 | TC-41 | 재고 100, 동시 200명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=200 -e TOTAL_QUANTITY=100 -e RUN_ID=tc41` | SQL 1번 = **정확히 100건**, 12번 잔여 0 |
 | TC-42 | 같은 회원 동시 5회 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=5 -e TOTAL_QUANTITY=100 -e FIXED_USER_ID=<회원ID> -e RUN_ID=tc42` | SQL 1번 = 1건, 2번 PASS |
-| TC-43 | 동일 멱등키 재전송 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=3 -e TOTAL_QUANTITY=100 -e FIXED_USER_ID=<회원ID> -e FIXED_IDEMPOTENCY_KEY=tc43-key -e RUN_ID=tc43` | 발급 1건, 재고 1 차감 |
-| TC-44 | 재고 0, 동시 50명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=50 -e TOTAL_QUANTITY=1 -e RUN_ID=tc44a` 로 소진시킨 뒤 `-e RESET=false -e RUN_ID=tc44b` 로 재실행 | 발급 증가 없음, 재고 음수 아님 |
+| TC-43 | 동일 멱등키 재전송 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=3 -e TOTAL_QUANTITY=100 -e FIXED_USER_ID=<회원ID> -e FIXED_IDEMPOTENCY_KEY=tc43-key -e RUN_ID=tc43` **+ 아래 재현 확인** | 발급 1건, 재고 1 차감, 재현 응답이 최초와 동일 |
+| TC-44 | 재고 0, 동시 50명 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=50 -e TOTAL_QUANTITY=1 -e RUN_ID=tc44a` 로 소진시킨 뒤, **2회차는 겹치지 않는 회원으로** `-e RESET=false -e INSTANCE_INDEX=1 -e INSTANCE_STRIDE=50 -e RUN_ID=tc44b` | 2회차 **전건 `COUPON409-0`**, 발급 증가 없음, 재고 음수 아님 |
 | TC-90 | 순차 100건 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=1 -e ITERATIONS_PER_VU=100 -e TOTAL_QUANTITY=100 -e RUN_ID=tc90` | 도착 순서와 `sequence_no` 완전 일치 |
 | TC-91 | 동시 200건 순서 역전율 | `k6 run issue-coupon.js -e SCENARIO=burst -e VUS=200 -e TOTAL_QUANTITY=100 -e RUN_ID=tc91` | 로그 도착 시각 ↔ `sequence_no` 대조 |
 | TC-93 | 저장 순서 역전 확인 | TC-91 직후 SQL 조회만 | `created_at` 순서 ≠ `sequence_no` 순서여도 정상. SQL 3·4번은 PASS |
@@ -334,9 +334,31 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --batch --skip-column-
 발급 API는 비동기라 **중복 신청도 일단 202로 접수됩니다.** 탈락 판정은 그 뒤 Lua가 합니다.
 
 - **TC-42**: k6에는 5건 모두 202로 찍힙니다. 실제로 1건만 발급됐는지는 SQL 1번으로 봅니다.
-- **TC-43**: 서버가 최초 응답을 그대로 재현하면 202, 아직 처리 중이면 409(`COUPON409-5`)입니다. **둘 중 뭐가 나올지는 타이밍에 달렸습니다.** 그래서 이 모드에서는 `issue_accept_rate`와 `issue_conflict` 임계값이 자동으로 해제됩니다. 판정은 발급 건수로만 합니다.
+- **TC-43**: 서버가 최초 응답을 그대로 재현하면 202, 아직 처리 중이면 409(`COUPON409-5`)입니다. **둘 중 뭐가 나올지는 타이밍에 달렸습니다.** 그래서 이 모드에서는 `issue_accept_rate`와 `issue_conflict` 임계값이 자동으로 해제됩니다. k6 회차만으로는 발급 건수까지밖에 못 봅니다.
 
 > ⚠️ **`FIXED_IDEMPOTENCY_KEY`는 `FIXED_USER_ID`와 반드시 같이 주세요.** 멱등키 유니크 제약이 `(user_id, idempotency_key)`라서, 키만 고정하고 회원이 다르면 서버가 서로 다른 요청으로 보고 **전건을 발급합니다.** 실제로 회원 없이 3건을 쐈더니 발급이 3건 나왔습니다. 지금은 둘 중 하나만 주면 `setup()`에서 중단됩니다.
+
+#### TC-43 재현 응답 확인 (k6 회차 뒤에 반드시 같이)
+
+TC-43의 기대 결과에는 **"최초 순번 반환"**이 들어 있습니다. 위 k6 회차는 동시 요청만 쏘고 끝나서 *발급이 1건인지*까지만 봅니다. **확정된 뒤 같은 키로 다시 불렀을 때 최초 응답이 그대로 재현되는지는 별도로 확인해야 합니다.**
+
+k6로 하면 안 됩니다. 재현 응답은 **200**인데 스크립트의 `issue_contract_ok` 임계값이 `202 + status=WAITING`을 요구해서 전건 실패로 찍힙니다.
+
+검증 SQL 0번 블록의 `대기`·`재시도대기`·`발행중`이 **모두 0**이 된 걸 확인한 뒤, k6와 **똑같은 회원·똑같은 키**로 한 번 더 호출합니다.
+
+```bash
+curl -s -X POST "localhost:8080/coupons/1/issues" \
+  -H "Idempotency-Key: tc43-key" -H "X-USER-ID: <k6에 준 회원ID>"
+```
+
+| 확인 | 기대 |
+|---|---|
+| HTTP 상태 | `200` (`202`가 아닙니다 — 새 접수가 아니라 저장된 응답의 재현입니다) |
+| `couponIssueId`·`sequenceNo` | 최초 발급 건과 **동일**. `SELECT coupon_issue_id, sequence_no FROM coupon_issue WHERE coupon_id = 1`과 대조 |
+| Redis 재고 | **추가 차감 없음.** `docker exec petcoupon-redis redis-cli GET "coupon:issue:stock:{1}"`이 재현 호출 전후로 같아야 합니다 |
+| `coupon_issue` 행 수 | 그대로 1건 |
+
+`status`가 `WAITING`으로 돌아오면 **파이프라인이 아직 안 끝난 겁니다.** 그 상태의 응답은 순번이 비어 있으니 0번 블록이 0이 될 때까지 기다렸다 다시 부르세요.
 
 ### 확인된 것 (로컬, 2026-08-27)
 

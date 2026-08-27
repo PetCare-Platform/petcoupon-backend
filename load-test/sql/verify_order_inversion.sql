@@ -98,9 +98,15 @@ UNION ALL
 --
 -- @expected_issued_count 를 채우면 그 수까지 맞는지 본다(꼬리 유실 검출).
 -- 비워두면 DB 에 있는 것끼리만 1..N 이 온전한지 본다.
+--
+-- 0 건을 무조건 PASS 로 두면 안 된다. expected 를 100 으로 넣어도 건수 = 0 이 앞에서
+-- 참이 되어 뒤의 대조를 건너뛰므로, Lua 는 100 번까지 순번을 냈는데 DB 에는 한 건도
+-- 없는 전체 유실이 PASS 로 나온다. 꼬리 유실을 잡으려고 만든 옵션이 정작 최악의
+-- 경우를 놓치는 셈이다. 그래서 0 건은 expected 가 없거나 0 일 때만 PASS 로 친다.
 SELECT '순번 1..N 무결성',
-       IF(건수 = 0
-          OR (최소순번 = 1
+       IF((건수 = 0 AND COALESCE(@expected_issued_count, 0) = 0)
+          OR (건수 > 0
+              AND 최소순번 = 1
               AND 고유순번 = 건수
               AND 최대순번 = 건수
               AND (@expected_issued_count IS NULL OR 건수 = @expected_issued_count)),
