@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -97,5 +99,44 @@ class IssueMessageRepositoryTest {
 				.extracting(IssueMessage::getMessageKey)
 				.contains("pending-request")
 				.doesNotContain("dlq-request");
+	}
+
+	// countGroupedByStatus()는 특정 쿠폰/시간대로 좁히지 않는 전체 집계라, 공유 DB에
+	// 다른 테스트가 남긴 행이 섞여 있을 수 있다 — 절대값이 아니라 "이 테스트가 새로 넣은 만큼
+	// 늘었는지"(before/after 델타)로 검증해야 다른 테스트 데이터에 흔들리지 않는다.
+	// JPQL 프로젝션이 IssueMessageStatus enum을 실제로 올바르게 매핑하는지도 이 테스트가
+	// 확인한다(그냥 SQL로는 확인 안 되는, Spring Data 프로젝션 매핑 자체의 문제일 수 있어서).
+	@Test
+	void countGroupedByStatus는_상태별_건수를_정확히_집계한다() {
+		Map<IssueMessageStatus, Long> before = issueMessageRepository.countGroupedByStatus().stream()
+				.collect(Collectors.toMap(IssueStatusCount::getStatus, IssueStatusCount::getCount));
+
+		IssueMessage pending1 = IssueMessage.pending(coupon, 10L, 10L, "status-count-pending-1", "{}");
+		entityManager.persist(pending1);
+		IssueMessage pending2 = IssueMessage.pending(coupon, 11L, 11L, "status-count-pending-2", "{}");
+		entityManager.persist(pending2);
+
+		IssueMessage consumed = IssueMessage.pending(coupon, 12L, 12L, "status-count-consumed", "{}");
+		entityManager.persist(consumed);
+		entityManager.flush();
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		IssueMessage dlq = IssueMessage.pending(coupon, 13L, 13L, "status-count-dlq", "{}");
+		entityManager.persist(dlq);
+		entityManager.flush();
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
+
+		entityManager.flush();
+		entityManager.clear();
+
+		Map<IssueMessageStatus, Long> after = issueMessageRepository.countGroupedByStatus().stream()
+				.collect(Collectors.toMap(IssueStatusCount::getStatus, IssueStatusCount::getCount));
+
+		assertThat(after.getOrDefault(IssueMessageStatus.PENDING, 0L)
+				- before.getOrDefault(IssueMessageStatus.PENDING, 0L)).isEqualTo(2L);
+		assertThat(after.getOrDefault(IssueMessageStatus.CONSUMED, 0L)
+				- before.getOrDefault(IssueMessageStatus.CONSUMED, 0L)).isEqualTo(1L);
+		assertThat(after.getOrDefault(IssueMessageStatus.DLQ, 0L)
+				- before.getOrDefault(IssueMessageStatus.DLQ, 0L)).isEqualTo(1L);
 	}
 }
