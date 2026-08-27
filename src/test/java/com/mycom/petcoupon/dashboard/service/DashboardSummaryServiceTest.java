@@ -67,13 +67,13 @@ class DashboardSummaryServiceTest {
         assertThat(response.activeEvents()).isEqualTo(4L);
         assertThat(response.totalCoupons()).isEqualTo(20L);
         assertThat(response.activeCoupons()).isEqualTo(7L);
-        assertThat(response.totalStock()).isEqualTo(1000L);
-        assertThat(response.issuedStock()).isEqualTo(300L);
-        assertThat(response.remainingStock()).isEqualTo(700L);
+        assertThat(response.startedCouponTotalStock()).isEqualTo(1000L);
+        assertThat(response.startedCouponIssuedStock()).isEqualTo(300L);
+        assertThat(response.startedCouponRemainingStock()).isEqualTo(700L);
     }
 
     @Test
-    void getSummary는_issueRate를_issuedStock_나누기_totalStock으로_계산한다() {
+    void getSummary는_startedCouponIssueRate를_issuedStock_나누기_totalStock으로_계산한다() {
         when(eventRepository.count()).thenReturn(0L);
         when(eventRepository.countByStatus(EventStatus.OPEN)).thenReturn(0L);
         when(couponRepository.count()).thenReturn(0L);
@@ -89,13 +89,14 @@ class DashboardSummaryServiceTest {
 
         DashboardSummaryResponse response = dashboardSummaryService.getSummary();
 
-        assertThat(response.issueRate()).isEqualTo(0.25);
+        assertThat(response.startedCouponIssueRate()).isEqualTo(0.25);
     }
 
-    // [설계 의도] totalStock이 0이면(쿠폰이 하나도 없으면) 0으로 나누게 되는데, 그걸 그대로
-    // NaN으로 내보내지 않고 0.0으로 고정하는지 확인한다 — DashboardSummaryResponse 주석 참고.
+    // [설계 의도] startedCouponTotalStock이 0이면(대상 쿠폰이 하나도 없으면) 0으로 나누게
+    // 되는데, 그걸 그대로 NaN으로 내보내지 않고 0.0으로 고정하는지 확인한다 —
+    // DashboardSummaryResponse 주석 참고.
     @Test
-    void getSummary는_totalStock이_0이면_issueRate를_0으로_고정한다() {
+    void getSummary는_startedCouponTotalStock이_0이면_startedCouponIssueRate를_0으로_고정한다() {
         when(eventRepository.count()).thenReturn(0L);
         when(eventRepository.countByStatus(EventStatus.OPEN)).thenReturn(0L);
         when(couponRepository.count()).thenReturn(0L);
@@ -111,8 +112,8 @@ class DashboardSummaryServiceTest {
 
         DashboardSummaryResponse response = dashboardSummaryService.getSummary();
 
-        assertThat(response.issueRate()).isEqualTo(0.0);
-        assertThat(response.issueRate()).isNotNaN();
+        assertThat(response.startedCouponIssueRate()).isEqualTo(0.0);
+        assertThat(response.startedCouponIssueRate()).isNotNaN();
     }
 
     @Test

@@ -42,8 +42,8 @@ class DashboardSummaryControllerTest {
         DashboardSummaryResponse response = DashboardSummaryResponse.builder()
                 .totalEvents(10).activeEvents(4)
                 .totalCoupons(20).activeCoupons(7)
-                .totalStock(1000).issuedStock(300).remainingStock(700)
-                .issueRate(0.3)
+                .startedCouponTotalStock(1000).startedCouponIssuedStock(300).startedCouponRemainingStock(700)
+                .startedCouponIssueRate(0.3)
                 .couponIssueStatusDistribution(List.of(
                         CouponIssueStatusDistributionResponse.builder()
                                 .status(IssueStatus.ISSUED).count(300).build()
@@ -59,10 +59,10 @@ class DashboardSummaryControllerTest {
                 .andExpect(jsonPath("$.result.activeEvents").value(4))
                 .andExpect(jsonPath("$.result.totalCoupons").value(20))
                 .andExpect(jsonPath("$.result.activeCoupons").value(7))
-                .andExpect(jsonPath("$.result.totalStock").value(1000))
-                .andExpect(jsonPath("$.result.issuedStock").value(300))
-                .andExpect(jsonPath("$.result.remainingStock").value(700))
-                .andExpect(jsonPath("$.result.issueRate").value(0.3))
+                .andExpect(jsonPath("$.result.startedCouponTotalStock").value(1000))
+                .andExpect(jsonPath("$.result.startedCouponIssuedStock").value(300))
+                .andExpect(jsonPath("$.result.startedCouponRemainingStock").value(700))
+                .andExpect(jsonPath("$.result.startedCouponIssueRate").value(0.3))
                 .andExpect(jsonPath("$.result.couponIssueStatusDistribution[0].status").value("ISSUED"))
                 .andExpect(jsonPath("$.result.couponIssueStatusDistribution[0].count").value(300));
     }

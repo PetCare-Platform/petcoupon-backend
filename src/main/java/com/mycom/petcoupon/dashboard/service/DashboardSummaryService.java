@@ -39,25 +39,29 @@ public class DashboardSummaryService {
         long activeCoupons = couponRepository.countByStatus(CouponStatus.ACTIVE);
 
         // sumStock()은 READY(발급 시작 전) 쿠폰을 뺀 ACTIVE·SOLD_OUT·ENDED만 합산한다
-        // (CouponStockRepository.sumStock() 참고).
+        // (CouponStockRepository.sumStock() 참고) — 그래서 아래 변수/필드명에 startedCoupon
+        // 접두어를 붙인다.
         CouponStockSummary stockSummary = couponStockRepository.sumStock();
-        long totalStock = stockSummary.getTotalQuantity();
-        long issuedStock = stockSummary.getIssuedQuantity();
-        long remainingStock = stockSummary.getRemainingQuantity();
-        // totalStock이 0이면(대상 쿠폰이 아직 하나도 없으면, 즉 전부 READY거나 쿠폰 자체가
-        // 없으면) 0으로 나누게 되므로 0.0으로 고정한다 — NaN을 그대로 내려보내면 JSON
-        // 직렬화/프론트 그래프 쪽에서 문제가 된다(DashboardSummaryResponse의 issueRate 주석 참고).
-        double issueRate = totalStock == 0 ? 0.0 : (double) issuedStock / totalStock;
+        long startedCouponTotalStock = stockSummary.getTotalQuantity();
+        long startedCouponIssuedStock = stockSummary.getIssuedQuantity();
+        long startedCouponRemainingStock = stockSummary.getRemainingQuantity();
+        // startedCouponTotalStock이 0이면(대상 쿠폰이 아직 하나도 없으면, 즉 전부 READY거나
+        // 쿠폰 자체가 없으면) 0으로 나누게 되므로 0.0으로 고정한다 — NaN을 그대로 내려보내면
+        // JSON 직렬화/프론트 그래프 쪽에서 문제가 된다
+        // (DashboardSummaryResponse의 startedCouponIssueRate 주석 참고).
+        double startedCouponIssueRate = startedCouponTotalStock == 0
+                ? 0.0
+                : (double) startedCouponIssuedStock / startedCouponTotalStock;
 
         return DashboardSummaryResponse.builder()
                 .totalEvents(totalEvents)
                 .activeEvents(activeEvents)
                 .totalCoupons(totalCoupons)
                 .activeCoupons(activeCoupons)
-                .totalStock(totalStock)
-                .issuedStock(issuedStock)
-                .remainingStock(remainingStock)
-                .issueRate(issueRate)
+                .startedCouponTotalStock(startedCouponTotalStock)
+                .startedCouponIssuedStock(startedCouponIssuedStock)
+                .startedCouponRemainingStock(startedCouponRemainingStock)
+                .startedCouponIssueRate(startedCouponIssueRate)
                 .couponIssueStatusDistribution(couponIssueRepository.countGroupedByStatus().stream()
                         .map(dashboardSummaryConverter::toDistributionResponse)
                         .toList())
