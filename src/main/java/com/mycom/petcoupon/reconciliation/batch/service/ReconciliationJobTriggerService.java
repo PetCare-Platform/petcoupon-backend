@@ -27,6 +27,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.reconciliation.converter.ReconciliationConverter;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
@@ -55,6 +56,7 @@ public class ReconciliationJobTriggerService {
     private final ReconciliationReportRepository reconciliationReportRepository;
     private final VerificationDetailRepository verificationDetailRepository;
     private final ReconciliationBatchExecutionLogger batchExecutionLogger;
+    private final CouponRepository couponRepository;
 
     // 메인 DataSource가 아니라 락 전용 소형 풀이다 — 이유는
     // ReconciliationLockDataSourceConfig 클래스 주석 참고.
@@ -165,6 +167,22 @@ public class ReconciliationJobTriggerService {
 
     private String lockName(Long couponId) {
         return "reconciliation:coupon:" + couponId;
+    }
+
+    // 이력 목록(#154) — reconcile()과 달리 배치를 새로 돌리지 않고, 이미 쌓인 리포트를 최신순으로
+    // 조회만 한다. 트리거 응답은 그 순간에만 볼 수 있어서, 나중에 그래프/대시보드로 추이를 보려면
+    // 이 조회 경로가 필요하다. DTO 변환은 컨트롤러+컨버터가 맡는다(reconcile() 흐름과 동일한 책임 분리).
+    //
+    // couponId 존재 확인을 reconcile()과 동일하게 COUPON_NOT_FOUND로 통일한다(PR #155 리뷰
+    // 반영) — 원래는 존재하지 않는 쿠폰이어도 그냥 빈 배열을 반환했는데, 그러면 "이력이 아직
+    // 없다"와 "쿠폰 자체가 없다"를 호출하는 쪽이 구분할 수 없었다.
+    public List<ReconciliationReport> listHistory(Long couponId, int limit) {
+        if (!couponRepository.existsById(couponId)) {
+            throw new GeneralException(CouponErrorCode.COUPON_NOT_FOUND);
+        }
+
+        return reconciliationReportRepository.findByCoupon_CouponIdOrderByAsOfAtDesc(
+                couponId, PageRequest.of(0, limit));
     }
 
     // asOfAt을 무조건 LocalDateTime.now()로 새로 만들면 이 couponId로 두 번 다시 같은
