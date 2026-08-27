@@ -222,43 +222,9 @@ class IdempotencyKeyServiceImplTest {
         assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
     }
 
-    @Test
-    void succeed_정상_호출시_상태와_응답을_SUCCEEDED로_완료한다() {
-        IdempotencyKey record = existing(IdempotencyStatus.IN_PROGRESS, LocalDateTime.now().plusSeconds(30), null, null);
-        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
-
-        idempotencyKeyService.succeed(10L, 200, "{\"isSuccess\":true}");
-
-        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED);
-        assertThat(record.getResponseStatus()).isEqualTo(200);
-        assertThat(record.getResponseBody()).isEqualTo("{\"isSuccess\":true}");
-    }
-
-    @Test
-    void succeed_이미_200_OK로_완료된_레코드에_뒤늦은_202_접수응답이_오면_덮어쓰지_않는다() {
-        IdempotencyKey record = existing(IdempotencyStatus.SUCCEEDED, LocalDateTime.now().plusSeconds(30), 200, "{\"code\":\"200\"}");
-        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
-
-        idempotencyKeyService.succeed(10L, 202, "{\"code\":\"202\",\"status\":\"WAITING\"}");
-
-        // 200 응답이 유지되어야 함
-        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED);
-        assertThat(record.getResponseStatus()).isEqualTo(200);
-        assertThat(record.getResponseBody()).isEqualTo("{\"code\":\"200\"}");
-    }
-
-    @Test
-    void succeed_이미_FAILED로_완료된_레코드에_뒤늦은_202_접수응답이_오면_덮어쓰지_않는다() {
-        IdempotencyKey record = existing(IdempotencyStatus.FAILED, LocalDateTime.now().plusSeconds(30), 409, "{\"code\":\"409\"}");
-        when(idempotencyKeyRepository.findById(10L)).thenReturn(Optional.of(record));
-
-        idempotencyKeyService.succeed(10L, 202, "{\"code\":\"202\",\"status\":\"WAITING\"}");
-
-        // FAILED 상태와 409 응답이 유지되어야 함
-        assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.FAILED);
-        assertThat(record.getResponseStatus()).isEqualTo(409);
-        assertThat(record.getResponseBody()).isEqualTo("{\"code\":\"409\"}");
-    }
+    // succeed()는 이제 findById+엔티티 조작이 아니라 조건부 UPDATE(completeIfAllowed) 한 번으로
+    // 끝난다 — Mockito로는 그 WHERE 조건이 실제로 지켜지는지 증명할 수 없어서, succeed()에 대한
+    // 시나리오는 IdempotencyKeyServiceImplSucceedIntegrationTest(실 DB)로 옮겼다.
 
     // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로
     // (신규 키가 아닌 이상) 유니크 제약 위반 → 재조회 경로를 통해서만 이 상태에 도달한다.
