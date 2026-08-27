@@ -45,6 +45,15 @@ import lombok.NoArgsConstructor;
 		@Index(
 			name = "idx_issue_message_coupon_dlq",
 			columnList = "coupon_id, status, message_id"
+		),
+		// 발급 처리량 조회(#156, IssueMessageRepository.findThroughputByHour)가
+		// created_at >= :since로 최근 N시간만 좁혀서 대시보드 폴링용으로 자주 호출되는데,
+		// 이 컬럼을 커버하는 인덱스가 없으면 "최근 것만" 보는 쿼리인데도 매번 테이블
+		// 전체를 스캔한다(EXPLAIN으로 실측 확인됨). created_at 단일 인덱스로 그 범위만
+		// 인덱스 레인지 스캔하도록 만든다.
+		@Index(
+			name = "idx_issue_message_created_at",
+			columnList = "created_at"
 		)
 	},
 	uniqueConstraints = {

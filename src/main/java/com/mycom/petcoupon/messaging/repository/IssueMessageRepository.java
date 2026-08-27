@@ -172,4 +172,26 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("restoredAt") LocalDateTime restoredAt,
 			@Param("expectedStatus") IssueMessageStatus expectedStatus
 	);
+
+	// 발급 처리량 조회(#156)용 — 시간대(1시간 단위)별로 발급 성공(CONSUMED)/실패
+	// (FAILED·DLQ·ABANDONED) 건수를 집계한다. DATE_FORMAT으로 시간 버킷을 만드는 건 JPQL로
+	// 표현이 안 돼서 네이티브 쿼리를 쓴다. since 이후 것만 대상으로 해서 대시보드가 "최근 N시간"
+	// 같은 범위로 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	@Query(value = """
+			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
+			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
+			       SUM(CASE WHEN status IN ('FAILED', 'DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount
+			  FROM issue_message
+			 WHERE created_at >= :since
+			 GROUP BY bucket
+			 ORDER BY bucket ASC
+			""", nativeQuery = true)
+	List<IssueThroughputBucket> findThroughputByHour(@Param("since") LocalDateTime since);
+
+	// 상태 분포 조회(#156)용 — 시간 범위로 좁히지 않고 전체를 대상으로 한다. PENDING/DLQ 같은
+	// 상태는 "지금 이 시점에 몇 건이 그 상태로 남아있는지"(현재 잔량)가 의미 있는 지표라,
+	// findThroughputByHour처럼 최근 N시간으로 좁히면 오래전에 DLQ로 빠진 뒤 그대로 방치된
+	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
+	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
+	List<IssueStatusCount> countGroupedByStatus();
 }
