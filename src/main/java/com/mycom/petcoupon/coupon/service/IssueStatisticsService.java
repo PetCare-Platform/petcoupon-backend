@@ -1,7 +1,7 @@
 package com.mycom.petcoupon.coupon.service;
 
-import java.time.Duration;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 
 import org.springframework.stereotype.Service;
 
@@ -19,16 +19,23 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class IssueStatisticsService {
 
-    private static final Duration TIME_SERIES_WINDOW = Duration.ofHours(24);
+    private static final int TIME_SERIES_HOURS = 24;
 
     private final IssueMessageRepository issueMessageRepository;
     private final IssueStatisticsConverter issueStatisticsConverter;
 
     public IssueStatisticsResponse getStatistics() {
-        LocalDateTime since = LocalDateTime.now().minus(TIME_SERIES_WINDOW);
+        // [PR 리뷰 반영] now()를 그대로 24시간 빼면 정각에 안 맞아서 맨 앞 버킷이 부분치만
+        // 담긴다(예: 21:30에 조회하면 첫 버킷은 21:30~22:00 30분치뿐인데, 나머지는 온전한
+        // 1시간치라 그래프에서 그 시간대만 유독 낮아 보임). 현재 시각을 정각으로 잘라서
+        // [currentHour-23시간, currentHour+1시간) 범위로 넘기면, 맨 앞부터 항상 정각 단위
+        // 24개 버킷이 나온다 — 맨 뒤(진행 중인 이번 시간) 하나만 자연스럽게 덜 찬 상태로 남는다.
+        LocalDateTime currentHour = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
+        LocalDateTime from = currentHour.minusHours(TIME_SERIES_HOURS - 1);
+        LocalDateTime to = currentHour.plusHours(1);
 
         return IssueStatisticsResponse.builder()
-                .timeSeries(issueMessageRepository.findThroughputByHour(since).stream()
+                .timeSeries(issueMessageRepository.findThroughputByHour(from, to).stream()
                         .map(issueStatisticsConverter::toBucketResponse)
                         .toList())
                 .distribution(issueMessageRepository.countGroupedByStatus().stream()

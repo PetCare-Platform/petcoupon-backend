@@ -175,8 +175,14 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 
 	// 발급 처리량 조회(#156)용 — 시간대(1시간 단위)별로 발급 성공(CONSUMED)/최종 실패(DLQ·
 	// ABANDONED) 건수를 집계한다. DATE_FORMAT으로 시간 버킷을 만드는 건 JPQL로 표현이 안 돼서
-	// 네이티브 쿼리를 쓴다. since 이후 것만 대상으로 해서 대시보드가 "최근 N시간" 같은 범위로
-	// 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	// 네이티브 쿼리를 쓴다. [from, to) 범위만 대상으로 해서 대시보드가 "최근 N시간" 같은
+	// 범위로 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	//
+	// [PR 리뷰 반영] since를 그냥 now().minus(24h)로만 잡으면 정각에 안 맞아서, 시:분에 따라
+	// 맨 앞 버킷이 예를 들어 30분치만 담긴 채로 나머지 정각 버킷들과 나란히 그려진다 —
+	// 그래프에서 그 시간대만 유독 낮아 보이는 왜곡이 생긴다. 그래서 서비스(IssueStatisticsService)가
+	// 정각으로 자른 from/to를 넘겨서, 맨 앞 버킷도 항상 정각~정각 1시간 단위가 되게 한다
+	// (가장 최근 버킷만 "진행 중이라 아직 안 찬" 상태인 게 자연스럽고, 그건 이 방식으로도 그대로 남는다).
 	//
 	// [지표 정의 — PR 리뷰 반영] created_at(메시지 생성 시각) 기준으로 버킷을 나누고, 그
 	// 버킷 안의 메시지들이 "조회 시점 현재" 어떤 상태인지를 센다. 즉 "그 시간대에 들어온
@@ -204,11 +210,12 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
 			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
 			  FROM issue_message
-			 WHERE created_at >= :since
+			 WHERE created_at >= :from
+			   AND created_at < :to
 			 GROUP BY bucket
 			 ORDER BY bucket ASC
 			""", nativeQuery = true)
-	List<IssueThroughputBucket> findThroughputByHour(@Param("since") LocalDateTime since);
+	List<IssueThroughputBucket> findThroughputByHour(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 
 	// 상태 분포 조회(#156)용 — 시간 범위로 좁히지 않고 전체를 대상으로 한다. PENDING/DLQ 같은
 	// 상태는 "지금 이 시점에 몇 건이 그 상태로 남아있는지"(현재 잔량)가 의미 있는 지표라,
