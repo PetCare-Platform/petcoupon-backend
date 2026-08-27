@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.config.CouponIssueRedisKeys;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueStockRestoreResult;
@@ -28,14 +29,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 	
 	@Qualifier("couponIssueLuaScript")
     private final DefaultRedisScript<List> couponIssueLuaScript;
-	
+
 	@Qualifier("couponIssueRestoreLuaScript")
     private final DefaultRedisScript<List> couponIssueRestoreLuaScript;
- 
-    private String issueKey(String suffix, Long couponId) {
-        return "coupon:issue:" + suffix + ":{" + couponId + "}";
-    }
-    
+
     @Override
     public CouponIssueLuaResult issue(Long couponId, Long userId, String requestId) {
     	validate(couponId, userId, requestId);
@@ -46,10 +43,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		luaResult = redisTemplate.execute(
     	    	couponIssueLuaScript,
     	    	List.of(
-    	    		issueKey("stock", couponId), 
-    	    		issueKey("applicants", couponId),
-    	    	    issueKey("sequence", couponId),
-    	    	    issueKey("request-sequence", couponId)
+    	    		CouponIssueRedisKeys.stock(couponId),
+    	    		CouponIssueRedisKeys.applicants(couponId),
+    	    	    CouponIssueRedisKeys.sequence(couponId),
+    	    	    CouponIssueRedisKeys.requestSequence(couponId)
     	    	),
     	    	userId.toString(),
     	    	requestId
@@ -114,10 +111,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     	
     	try {
     		redisTemplate.delete(List.of(
-    			issueKey("stock", couponId),  
-    			issueKey("applicants", couponId), 
-    			issueKey("sequence", couponId),
-    			issueKey("request-sequence", couponId)
+    			CouponIssueRedisKeys.stock(couponId),
+    			CouponIssueRedisKeys.applicants(couponId),
+    			CouponIssueRedisKeys.sequence(couponId),
+    			CouponIssueRedisKeys.requestSequence(couponId)
     		));
     		
     	} catch (DataAccessException e) {
@@ -143,7 +140,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
         clearIssueState(couponId);
 
         try {
-            String stockKey = issueKey("stock", couponId);
+            String stockKey = CouponIssueRedisKeys.stock(couponId);
             redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
 
             String raw = redisTemplate.opsForValue().get(stockKey);
@@ -185,7 +182,7 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
         validateCouponId(couponId);
 
         try {
-            String stockValue = redisTemplate.opsForValue().get(issueKey("stock", couponId));
+            String stockValue = redisTemplate.opsForValue().get(CouponIssueRedisKeys.stock(couponId));
 
             if (stockValue == null) {
                 return CouponIssueRealtimeStock.builder()
@@ -218,9 +215,9 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 			luaResult = redisTemplate.execute(
 					couponIssueRestoreLuaScript,
 					List.of(
-						issueKey("stock", couponId), 
-						issueKey("applicants", couponId),
-						issueKey("request-sequence", couponId)
+						CouponIssueRedisKeys.stock(couponId),
+						CouponIssueRedisKeys.applicants(couponId),
+						CouponIssueRedisKeys.requestSequence(couponId)
 					),
 					userId.toString(), 
 					requestId, 

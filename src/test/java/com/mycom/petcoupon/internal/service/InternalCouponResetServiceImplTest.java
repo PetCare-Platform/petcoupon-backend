@@ -41,6 +41,7 @@ import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueLuaConfig;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaServiceImpl;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainCheckerImpl;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.idempotency.entity.IdempotencyKey;
@@ -67,7 +68,8 @@ import jakarta.persistence.PersistenceContext;
 @Import({
 		InternalCouponResetServiceImpl.class,
 		CouponIssueLuaServiceImpl.class,
-		CouponIssueLuaConfig.class
+		CouponIssueLuaConfig.class,
+		CouponIssuePipelineDrainCheckerImpl.class
 })
 // Redis 정리까지 실제로 확인해야 해서 JPA 슬라이스에 Redis 자동설정을 더한다.
 // 목으로 두면 키가 진짜 지워졌는지 알 수 없다. 실행 전 Redis 가 떠 있어야 한다.

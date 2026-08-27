@@ -52,7 +52,12 @@ import tools.jackson.databind.ObjectMapper;
  * 비동기로 수행한다 — TC-43처럼 "재고가 실제로 어떻게 됐는지" 검증하는 테스트는 즉시 응답이 아니라
  * GET .../coupon-issue-requests/status 폴링(awaitRequestResolved 참고)으로 최종 결과를 기다린다.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서, 테스트 도중 스케줄러가
+	// event_status_history를 만들어 tearDown의 event 삭제가 FK 위반으로 실패하는 걸 막는다.
+	"event.status.scheduler.enabled=false",
+	"coupon.status.enabled=false"
+})
 @AutoConfigureMockMvc
 class CouponIssueApiIntegrationTest {
 
@@ -193,6 +198,10 @@ class CouponIssueApiIntegrationTest {
 				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id IN :couponIds")
 				.setParameter("couponIds", couponIds)
+				.executeUpdate();
+		// 스케줄러를 꺼도, 방어적으로 event 삭제보다 먼저 지운다 (다른 통합테스트들과 동일한 패턴).
+		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
+				.setParameter("eventId", event.getEventId())
 				.executeUpdate();
 		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
 				.setParameter("eventId", event.getEventId())

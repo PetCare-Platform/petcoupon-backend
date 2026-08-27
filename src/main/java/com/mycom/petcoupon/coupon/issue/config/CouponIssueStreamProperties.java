@@ -19,9 +19,9 @@ public class CouponIssueStreamProperties {
 	private String key;
 	private String group;
 	private String consumer;
-	
+
 	private PendingRecovery pendingRecovery = new PendingRecovery();
-	
+
 	@Getter
     @Setter
     public static class PendingRecovery {
@@ -37,7 +37,7 @@ public class CouponIssueStreamProperties {
 
         // 한 번에 회수할 Pending 메시지 수
         private int batchSize = 100;
-        
+
         /*
     	 * 최초 Consumer 처리를 포함한 최대 처리 횟수.
     	 * 이 횟수만큼 처리했는데도 ACK되지 않으면 DLQ로 이동한다.

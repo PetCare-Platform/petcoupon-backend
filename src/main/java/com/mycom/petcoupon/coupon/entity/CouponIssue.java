@@ -29,7 +29,11 @@ import lombok.NoArgsConstructor;
 @Table(
 		name = "coupon_issue",
 		indexes = {
-			@Index(name = "idx_issue_expire", columnList = "status, expires_at")
+			@Index(name = "idx_issue_expire", columnList = "status, expires_at"),
+			// 정합성 검증 배치가 coupon_id로 발급 건을 조회하는데, 인덱스가 없으면
+			// coupon_issue_id(PK) 순 정렬을 위해 filesort가 붙는다(EXPLAIN으로 확인함) —
+			// coupon_id로 좁히면서 coupon_issue_id 정렬도 같이 해결되는 복합 인덱스.
+			@Index(name = "idx_issue_coupon_id", columnList = "coupon_id, coupon_issue_id")
 		},
 		uniqueConstraints = {
 			@UniqueConstraint(

@@ -55,15 +55,27 @@ public enum CouponErrorCode implements BaseErrorCode {
     // 409-4 는 PR #52(쿠폰 총수량 수정), 409-7 은 PR #75(NOT_DLQ_STATUS)가 먼저 써서 409-8 로 둔다.
     RESET_PRECONDITION_NOT_MET(HttpStatus.CONFLICT, "COUPON409-8", "앞 회차 메시지가 아직 처리 중이라 초기화할 수 없습니다."),
 
+    // 409-8은 PR #88(RESET_PRECONDITION_NOT_MET)이 같은 번호로 먼저 dev에 머지돼서 409-9로 둔다.
+    RECONCILIATION_NOT_ALLOWED_YET(HttpStatus.CONFLICT, "COUPON409-9", "발급이 종료된 쿠폰만 정합성 검증할 수 있습니다."),
+
+    // ENDED 체크와 별도 코드로 둔 이유 — 원인이 다르다. 이건 CouponIssuePipelineDrainChecker가
+    // 감지하는 "아직 파이프라인에 처리 중인 요청이 남음"이라, 보통 몇 초~몇십 초면 자연히 풀린다.
+    RECONCILIATION_PIPELINE_NOT_DRAINED(HttpStatus.CONFLICT, "COUPON409-10", "처리 중인 요청이 남아있어 정합성 검증을 할 수 없습니다. 잠시 후 다시 시도해주세요."),
+
     ISSUE_REQUEST_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-0", "쿠폰 신청 요청을 처리하지 못했습니다."),
 	ISSUE_REDIS_STATE_CLEAR_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-1", "쿠폰 발급 Redis 상태를 초기화하지 못했습니다."),
 	ISSUE_OUTBOX_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-2", "쿠폰 발급 이벤트 저장에 실패했습니다."),
 	ISSUE_CONFIRMATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-3", "쿠폰 발급 확정에 실패했습니다. 잠시 후 다시 시도해주세요."),
 	REALTIME_STOCK_READ_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-4", "쿠폰 실시간 재고를 조회하지 못했습니다."),
 	ISSUE_STOCK_RESTORE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "COUPON503-5", "쿠폰 발급 Redis 재고를 복구하지 못했습니다."),
-	
+
 	REALTIME_STOCK_INCONSISTENT(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-0", "쿠폰 실시간 재고 데이터가 정합성 오류 상태입니다."),
-	COUPON_LIST_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-1", "쿠폰 목록 조회에 실패했습니다.");
+	COUPON_LIST_QUERY_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-1", "쿠폰 목록 조회에 실패했습니다."),
+
+	// 500-1은 dev에 먼저 머지된 COUPON_LIST_QUERY_FAILED가 써서 500-2로 둔다.
+	// 정합성 검증 배치(reconciliationJob) Step 안에서 GeneralException이 아닌 예상 못 한
+	// 예외가 나서 JobExecution이 FAILED로 끝난 경우 — ReconciliationJobTriggerService 참고.
+	RECONCILIATION_BATCH_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "COUPON500-2", "정합성 검증 배치 실행 중 예상하지 못한 오류가 발생했습니다.");
 
     private final HttpStatus status;
     private final String code;
