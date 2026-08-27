@@ -124,8 +124,7 @@ class AdminCouponQueryControllerTest {
                 .andExpect(jsonPath("$.result.content[0].totalQuantity").value(100))
                 .andExpect(jsonPath("$.result.content[0].issuedQuantity").value(40))
                 .andExpect(jsonPath("$.result.content[0].remainingQuantity").value(60))
-                // 재고 갱신 시각은 발급 확정 경로가 갱신하지 않아 오해를 부르므로 응답에 싣지 않는다.
-                .andExpect(jsonPath("$.result.content[0].stockUpdatedAt").doesNotExist())
+                .andExpect(jsonPath("$.result.content[0].stockUpdatedAt").value("2026-08-21T10:00:00"))
                 .andExpect(jsonPath("$.result.page").value(0))
                 .andExpect(jsonPath("$.result.size").value(20))
                 .andExpect(jsonPath("$.result.totalElements").value(1))
@@ -327,6 +326,7 @@ class AdminCouponQueryControllerTest {
                 .totalQuantity(100)
                 .issuedQuantity(40)
                 .remainingQuantity(60)
+                .stockUpdatedAt(LocalDateTime.of(2026, 8, 21, 10, 0))
                 .build();
 
         return new CouponPageResponse(List.of(coupon), 0, 20, 1, 1, true, true);
