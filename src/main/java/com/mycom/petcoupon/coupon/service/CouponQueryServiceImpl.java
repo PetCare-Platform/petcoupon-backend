@@ -33,11 +33,14 @@ public class CouponQueryServiceImpl implements CouponQueryService {
     @Override
     @Transactional(readOnly = true)
     public CouponPageResponse getCoupons(CouponFilterRequest filterRequest, CouponPageRequest pageRequest) {
-        validateEventExists(filterRequest.eventId());
-
         Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
 
+        // 이벤트 존재 확인도 같은 요청의 DB 조회라 try 안에 둔다. 밖에 두면 같은 원인(DB 장애)인데도
+        // 어느 쿼리에서 터졌느냐에 따라 COMMON500-0과 COUPON500-1로 응답이 갈린다.
+        // EVENT_NOT_FOUND는 GeneralException이라 아래 catch에 걸리지 않고 그대로 404로 나간다.
         try {
+            validateEventExists(filterRequest.eventId());
+
             Page<CouponListResponse> responsePage = couponRepository
                     .findCouponPage(filterRequest.eventId(), filterRequest.status(), pageable)
                     .map(row -> couponConverter.toListResponse(row.coupon(), row.couponStock()));

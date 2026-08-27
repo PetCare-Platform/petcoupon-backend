@@ -153,6 +153,32 @@ class CouponQueryServiceImplTest {
                 .isEqualTo(CouponErrorCode.COUPON_LIST_QUERY_FAILED);
     }
 
+    // 이벤트 존재 확인도 같은 요청의 DB 조회다. 여기서 터졌다고 COMMON500-0으로 갈리면 안 된다.
+    @Test
+    void getCouponsThrowsCouponListQueryFailedWhenEventLookupFails() {
+        when(eventRepository.existsById(EVENT_ID)).thenThrow(new QueryTimeoutException("timeout"));
+        CouponFilterRequest filter = new CouponFilterRequest(EVENT_ID, null);
+
+        assertThatThrownBy(() -> couponQueryService.getCoupons(filter, DEFAULT_PAGE))
+                .isInstanceOf(GeneralException.class)
+                .extracting(exception -> ((GeneralException) exception).getErrorCode())
+                .isEqualTo(CouponErrorCode.COUPON_LIST_QUERY_FAILED);
+
+        verify(couponRepository, never()).findCouponPage(any(), any(), any(Pageable.class));
+    }
+
+    // 없는 이벤트는 DB 장애가 아니라 요청 문제다. try 안으로 옮겨도 404가 500으로 바뀌면 안 된다.
+    @Test
+    void getCouponsKeepsEventNotFoundOutsideQueryFailure() {
+        when(eventRepository.existsById(999L)).thenReturn(false);
+        CouponFilterRequest filter = new CouponFilterRequest(999L, null);
+
+        assertThatThrownBy(() -> couponQueryService.getCoupons(filter, DEFAULT_PAGE))
+                .isInstanceOf(GeneralException.class)
+                .extracting(exception -> ((GeneralException) exception).getErrorCode())
+                .isEqualTo(EventErrorCode.EVENT_NOT_FOUND);
+    }
+
     private CouponWithStock couponWithStock() {
         Event event = Event.builder()
                 .name("여름 이벤트")
