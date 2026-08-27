@@ -34,6 +34,7 @@ import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponIssueHistory;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
@@ -165,6 +166,24 @@ class InternalCouponResetServiceImplTest {
 		CouponStock stock = entityManager.find(CouponStock.class, coupon.getCouponId());
 		assertEquals(0, stock.getIssuedQuantity());
 		assertEquals(100, stock.getRemainingQuantity());
+	}
+
+	@Test
+	@DisplayName("SOLD_OUT 상태인 쿠폰을 초기화하면 발급 기간에 맞게 ACTIVE 상태로 복구된다")
+	void resetRestoresSoldOutCouponStatus() {
+		// 쿠폰을 SOLD_OUT 상태로 변경
+		entityManager.createQuery("UPDATE Coupon c SET c.status = 'SOLD_OUT' WHERE c.couponId = :couponId")
+				.setParameter("couponId", coupon.getCouponId())
+				.executeUpdate();
+		entityManager.clear();
+
+		Coupon beforeReset = entityManager.find(Coupon.class, coupon.getCouponId());
+		assertEquals(CouponStatus.SOLD_OUT, beforeReset.getStatus());
+
+		internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
+
+		Coupon afterReset = entityManager.find(Coupon.class, coupon.getCouponId());
+		assertEquals(CouponStatus.ACTIVE, afterReset.getStatus());
 	}
 
 	@Test
