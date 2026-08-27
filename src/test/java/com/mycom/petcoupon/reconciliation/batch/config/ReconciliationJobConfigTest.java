@@ -236,6 +236,50 @@ class ReconciliationJobConfigTest {
         assertThat(report.getTotalCount()).isEqualTo(report.getSuccessCount() + report.getErrorCount());
     }
 
+    // historyMismatchReader가 이력에도 asOfAt 제한을 걸던 예전 버전에서는, asOfAt 시점엔
+    // ISSUED였다가 asOfAt 이후 정상적으로 USED로 바뀐 건을 "이력=ISSUED, 현재상태=USED가
+    // 다르다"며 HISTORY_MISMATCH로 오탐했다. 발급기간 종료(coupon.status=ENDED, 사전조건이
+    // 요구하는 전부) 후에도 사용은 계속 일어날 수 있어 실제로 흔히 생기는 상황이다.
+    @Test
+    void asOfAt_이후_정상적으로_상태가_바뀐_건은_HISTORY_MISMATCH로_오탐하지_않는다() throws Exception {
+        CouponIssue issue = transactionTemplate.execute(status ->
+                createIssueWithoutHistory(IssueStatus.USED, "AFTER-ASOFAT-USED"));
+
+        // 이 시점의 issue.created_at은 이미 DB에 커밋돼 있어 asOfAt보다 앞선다.
+        LocalDateTime asOfAt = LocalDateTime.now();
+
+        transactionTemplate.executeWithoutResult(status -> {
+            // asOfAt 이전: ISSUED로 발급.
+            insertHistoryAt(issue, "NONE", "ISSUED", asOfAt.minusSeconds(10));
+            // asOfAt 이후: 정상적으로 사용 처리 — 배치가 실제로 도는 시점엔 이미 반영돼 있다.
+            insertHistoryAt(issue, "ISSUED", "USED", asOfAt.plusSeconds(10));
+        });
+
+        var jobParameters = new JobParametersBuilder()
+                .addLong("couponId", coupon.getCouponId())
+                .addLocalDateTime("asOfAt", asOfAt)
+                .toJobParameters();
+
+        JobExecution jobExecution = jobOperatorTestUtils.startJob(jobParameters);
+        assertThat(jobExecution.getStatus().toString()).isEqualTo("COMPLETED");
+
+        entityManager.clear();
+        ReconciliationReport report = reconciliationReportRepository.findAll().stream()
+                .filter(r -> r.getCoupon().getCouponId().equals(coupon.getCouponId()))
+                .findFirst()
+                .orElseThrow();
+
+        List<VerificationDetail> details = verificationDetailRepository.findAll().stream()
+                .filter(d -> d.getReport().getReportId().equals(report.getReportId()))
+                .toList();
+
+        // report.getResult()는 다른 테스트와 같은 이유(Redis 재고 키 미생성 → STOCK_MISMATCH)로
+        // 여전히 MISMATCHED다 — 그건 이 발급 건과 무관한 쿠폰 전체 단위 문제라 여기서는 안 본다.
+        // 이 테스트가 보는 건 이 발급 건이 HISTORY_MISMATCH로(발급 건 단위 오탐) 안 잡히는 것이다.
+        assertThat(details).noneMatch(d -> d.getErrorType() == VerificationErrorType.HISTORY_MISMATCH);
+        assertThat(report.getErrorCount()).isZero();
+    }
+
     @Test
     void RemainingChecksTasklet이_실제_Job_실행으로_SEQUENCE_GAP과_STOCK_NOT_RESTORED를_찾아_저장한다() throws Exception {
         // 죽은 코드(ReconciliationServiceImpl) 정리하면서 이 두 검증은 ReconciliationDetectionQueriesTest로
@@ -333,6 +377,21 @@ class ReconciliationJobConfigTest {
                 .setParameter("userId", issue.getUser().getUserId())
                 .setParameter("from", from)
                 .setParameter("to", to)
+                .executeUpdate();
+    }
+
+    private void insertHistoryAt(CouponIssue issue, String from, String to, LocalDateTime createdAt) {
+        entityManager.createNativeQuery("""
+                INSERT INTO coupon_issue_history
+                    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, created_at)
+                VALUES (:issueId, :couponId, :userId, :from, :to, 'SYSTEM', :createdAt)
+                """)
+                .setParameter("issueId", issue.getCouponIssueId())
+                .setParameter("couponId", coupon.getCouponId())
+                .setParameter("userId", issue.getUser().getUserId())
+                .setParameter("from", from)
+                .setParameter("to", to)
+                .setParameter("createdAt", createdAt)
                 .executeUpdate();
     }
 }

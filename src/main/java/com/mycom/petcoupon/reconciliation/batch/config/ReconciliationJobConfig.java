@@ -132,6 +132,17 @@ public class ReconciliationJobConfig {
     // ROW_NUMBER() 윈도우 함수로 파생 테이블을 한 번만 만들어 조인하는 형태로 바꾸니
     // select_type이 DEPENDENT SUBQUERY(행마다 반복) 대신 DERIVED(한 번만 실행)로 바뀌었다 —
     // 50,000건 규모로 EXPLAIN/결과 일치까지 직접 확인함.
+    //
+    // 이력(h) 쪽에는 asOfAt 제한을 걸지 않는다 — ci.status는 애초에 "현재" 값만 존재하고
+    // asOfAt 시점 값으로 복원할 방법이 없다(coupon_issue_history 말고는 시점별 상태를 남기는
+    // 데가 없음). 그런데 이력만 asOfAt으로 자르면, asOfAt 이후 실제로 일어난 정상적인 상태
+    // 전이(발급기간 종료 후에도 사용·만료는 계속 일어날 수 있다 — 사전조건이 요구하는 건
+    // coupon.status=ENDED뿐이지 "더 이상 아무 일도 안 일어남"이 아니다)를 통째로 놓치고,
+    // 오래된 이력과 최신 status를 비교해 정상 건을 불일치로 오탐한다(예: asOfAt 시점엔
+    // ISSUED였는데 그 뒤 정상적으로 USED가 된 건 — 이력=ISSUED, status=USED로 잘못 잡힘).
+    // ci와 h 둘 다 "지금" 기준으로 맞춰 비교해야, 이 검증의 원래 목적(상태 컬럼이 이력 기록
+    // 없이 어긋난 진짜 정합성 버그만 잡는 것)에 맞는다. 바깥의 ci.created_at <= :asOfAt는
+    // 그대로 둔다 — "이번 회차에 존재했던 발급 건"만 검증 대상으로 좁히는 것과는 별개다.
     @Bean
     @StepScope
     public JdbcPagingItemReader<HistoryMismatchRow> historyMismatchReader(
@@ -148,7 +159,6 @@ public class ReconciliationJobConfig {
                                ROW_NUMBER() OVER (PARTITION BY coupon_issue_id ORDER BY history_id DESC) AS rn
                           FROM coupon_issue_history
                          WHERE coupon_id = :couponId
-                           AND created_at <= :asOfAt
                     ) h ON h.coupon_issue_id = ci.coupon_issue_id AND h.rn = 1
                     """);
             queryProviderFactory.setWhereClause("""
