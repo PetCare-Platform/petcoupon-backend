@@ -223,6 +223,15 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 **프론트가 `status` 로 발급 성공을 판단하면 동작하지 않는다.** `ISSUED` 를 내려줄지 정해야 한다.
 
+계약을 정할 때 쓰이는 실제 값은 이렇다. `CouponIssueConverter` 기준이며, **`SUCCESS` 같은 값은 존재하지 않는다.**
+
+| 시점 | `status` |
+| --- | --- |
+| 접수 응답(202) | `"WAITING"` 고정 |
+| 확정 응답 | `ISSUED` · `USED` · `EXPIRED` (`IssueStatus` enum 이름) |
+
+확정될 때까지는 `status` 대신 **`couponIssueId != null` 로 성공을 판정**하는 쪽이 안전하다.
+
 ### ⚠️ TC-17 — 미초기화 쿠폰이 "재고 가득"으로 보인다
 
 `SEED-쿠폰-1`(발급 50만 완료, DB 잔여 0)을 조회한 결과다.
@@ -363,11 +372,11 @@ type = ref    key = user_id FK 인덱스    rows = 5    Extra = Using filesort
 
 `CouponIssueOutboxPublisher` 는 조회한 메시지를 스트림으로 돌며 `publish()` 를 부르는데, 그 안의 `kafkaTemplate.send()` 가 각각 60초씩 붙잡힌다. 실제로 3건 처리에 180초가 걸렸다(`retry_count` 가 1건씩 순차로 올라갔다). `batch-size=100` 이면 한 틱에 100분이다.
 
-밀린 메시지가 사실상 진행되지 않으므로, 장애가 길어지면 `max-retry-count=5` 소진에도 한참 걸리고 DLQ 전이도 그만큼 늦어진다. `spring.kafka.producer.properties.max.block.ms` 를 `delivery.timeout.ms` 수준으로 낮추는 게 맞다.
+밀린 메시지가 사실상 진행되지 않으므로, 장애가 길어지면 `max-retry-count=5` 소진에도 한참 걸리고 DLQ 전이도 그만큼 늦어진다. `spring.kafka.producer.properties.max.block.ms` 를 `delivery.timeout.ms` 수준으로 낮추는 게 맞다. → **`#161`** (`chore/161-kafka-producer-max-block-ms`)
 
 **② `last_error` 에 `Send failed` 만 남는다.**
 
-`errorMessage()` 가 `throwable.getMessage()` 를 쓰는데, `KafkaProducerException` 의 메시지가 그 문자열이다. 진짜 원인인 `Topic ... not present in metadata after 60000 ms` 는 `getCause()` 쪽에 있어 DB 만 봐서는 무엇이 실패했는지 알 수 없다. 운영에서 DLQ 를 판단할 때 이 컬럼을 본다면 원인 체인까지 남겨야 한다.
+`errorMessage()` 가 `throwable.getMessage()` 를 쓰는데, `KafkaProducerException` 의 메시지가 그 문자열이다. 진짜 원인인 `Topic ... not present in metadata after 60000 ms` 는 `getCause()` 쪽에 있어 DB 만 봐서는 무엇이 실패했는지 알 수 없다. 운영에서 DLQ 를 판단할 때 이 컬럼을 본다면 원인 체인까지 남겨야 한다. → **`#162`** (`fix/162-outbox-last-error-detail`)
 
 ### ✅ TC-76 — 처리 전 앱 강제 종료 후 재기동 (2026-08-27 21:36 ~ 21:37)
 
@@ -491,6 +500,28 @@ SEED 쿠폰은 SQL 로 직접 만든 과거 데이터라 Redis 키가 애초에 
 
 `STOCK_MISMATCH` 가 **"Redis 키 없음"과 "값이 다름"을 구분**해야 할 것으로 보인다. `#149` 로 `STOCK_NOT_RESTORED` 를 손볼 때 함께 보자고 적어뒀는데 그쪽만 머지됐으므로, 이건 별도 이슈로 남아 있다.
 
+**고칠 때 두 가지를 조심해야 한다(리뷰에서 나온 제안을 검토하며 확인한 것).**
+
+첫째, **"쿠폰이 `ENDED` 면 정상으로 넘긴다"는 조건은 쓸 수 없다.** 정합성 배치는 애초에 `ENDED` 쿠폰만 대상으로 하기 때문이다 — `ReconciliationScheduler` 가 `findCouponIdsByStatus(ENDED)` 로 대상을 뽑고, 수동 트리거도 `PreconditionCheckTasklet` 에서 `COUPON409-9`("발급이 종료된 쿠폰만 정합성 검증할 수 있습니다")로 막는다. 대상이 전부 `ENDED` 라 그 조건을 넣으면 `STOCK_MISMATCH` 검사가 통째로 꺼진다.
+
+둘째, **재고 키에는 TTL 이 없다.** 코드 어디에도 만료를 걸지 않는다(TTL 을 쓰는 건 관리자 세션 키뿐이다). 따라서 "캐시가 만료돼 사라진 정상 상황"은 존재하지 않고, 키가 없어지는 경로는 둘뿐이다.
+
+```
+① 초기화 API(/internal/coupons/{id}/reset) 가 명시적으로 지움
+② Redis 재시작 — 영속화 설정에 따라 통째로 유실
+```
+
+②는 재고 판정의 근거가 사라진 것이라 **운영에서 그냥 넘겨선 안 되는 상황**이다.
+
+그래서 방향은 "정상 처리"가 아니라 **분리**다.
+
+| 상황 | 처리 |
+| --- | --- |
+| Redis 키 없음 | **검증 불가**로 별도 사유 — 대조할 대상이 없다는 사실 자체를 남긴다 |
+| 키는 있고 값이 다름 | `STOCK_MISMATCH` — 실제 불일치 |
+
+이렇게 나눠야 SEED 데이터 같은 노이즈를 걷어내면서 진짜 키 유실도 신호로 남는다. 오탐을 없애되 미탐을 만들지 않는 것이 요점이며, `#149`(TC-65)에서 오탐·미탐 양쪽을 다 확인했던 것과 같은 기준이다.
+
 ### TC-92 — 단일 요청 전 구간 통과 시각
 
 로그 파일을 켜고(`LOG_FILE=logs/petcoupon.log`) `requestId` 로 grep 한 결과다.
@@ -565,20 +596,22 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 부하 테스트를 돌리는 회차에서는 꺼야 한다.
 
 ```powershell
-$env:COUPON_RECONCILIATION_SCHEDULER_ENABLED="false"
+$env:COUPON_RECONCILIATION_SCHEDULER_ENABLED="false"; .\gradlew bootRun
 ```
 
-**`application.properties` 에 스위치가 노출돼 있지 않으므로** 위 환경변수가 먹는지 먼저 확인하고, 안 되면 `-Dcoupon.reconciliation.scheduler.enabled=false` 로 넘기거나 프로퍼티 항목을 추가해야 한다. 다른 스케줄러(`event.status.scheduler.enabled`)처럼 `application.properties` 에 기본값과 함께 노출해 두는 게 맞다.
+**환경변수는 원래부터 먹었다** — `@ConditionalOnProperty` 가 `Environment` 를 읽고 Spring Boot 의 relaxed binding 이 `COUPON_RECONCILIATION_SCHEDULER_ENABLED` 를 `coupon.reconciliation.scheduler.enabled` 로 매핑해 주기 때문이다. 다만 `application.properties` 만 훑는 사람은 **그런 스위치가 있다는 것 자체를 모른다.** 그래서 다른 스케줄러(`event.status.scheduler.enabled`)와 같은 자리에 기본값과 함께 노출해 뒀다(리뷰 반영).
 
 **부하 테스트를 막는 항목은 없다.** 실행 중 관찰한 것들은 전부 부하 경로 밖이거나 조건부다.
 
-| 항목 | 부하 테스트 영향 | 판단 |
+| 항목 | 부하 테스트 영향 | 처리 |
 | --- | --- | --- |
-| `max.block.ms` 미설정 (기본 60초) | Kafka 가 **끊겼을 때만** 발동. 정상 브로커에서는 메타데이터가 캐시돼 있어 걸리지 않는다 | 보험용 1줄. 넣어두면 측정 중 사고가 나도 결과를 버리지 않아도 된다 |
-| 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | 조회 화면 표시만 어긋난다 |
-| `last_error` 가 `Send failed` 뿐 | 없음 | 운영에서 DLQ 원인을 볼 때 필요 |
-| 만료 배치 수동 트리거 부재 | 없음 | TC-82 를 임시 테스트로 우회했다 |
-| 정합성 자동 스케줄러 기본 켜짐 | **있음** — 30분마다 6분짜리 배치가 끼어든다 | 측정 회차에서는 반드시 끈다(위 참고) |
+| `max.block.ms` 미설정 (기본 60초) | Kafka 가 **끊겼을 때만** 발동. 정상 브로커에서는 메타데이터가 캐시돼 있어 걸리지 않는다 | **`#161`** 진행 중 |
+| `last_error` 가 `Send failed` 뿐 | 없음 | **`#162`** 진행 중 |
+| 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | **`#160`** 진행 중 |
+| `STOCK_MISMATCH` 가 "키 없음"과 "값 다름"을 안 가림 | 없음 | 이슈 미등록 (§5 에 방향 기록) |
+| 만료 배치 수동 트리거 부재 | 없음 | 이슈 미등록. TC-82 는 임시 테스트로 우회 |
+| TC-14 확정 응답의 `status` 가 `null` | 없음 | 이슈 미등록. 프론트 연동 전 계약 확정 필요 |
+| 정합성 자동 스케줄러 기본 켜짐 | **있음** — 30분마다 6분짜리 배치가 끼어든다 | 스위치 노출 완료. 측정 회차에서는 끈다(위 참고) |
 
 **프론트 연동 전에 남은 것은 CORS 하나다.**
 
