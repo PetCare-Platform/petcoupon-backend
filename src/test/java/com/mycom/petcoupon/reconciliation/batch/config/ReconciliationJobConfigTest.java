@@ -45,10 +45,19 @@ import jakarta.persistence.PersistenceContext;
  * 별도 단계(더미데이터 확보 후)에서 한다 — 여기서는 소량 데이터로 로직 정확성만 본다.
  *
  * 실행 전 MySQL/Redis가 떠 있어야 한다: docker compose up -d
+ *
+ * coupon.issue.stream.key/group을 이 테스트 전용 값으로 오버라이드한다 — 앱 기본 키를 그대로
+ * 쓰면 다른 테스트(또는 이전 실행, 심지어 진짜 앱 인스턴스)가 그 키에 남긴 pending 때문에
+ * preconditionCheckStep이 드레인 안 됐다고 오판해 Job이 실패한다. enabled=false는 이 앱이
+ * Stream Consumer를 새로 만드는 것만 막을 뿐 드레인 체크 자체(raw Redis 조회)는 막지 못해서
+ * 근본 해결이 안 된다 — pending을 idle 시간과 무관하게 무조건 막도록 바뀐 뒤로 이 오염에
+ * 특히 취약해졌다. CouponIssuePipelineDrainCheckerImplTest와 같은 방식으로 키 자체를 격리한다.
  */
 @SpringBootTest(properties = {
         "event.status.scheduler.enabled=false",
-        "coupon.status.enabled=false"
+        "coupon.status.enabled=false",
+        "coupon.issue.stream.key=coupon:issue:stream:job-config-test",
+        "coupon.issue.stream.group=job-config-test-group"
 })
 @SpringBatchTest
 class ReconciliationJobConfigTest {

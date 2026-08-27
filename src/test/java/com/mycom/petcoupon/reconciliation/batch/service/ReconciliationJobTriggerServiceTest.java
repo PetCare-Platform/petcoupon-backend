@@ -39,10 +39,18 @@ import jakarta.persistence.PersistenceContext;
  * 컨트롤러 계약(프론트에 이미 전달된 API)을 안 깨는 핵심이다 — 여기서 실제 Job을 돌려 확인한다.
  *
  * 실행 전 MySQL/Redis가 떠 있어야 한다: docker compose up -d
+ *
+ * coupon.issue.stream.key/group을 이 테스트 전용 값으로 오버라이드한다 — 앱 기본 키를 그대로
+ * 쓰면 다른 테스트가 그 키에 남긴 pending 때문에 preconditionCheckStep이 드레인 안 됐다고
+ * 오판해 Job이 실패한다. enabled=false는 이 앱이 Stream Consumer를 새로 만드는 것만 막을 뿐
+ * 드레인 체크 자체(raw Redis 조회)는 막지 못해서 근본 해결이 안 된다 — pending을 idle 시간과
+ * 무관하게 무조건 막도록 바뀐 뒤로 이 오염에 특히 취약해졌다.
  */
 @SpringBootTest(properties = {
         "event.status.scheduler.enabled=false",
-        "coupon.status.enabled=false"
+        "coupon.status.enabled=false",
+        "coupon.issue.stream.key=coupon:issue:stream:trigger-svc-test",
+        "coupon.issue.stream.group=trigger-svc-test-group"
 })
 class ReconciliationJobTriggerServiceTest {
 
