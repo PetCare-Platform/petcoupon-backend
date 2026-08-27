@@ -203,6 +203,9 @@ curl -s "localhost:8080/admin/coupons?eventId=1&status=ACTIVE&page=0&size=20" -H
 페이지 응답 형식(`content`·`page`·`size`·`totalElements`·`totalPages`·`first`·`last`)은 이벤트 목록과 같다.
 없는 `eventId`로 필터하면 빈 목록이 아니라 `EVENT404-0`으로 답한다.
 
+`status=SOLD_OUT`은 재고 소진 즉시가 아니라 상태 전이 스케줄러 주기(최대 60초) 이후에 반영된다.
+판정 기준이 Redis 실시간 값이 아니라 DB(`coupon_stock`) 확정값이기 때문이다.
+
 ### 내부 — `prod` 프로파일에서 비활성
 
 | Method | Path | 설명 |
@@ -220,7 +223,7 @@ curl -s "localhost:8080/admin/coupons?eventId=1&status=ACTIVE&page=0&size=20" -H
 | 작업 | 주기 | 설명 |
 |---|---|---|
 | Outbox 발행 | 1초 (fixed delay) | `PENDING`·`FAILED` 메시지를 Kafka로 |
-| 쿠폰 상태 전이 | 60초 | `READY → ACTIVE → ENDED` |
+| 쿠폰 상태 전이 | 60초 | `READY → ACTIVE → SOLD_OUT → ENDED` (재고 소진은 DB 확정값 기준, `ACTIVE → ENDED`도 가능) |
 | 이벤트 상태 전이 | 매분 | `SCHEDULED → OPEN → CLOSED` |
 | 쿠폰 만료 | 매일 01:00 | 만료 건을 `EXPIRED`로 (청크 처리) |
 | 멱등키 정리 | 매일 04:00 | 보관기간 7일 경과분 삭제 |

@@ -74,14 +74,36 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
 			""")
 	int activateCoupons(@Param("now") LocalDateTime now);
 
-	// ACTIVE -> ENDED 원자적 조건부 UPDATE. status='ACTIVE' 조건 덕분에 이미 SOLD_OUT 등
-	// 다른 상태로 바뀐 쿠폰은 건드리지 않는다.
+	// ACTIVE -> SOLD_OUT 원자적 조건부 UPDATE. 판정 기준은 Redis가 아니라 coupon_stock
+	// (Kafka 소비 후 확정된 remaining_quantity)이다 -- 발급 확정 이후에만 반영되므로 실시간
+	// 소진 시점과는 스케줄러 주기(최대 60초)만큼 어긋날 수 있지만, 관리자 목록 필터 용도라 허용한다.
+	// Coupon -> CouponStock 연관관계가 없어(CouponWithStock 참고) 서브쿼리로 묶는다.
+	//
+	// activateCoupons보다 뒤, endCoupons보다 앞에 실행해야 한다(CouponStatusSchedulerServiceImpl
+	// 참고) -- 발급 기간이 끝났고 재고도 0인 쿠폰이 이번 실행에서 SOLD_OUT을 거쳐 곧장 ENDED로
+	// 도달하게 하기 위함이다.
+	@Modifying(clearAutomatically = true)
+	@Query("""
+			UPDATE Coupon c
+			   SET c.status = 'SOLD_OUT',
+			       c.updatedAt = :now
+			 WHERE c.status = 'ACTIVE'
+			   AND c.couponId IN (
+			       SELECT cs.couponId FROM CouponStock cs WHERE cs.remainingQuantity = 0
+			   )
+			""")
+	int soldOutCoupons(@Param("now") LocalDateTime now);
+
+	// ACTIVE/SOLD_OUT -> ENDED 원자적 조건부 UPDATE. SOLD_OUT도 대상에 포함하는 이유는, 품절을
+	// 종착 상태로 두면 발급 기간이 끝난 지난 이벤트의 쿠폰이 계속 품절 목록에 남아 관리자 조회를
+	// 오염시키기 때문이다 -- 발급 기간이 끝난 쿠폰은 품절이었든 아니든 종료로 수렴해야 한다.
+	// status IN (...) 조건 덕분에 이미 READY이거나 이미 ENDED인 쿠폰은 건드리지 않는다.
 	@Modifying(clearAutomatically = true)
 	@Query("""
 			UPDATE Coupon c
 			   SET c.status = 'ENDED',
 			       c.updatedAt = :now
-			 WHERE c.status = 'ACTIVE'
+			 WHERE c.status IN ('ACTIVE', 'SOLD_OUT')
 			   AND c.issueEndAt <= :now
 			""")
 	int endCoupons(@Param("now") LocalDateTime now);
