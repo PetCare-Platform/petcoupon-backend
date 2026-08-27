@@ -35,7 +35,15 @@
 | 같은 VPC · 같은 AZ | 인터넷 왕복 지연이 응답 시간에 섞이지 않는다. AZ 가 다르면 그만큼 지연이 붙는다 |
 | RDS·ElastiCache·MSK 대신 EC2 + Docker | 로컬과 동일한 구성을 그대로 써서 재현성을 확보한다 |
 
-> ⚠️ **Kafka 는 `docker-compose.yml` 에 없다.** 로컬에서는 `docker start petcoupon-kafka` 로 따로 띄우고 있다. EC2 B 에 올릴 때 이 부분을 어떻게 할지 미리 정해야 한다 — 파이프라인의 `Outbox → Kafka → Consumer → MySQL` 구간이 전부 여기 걸려 있어서, 빠지면 발급이 한 건도 확정되지 않는다.
+> ⚠️ **Kafka 는 `docker compose up -d` 로 안 뜬다.** `docker-compose.yml` 에 정의는 있지만 `profiles: [kafka]` 로 묶여 있어서, 프로파일을 함께 줘야 기동한다.
+>
+> ```bash
+> docker compose --profile kafka up -d
+> ```
+>
+> 파이프라인의 `Outbox → Kafka → Consumer → MySQL` 구간이 전부 여기 걸려 있다. **빼먹으면 접수는 202 로 정상 응답하는데 발급이 한 건도 확정되지 않는다** — 앱도 API 도 멀쩡해 보여서 원인을 찾는 데 시간이 걸린다(통합 테스트 TC-74 참고).
+>
+> compose 주석은 "애플리케이션에 Kafka 코드가 들어오면 profiles 항목을 제거한다"고 되어 있는데 그 코드는 이미 들어왔다. `profiles` 를 빼서 기본 기동에 포함시키는 게 맞다 — 별도 이슈 대상이다.
 
 ### 로컬 PC에서 부하를 발생시키지 않는 이유
 
@@ -131,9 +139,11 @@ k6 run \
   -e SCENARIO=burst \
   -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 \
   -e VUS=20000 -e ITERATIONS_PER_VU=1 \
-  -e MAX_DURATION=10m \
+  -e MAX_DURATION=5m \
   load-test/k6/issue-coupon.js
 ```
+
+`MAX_DURATION` 의 스크립트 기본값은 `10m` 이지만 **`5m` 으로 줄여서 준다.** §5.2 의 실패 판정이 "전체 실행 시간 5분 초과"라, 기본값으로 두면 6분에 끝난 회차를 k6 가 통과로 처리하고 사람이 따로 대조해야 한다. 5분으로 주면 k6 가 그 자리에서 강제 종료해 실패로 남긴다.
 
 ### 합격·불합격 판정
 
