@@ -13,7 +13,13 @@ import com.zaxxer.hikari.HikariDataSource;
 
 @SpringBootTest(properties = {
         "event.status.scheduler.enabled=false",
-        "coupon.status.enabled=false"
+        "coupon.status.enabled=false",
+        // spring.datasource.hikari.maximum-pool-size는 기본값이 ${DB_POOL_SIZE:10}이라, 부하
+        // 테스트 등으로 DB_POOL_SIZE 환경변수를 다르게(예: 100) 띄운 환경에서 이 테스트만 돌리면
+        // 아래 10 하드코딩 검증이 깨진다 — 이 테스트가 보려는 건 "두 풀이 서로 다른 크기로
+        // 분리되어 있다"는 것 자체이지 실제 운영 풀 크기가 아니므로, 환경변수와 무관하게 10으로
+        // 고정한다.
+        "spring.datasource.hikari.maximum-pool-size=10"
 })
 class DataSourceWiringVerificationTest {
 
