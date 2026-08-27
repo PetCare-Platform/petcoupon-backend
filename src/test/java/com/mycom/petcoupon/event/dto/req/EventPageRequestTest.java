@@ -41,6 +41,18 @@ class EventPageRequestTest {
 		assertInvalidPageRequest(() -> new EventPageRequest(-1, 20));
 	}
 
+	@Test
+	void acceptsMaxPage() {
+		EventPageRequest request = new EventPageRequest(EventPageRequest.MAX_PAGE, 20);
+
+		assertEquals(EventPageRequest.MAX_PAGE, request.page());
+	}
+
+	@Test
+	void rejectsPageAboveMax() {
+		assertInvalidPageRequest(() -> new EventPageRequest(EventPageRequest.MAX_PAGE + 1, 20));
+	}
+
 	@ParameterizedTest
 	@ValueSource(strings = {"page", "1.5", ""})
 	void rejectsNonNumericPage(String page) {

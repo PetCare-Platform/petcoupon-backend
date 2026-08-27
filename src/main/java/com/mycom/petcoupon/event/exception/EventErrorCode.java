@@ -17,7 +17,7 @@ public enum EventErrorCode implements BaseErrorCode {
 
 	INVALID_EVENT_STATUS_TRANSITION(HttpStatus.BAD_REQUEST, "EVENT400-2", "상태는 SCHEDULED→OPEN, OPEN→CLOSED 순서로만 변경할 수 있습니다."),
 
-	INVALID_EVENT_PAGE_REQUEST(HttpStatus.BAD_REQUEST, "EVENT400-3", "페이지 번호는 0 이상이며, 페이지 크기는 10, 20, 50, 100 중 하나여야 합니다."),
+	INVALID_EVENT_PAGE_REQUEST(HttpStatus.BAD_REQUEST, "EVENT400-3", "페이지 번호는 0 이상 10000 이하이며, 페이지 크기는 10, 20, 50, 100 중 하나여야 합니다."),
 
 	EVENT_NOT_FOUND(HttpStatus.NOT_FOUND, "EVENT404-0", "존재하지 않는 이벤트입니다."),
 
