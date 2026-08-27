@@ -44,6 +44,8 @@ import jakarta.persistence.PersistenceContext;
 	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10",
 	"spring.kafka.consumer.auto-offset-reset=earliest",
 	
+	"coupon.issue.stream.pending-recovery.enabled=false",
+	
 	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서 경합 자체를 차단
 	"event.status.scheduler.enabled=false",
 	"coupon.status.enabled=false"

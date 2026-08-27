@@ -108,39 +108,32 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 	/**
 	 * 앞 회차 신청이 파이프라인에 남아 있지 않은지 확인한다. 남았으면 409 로 거절한다.
 	 *
-	 * <p>초기화는 DB 와 Redis 만 되돌린다. Redis Stream 과 Kafka 에 떠 있는 메시지는 지우지 못하고,
-	 * 특히 Outbox 발행은 {@code kafkaTemplate.send()} 가 DB 트랜잭션 밖에서 일어나 이미 나간 것을
-	 * 되돌릴 방법이 없다. 그 상태로 지우면 지난 회차 신청이 뒤늦게 확정되면서 이번 회차 재고를 깎는데,
-	 * {@code coupon_issue} 를 모두 지운 뒤라 유니크 제약도 이를 막지 못한다.
-	 *
-	 * <p>막는 것과 알리기만 하는 것을 나눈다. 남는 방식에 따라 결과가 정반대이기 때문이다.
+	 * <p>초기화는 DB와 Redis 발급 상태만 되돌린다. Redis Stream 또는 Outbox에
+	 * 앞 회차 메시지가 남아 있으면 초기화 이후 뒤늦게 처리되어 새 회차 재고를
+	 * 차감할 수 있으므로 초기화를 진행하면 안 된다.
 	 *
 	 * <table border="1">
-	 *   <caption>잔여 메시지의 두 종류</caption>
+	 *   <caption>초기화를 차단하는 잔여 메시지</caption>
 	 *   <tr><th>상태</th><th>다음 회차에</th><th>결과</th><th>처리</th></tr>
-	 *   <tr><td>Stream 미배달</td><td>새 Consumer 가 읽어감</td><td>유령 발급</td><td><b>거절</b></td></tr>
-	 *   <tr><td>Outbox 미발행</td><td>poller 가 Kafka 로 보냄</td><td>유령 발급</td><td><b>거절</b></td></tr>
-	 *   <tr><td>Stream pending</td><td>아무도 안 가져감</td><td>신청 유실</td><td>경고만</td></tr>
+	 *   <tr><td>Stream 미배달</td><td>Consumer가 읽어감</td><td>유령 발급 가능</td><td><b>거절</b></td></tr>
+	 *   <tr><td>Stream Pending</td><td>회수 스케줄러가 재처리</td><td>유령 발급 가능</td><td><b>거절</b></td></tr>
+	 *   <tr><td>Outbox 미발행</td><td>Publisher가 Kafka로 발행</td><td>유령 발급 가능</td><td><b>거절</b></td></tr>
 	 * </table>
 	 *
-	 * <p>pending 으로 막지 않는 이유가 있다. Consumer 이름이 기동할 때마다 새로 생겨서
-	 * 죽은 Consumer 가 잡고 있던 pending 은 아무도 회수하지 않는다. 그런 잔여물은 계속 쌓이기만 하고
-	 * 재처리되지 않으므로 유령 발급을 만들지 않는데, 이걸로 막으면 초기화가 영구히 거절된다.
+	 * <p>Consumer Group이 없지만 Stream 메시지가 존재하는 경우에도 초기화를 거절한다.
+	 * Group이 복구되면서 {@code 0-0}부터 기존 메시지가 다시 전달될 수 있기 때문이다.
 	 *
-	 * <p>Kafka 로 이미 나간 메시지는 여기서 볼 수 없다. 다만 Outbox 가 비었으면 새로 나갈 것이 없고,
-	 * 이미 나간 것은 Consumer 가 곧 소비한다. 완전한 보증은 아니라서
-	 * {@code load-test/README.md} 의 Kafka LAG 확인 절차를 함께 지켜야 한다.
+	 * <p>Stream은 쿠폰별로 나뉘지 않은 전역 Stream이므로 다른 쿠폰의 메시지가
+	 * 남아 있더라도 환경이 완전히 비워지지 않은 것으로 보고 초기화를 거절한다.
 	 *
-	 * <p>Stream 은 쿠폰별로 나뉘어 있지 않아 검사도 전역이다. 다른 쿠폰의 잔여물이라도
-	 * 환경이 깨끗하지 않다는 신호이므로 그대로 막는다.
-	 *
-	 * <p><b>검사 자체가 실패해도 막는다.</b> Redis 에 닿지 못했다는 건 "남은 게 없다"가 아니라
-	 * "남았는지 모른다"는 뜻이다. 모르는 채로 지우면 확인 절차를 둔 의미가 없으므로,
-	 * 확인할 수 없을 때는 초기화하지 않는다. 강행이 필요하면 {@code force} 로 넘긴다.
+	 * <p>검사 자체가 실패해도 초기화를 거절한다. Redis에 접근할 수 없다는 것은
+	 * 메시지가 없다는 뜻이 아니라 잔여 여부를 확인할 수 없다는 뜻이다.
+	 * 강제로 초기화해야 하는 경우에만 {@code force=true}를 사용한다.
 	 */
 	private void validatePipelineDrained(Long couponId) {
 		long outboxUnpublished = countUnpublishedMessages(couponId);
 		long streamUndelivered = 0L;
+		long streamPending = 0L;
 
 		try {
 			StreamOperations<String, Object, Object> streamOps = redisTemplate.opsForStream();
@@ -152,11 +145,37 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				// 그룹이 마지막으로 배달한 ID 가 다르면 아직 아무도 안 가져간 신청이 있다는 뜻이다.
 				String lastGeneratedId = streamOps.info(streamKey).lastGeneratedId();
 
-				streamUndelivered = streamOps.groups(streamKey).stream()
+				StreamInfo.XInfoGroup issueGroup = streamOps.groups(streamKey).stream()
 						.filter(group -> group.groupName().equals(streamProperties.getGroup()))
-						.peek(this::warnIfPendingRemains)
-						.filter(group -> !Objects.equals(group.lastDeliveredId(), lastGeneratedId))
-						.count();
+						.findFirst()
+						.orElse(null);
+				
+				if (issueGroup == null) {
+					/*
+					 * Stream은 있는데 Consumer Group이 없다면,
+					 * Group 복구 시 0-0부터 기존 메시지가 다시 전달될 수 있다.
+					 */
+					Long streamSize = streamOps.size(streamKey);
+					
+					if (streamSize != null && streamSize > 0) {
+						streamUndelivered = 1L;
+					}
+				} else {
+					/*
+					 * 마지막 생성 ID와 Group의 마지막 배달 ID가 다르면
+					 * 아직 Consumer에게 전달되지 않은 메시지가 존재한다.
+					 */
+					if (!Objects.equals(issueGroup.lastDeliveredId(), lastGeneratedId)) {
+						streamUndelivered = 1L;
+					}
+					
+					// Pending Recovery Scheduler가 이 메시지를 다시 처리할 수 있으므로 Pending도 초기화 차단 대상에 포함한다.
+					Long pendingCount = issueGroup.pendingCount();
+					
+					if(pendingCount != null) {
+						streamPending = pendingCount;
+					}
+				}
 			}
 		} catch (DataAccessException e) {
 			// 검사에 실패했다는 건 "남은 게 없다"가 아니라 "남았는지 모른다"는 뜻이다.
@@ -166,31 +185,15 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 			throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
 		}
 
-		if (outboxUnpublished == 0 && streamUndelivered == 0) {
+		if (outboxUnpublished == 0 && streamUndelivered == 0 && streamPending == 0) {
 			return;
 		}
 
 		log.warn(
-				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} Outbox미발행={}",
-				couponId, streamUndelivered, outboxUnpublished
+				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} StreamPending={} Outbox미발행={}",
+				couponId, streamUndelivered, streamPending, outboxUnpublished
 		);
 		throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
-	}
-
-	/**
-	 * 회수되지 않는 pending 은 막지 않고 알리기만 한다. 재처리되지 않아 유령 발급을 만들지는 않지만,
-	 * 그만큼의 신청이 판정도 못 받고 사라졌다는 뜻이라 측정 결과를 읽을 때 감안해야 한다.
-	 */
-	private void warnIfPendingRemains(StreamInfo.XInfoGroup group) {
-		Long pending = group.pendingCount();
-
-		if (pending != null && pending > 0) {
-			log.warn(
-					"[Reset] 회수되지 않은 Stream pending 이 {}건 있다. 그만큼의 신청이 판정 없이 사라졌다는 뜻이다. "
-							+ "정리 방법은 load-test/README.md 참고.",
-					pending
-			);
-		}
 	}
 
 	/** Outbox 에 아직 Kafka 로 안 나간 건. poller 가 다음 주기에 집어 간다. */
