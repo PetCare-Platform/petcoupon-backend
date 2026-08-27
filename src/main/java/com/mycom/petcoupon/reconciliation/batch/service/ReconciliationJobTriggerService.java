@@ -1,10 +1,16 @@
 package com.mycom.petcoupon.reconciliation.batch.service;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
+
+import javax.sql.DataSource;
 
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
@@ -29,6 +35,7 @@ import com.mycom.petcoupon.reconciliation.repository.ReconciliationReportReposit
 import com.mycom.petcoupon.reconciliation.repository.VerificationDetailRepository;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * AdminReconciliationController가 쓰는 트리거 진입점. reconciliationJob(Spring Batch)을
@@ -36,6 +43,7 @@ import lombok.RequiredArgsConstructor;
  * 결과를 ReconciliationReport로 돌려준다 — 컨트롤러/응답 DTO/이미 프론트에 전달된 API 계약은
  * 그대로 두고 내부 실행 방식만 Job으로 바꾸는 것이 목적이다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReconciliationJobTriggerService {
@@ -46,17 +54,47 @@ public class ReconciliationJobTriggerService {
     private final ReconciliationReportRepository reconciliationReportRepository;
     private final VerificationDetailRepository verificationDetailRepository;
     private final ReconciliationBatchExecutionLogger batchExecutionLogger;
+    private final DataSource dataSource;
 
+    /**
+     * resolveJobParameters()는 "실행 중인지 확인 → asOfAt 결정"을 하지만 이 조회와
+     * jobOperator.start() 사이에는 원자성이 없다. 두 요청이 동시에 조회를 통과하면 각자
+     * LocalDateTime.now()로 서로 다른 asOfAt을 만들어버려서, Spring Batch의 중복 실행 방지
+     * (JobParameters 완전일치 기반 JobInstance 식별)가 둘을 아예 다른 실행으로 보고 둘 다
+     * 통과시킨다 — JobExecutionAlreadyRunningException조차 안 던져진다.
+     *
+     * MySQL 세션 락(GET_LOCK)으로 "조회~start()" 구간 전체를 couponId 단위로 직렬화한다.
+     * 대기 없이(timeout=0) 시도해서 이미 누가 잡고 있으면 즉시 REQUEST_IN_PROGRESS로 거절한다 —
+     * 기존 "실행 중" 응답과 같은 사용자 경험을 유지하기 위함이다. 세션 단위 락이라
+     * GET_LOCK/RELEASE_LOCK을 반드시 같은 Connection에서 호출해야 한다 — JPA/Hibernate는
+     * 트랜잭션마다 커넥션을 다시 빌려줄 수 있어 EntityManager로는 이를 보장 못 한다.
+     * DataSource에서 커넥션을 직접 하나 빌려 쓰는 이유다.
+     */
     public ReconciliationBatchResult reconcile(Long couponId) {
+        try (Connection lockConnection = dataSource.getConnection()) {
+            if (!tryLock(lockConnection, couponId)) {
+                throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
+            }
+
+            try {
+                return doReconcile(couponId);
+            } finally {
+                unlock(lockConnection, couponId);
+            }
+        } catch (SQLException e) {
+            throw new GeneralException(CouponErrorCode.RECONCILIATION_BATCH_FAILED);
+        }
+    }
+
+    private ReconciliationBatchResult doReconcile(Long couponId) {
         JobParameters jobParameters = resolveJobParameters(couponId);
 
         JobExecution execution;
         try {
             execution = jobOperator.start(reconciliationJob, jobParameters);
         } catch (JobInstanceAlreadyCompleteException | JobExecutionAlreadyRunningException e) {
-            // resolveJobParameters가 RUNNING은 미리 걸러내고 RESTART는 실패했던 실행의 asOfAt을
-            // 그대로 재사용하므로, 정상 경로에서는 사실상 여기 안 걸린다 — 조회와 start() 사이의
-            // 순간적인 경쟁(동시에 둘 다 조회를 통과한 경우)에 대한 마지막 방어선으로만 남겨둔다.
+            // 위 락으로 조회~start()를 직렬화한 뒤에도 남겨두는 마지막 방어선이다 — 배치
+            // 메타데이터에 남은 이전 실행 흔적과의 경합 등 락만으로 못 막는 경우를 대비한다.
             throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
         } catch (InvalidJobParametersException | JobRestartException e) {
             // JobParametersValidator나 non-restartable Step을 안 쓰는 지금 구성에선 실질적으로
@@ -74,6 +112,35 @@ public class ReconciliationJobTriggerService {
 
         batchExecutionLogger.log(execution, null);
         throw resolveFailureException(execution);
+    }
+
+    // couponId별로 락 이름을 나눠서 다른 쿠폰의 실행은 서로 안 막는다. 대기하지 않는다
+    // (timeout=0) — 이미 실행 중이면 기다리게 하지 않고 즉시 거절하는 게 기존 "실행 중"
+    // 응답과 일관된다.
+    private boolean tryLock(Connection connection, Long couponId) throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT GET_LOCK(?, 0)")) {
+            ps.setString(1, lockName(couponId));
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getInt(1) == 1;
+            }
+        }
+    }
+
+    // 락은 반드시 잡았던 것과 같은 Connection에서 풀어야 한다 — 세션 단위 락이기 때문이다.
+    // 여기서 실패하면(드묾) 커넥션이 풀에 반환된 뒤 재사용되면서 세션이 이어지므로 락이 그
+    // 세션에 남을 수 있다 — 그렇다고 이번 요청 자체를 실패시키지는 않고 로그만 남긴다.
+    private void unlock(Connection connection, Long couponId) {
+        try (PreparedStatement ps = connection.prepareStatement("SELECT RELEASE_LOCK(?)")) {
+            ps.setString(1, lockName(couponId));
+            ps.executeQuery();
+        } catch (SQLException e) {
+            log.warn("[Reconciliation] couponId={} 락 해제 실패", couponId, e);
+        }
+    }
+
+    private String lockName(Long couponId) {
+        return "reconciliation:coupon:" + couponId;
     }
 
     // asOfAt을 무조건 LocalDateTime.now()로 새로 만들면 이 couponId로 두 번 다시 같은

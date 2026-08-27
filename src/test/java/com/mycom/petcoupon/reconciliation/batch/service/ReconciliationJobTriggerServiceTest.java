@@ -4,6 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -216,6 +223,44 @@ class ReconciliationJobTriggerServiceTest {
         } finally {
             removeBatchExecution(plantedExecutionId);
         }
+    }
+
+    // resolveJobParameters()의 "실행 중인지 확인 → asOfAt 결정"과 jobOperator.start() 사이에
+    // 원자성이 없으면, 두 스레드가 동시에 조회를 통과해 각자 다른 asOfAt으로 서로 다른
+    // JobParameters를 만들어 둘 다 실행돼버린다(JobExecutionAlreadyRunningException도 안 던져짐).
+    // CyclicBarrier로 두 스레드를 같은 순간에 reconcile() 진입점까지 밀어넣어 이 경합을 실제로
+    // 재현하고, 락(GET_LOCK)이 정확히 하나만 통과시키는지 확인한다.
+    @Test
+    void 동시_요청_두_개가_들어오면_하나만_통과하고_나머지는_즉시_거절된다() throws InterruptedException {
+        int threadCount = 2;
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+
+        List<Future<ReconciliationBatchResult>> futures = new ArrayList<>();
+        for (int i = 0; i < threadCount; i++) {
+            futures.add(executor.submit(() -> {
+                barrier.await();
+                return reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+            }));
+        }
+
+        int succeeded = 0;
+        int rejected = 0;
+        for (Future<ReconciliationBatchResult> future : futures) {
+            try {
+                future.get();
+                succeeded++;
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                assertThat(cause).isInstanceOf(GeneralException.class);
+                assertThat(((GeneralException) cause).getErrorCode()).isEqualTo(CouponErrorCode.REQUEST_IN_PROGRESS);
+                rejected++;
+            }
+        }
+        executor.shutdown();
+
+        assertThat(succeeded).isEqualTo(1);
+        assertThat(rejected).isEqualTo(1);
     }
 
     // ReconciliationJobStateLookupTest와 같은 방식으로 BATCH_JOB_* 테이블에 STARTED 상태인
