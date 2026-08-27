@@ -73,6 +73,8 @@ curl -X POST localhost:8080/admin/coupons/1/reconcile \
 > Redis 키(`stock`, `applicants`, `sequence`, `request-sequence`)도 이 API가 함께 정리한다(#88). 신청자·순번 키는 삭제하고 재고 키는 지정 수량으로 다시 채운다. 응답의 `redisStock`은 초기화 후 Redis 에서 다시 읽은 값이라, `totalQuantity`와 다르면 초기화가 덜 끝난 것이다.
 >
 > 앞 회차 메시지가 파이프라인에 남아 있으면 `409 COUPON409-8`로 거절한다. 남은 메시지가 뒤늦게 처리되며 이번 회차 재고를 깎기 때문이다. 큐가 빌 때까지 기다린 뒤 다시 호출한다.
+>
+> ⚠️ **발급 시나리오는 이 API를 부르지 않으면 아예 진행되지 않는다.** Lua 는 MySQL 이 아니라 Redis 의 `coupon:issue:stock` 키를 보고 재고를 판정하는데, 지금 이 키를 채우는 곳은 이 초기화 API 하나뿐이다 — 관리자 쿠폰 생성이나 `READY → ACTIVE` 스케줄러는 Redis 를 건드리지 않는다. 키가 없으면 Lua 가 `STOCK_NOT_INITIALIZED` 를 내고 Consumer 가 ACK 하지 않아, 신청은 `202` 로 접수되지만 확정이 영원히 안 난다. **쿠폰을 새로 만들었다면 발급을 걸기 전에 반드시 한 번 호출한다.**
 
 ## 3. 시나리오 목록
 
@@ -81,7 +83,7 @@ curl -X POST localhost:8080/admin/coupons/1/reconcile \
 | 담당 | 시나리오 | 개수 |
 | --- | --- | --- |
 | 전송흔 | TC-01 ~ 06, TC-20 ~ 29 | 16 |
-| 박신형 | TC-11 ~ 12, TC-34 ~ 37, TC-45 ~ 46, TC-50 ~ 54, TC-57 ~ 66, TC-85 | 24 |
+| 박신형 | TC-11 ~ 12, TC-34 ~ 37, TC-45 ~ 46, TC-50 ~ 54, TC-57 ~ 62, TC-64 ~ 66, TC-85 | 23 |
 | 박수빈 | TC-31 ~ 32, TC-40 ~ 42, TC-44, TC-90 ~ 91, TC-93 ~ 94 | 10 |
 | 이성집 | TC-07 ~ 10, TC-13 ~ 17, TC-30, TC-33, TC-38, TC-43 | 13 |
 | 정자비 | TC-71 ~ 79, TC-95 | 10 |
@@ -197,12 +199,14 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-60 | 정합성 검증 배치 — 중복 발급 탐지 (DUPLICATE_ISSUE) | 동일 유저·쿠폰 중복 발급 건을 만든 후 실행 | `verification_detail`에 DUPLICATE_ISSUE 기록 | 박신형 |
 | TC-61 | 정합성 검증 배치 — 재현성 | 같은 `asOfAt`으로 재실행 | 이전 실행과 동일한 결과 | 박신형 |
 | TC-62 | 정합성 검증 배치 — 재고 불일치 탐지 (STOCK_MISMATCH) | 재고 수량과 실제 발급 건수가 안 맞는 상황을 만든 후 실행 | `verification_detail`에 STOCK_MISMATCH 기록 | 박신형 |
-| TC-63 | 정합성 검증 배치 — 중복 소비 탐지 (DUPLICATE_CONSUME) | 동일 Kafka 메시지 중복 소비 상황을 재현한 후 실행 | `verification_detail`에 DUPLICATE_CONSUME 기록 | 박신형 |
+| TC-63 | (결번 — DUPLICATE_CONSUME 타입 삭제) |  |  |  |
 | TC-64 | 정합성 검증 배치 — 순번 결번 탐지 (SEQUENCE_GAP) | sequence_no 결번·중복 상황을 만든 후 실행 | `verification_detail`에 SEQUENCE_GAP 기록 | 박신형 |
 | TC-65 | 정합성 검증 배치 — 재고 미복구 탐지 (STOCK_NOT_RESTORED) | `abandon` 확정 건(`ABANDONED`)의 재고 보상 누락 상황을 재현한 후 실행 | `verification_detail`에 STOCK_NOT_RESTORED 기록 | 박신형 |
 | TC-66 | 정합성 검증 배치 트리거 | `POST /admin/coupons/{couponId}/reconcile` (`X-ADMIN-KEY` 필요) | 즉시 실행되고 리포트가 생성됨 | 박신형 |
 
-> TC-62 ~ TC-65는 배치의 2단계 검증인데 **아직 미구현이다** — 지금 배치가 탐지하는 건 HISTORY_MISMATCH · INVALID_STATUS · DUPLICATE_ISSUE 3종뿐이다(§7 참고). TC-66의 트리거 API는 #103으로 반영돼 실행 가능하다.
+> TC-62 · TC-64 · TC-65는 배치의 2단계 검증이다. **#111로 구현돼 전부 실행 가능하다** — 배치가 탐지하는 오류 타입은 HISTORY_MISMATCH · INVALID_STATUS · DUPLICATE_ISSUE · STOCK_MISMATCH · SEQUENCE_GAP · STOCK_NOT_RESTORED 6종이다. TC-66의 트리거 API는 #103으로 반영됐다.
+>
+> **TC-63은 결번이다.** DUPLICATE_CONSUME은 "같은 Kafka 메시지를 두 번 소비해 발급이 두 건 생긴다"를 잡으려던 타입인데, `coupon_issue`의 `request_id` 유니크 제약이 애초에 두 번째 저장을 막아서 이 상태가 만들어지지 않는다. 발생할 수 없는 것을 탐지하는 코드를 두면 매번 도는 배치에 빈 쿼리만 하나 늘어나므로 #111에서 타입 자체를 지웠다. 중복 소비가 실제로 막히는지는 **TC-75(Consumer 중복 전달 멱등)** 가 본다.
 >
 > **TC-66은 관리자 API라 토큰이 필요하다.** 나머지 D 구간은 SQL 조회와 데이터 조작이라 토큰과 무관하다.
 
@@ -382,10 +386,7 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 
 | 항목 | 현재 상태 | 영향 범위 |
 | --- | --- | --- |
-| **Redis 재고 초기화 주체** | **미구현** — Lua 재고 차감은 머지됐으나, 쿠폰이 열릴 때 재고 키를 세팅하는 코드가 없다. 지금은 부하 테스트 초기화 API나 수동 `SET`으로만 채워진다 | TC-05, TC-16 ~ TC-17, TC-54 |
-| 개인정보 마스킹 | 미착수 — `notification_log.recipient_masked`에 지금은 원본이 들어간다 | TC-84 |
-| 발급 이력 300만 더미데이터 | 스크립트 작성 완료, 머지 대기 | TC-81 ~ TC-83, TC-85 |
-| 정합성 검증 2단계<br>- STOCK_MISMATCH<br>- DUPLICATE_CONSUME<br>- SEQUENCE_GAP<br>- STOCK_NOT_RESTORED | 미구현 — 배치가 탐지하는 건 HISTORY_MISMATCH · INVALID_STATUS · DUPLICATE_ISSUE 3종뿐이다 | TC-62 ~ TC-65 |
+| 발급 이력 300만 더미데이터 | 스크립트는 #98로 머지됨. **아직 실행한 적이 없다** — 적재를 돌려야 한다 | TC-81 ~ TC-83, TC-85 |
 
 ### 해소된 항목
 
@@ -402,4 +403,7 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 | DLQ Consumer · 수동 재발행 | #75 — TC-77 ~ TC-79 |
 | Redis 재고 보상(restore) | `CouponIssueLuaService.restoreStock()` 구현됨 |
 | DLQ 재처리 포기(abandon) | #132 — `POST /admin/coupon-issue/dlq/{messageId}/abandon`. TC-95 |
+| 개인정보 마스킹 | #142 — `PiiMasker`가 `notification_log.recipient_masked`에 마스킹해서 저장한다. TC-84 |
+| 쿠폰 SOLD_OUT 전이 | #145 — 재고 소진 시 `coupon.status`가 SOLD_OUT으로 전이된다 |
+| 정합성 검증 2단계 (STOCK_MISMATCH · SEQUENCE_GAP · STOCK_NOT_RESTORED) | #111 — 배치가 6종을 전부 탐지한다. TC-62 · TC-64 · TC-65 |
 | 관리자 인증 | #91 — `/admin/**`에 `X-ADMIN-KEY` 필요 |
