@@ -41,11 +41,12 @@ class PiiMaskerTest {
 		}
 
 		@ParameterizedTest
-		@ValueSource(strings = {"123456", "12-345"})
-		@DisplayName("숫자가 7자리 미만이면 전부 가린다")
+		@ValueSource(strings = {"1234567", "123-4567", "123456", "12-345"})
+		@DisplayName("숫자가 8자리 미만이면 전부 가린다")
 		void 너무_짧으면_전부_가린다(String raw) {
-			// 앞 3 + 뒤 4 를 동시에 남길 수 없다. 남길 자리를 줄이면
-			// 짧은 번호일수록 더 많이 드러나는 역전이 생기므로 전부 가린다.
+			// 7자리가 경계다. 앞 3 + 뒤 4 가 정확히 맞아떨어져 가릴 구간이 비어버리는 탓에
+			// 조건이 8이 아니면 원본이 통째로 그대로 나간다.
+			// 그렇다고 남길 자리를 줄이면 짧은 번호일수록 더 많이 드러나는 역전이 생긴다.
 			assertThat(PiiMasker.maskPhone(raw)).doesNotContainPattern("[0-9]");
 		}
 

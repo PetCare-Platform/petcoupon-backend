@@ -37,8 +37,9 @@ public final class PiiMasker {
 	 * <p>구분자(-)의 위치는 원본을 그대로 따른다. 숫자만 세어 가릴 구간을 정하므로
 	 * 하이픈이 있든 없든 같은 자리가 남는다.
 	 *
-	 * <p>숫자가 8자리 미만이면 앞 3자리와 뒤 4자리를 동시에 남길 수 없어 전부 가린다.
-	 * 남길 자리를 억지로 줄이면 짧은 번호일수록 더 많이 드러나는 역전이 생긴다.
+	 * <p>숫자가 8자리 미만이면 전부 가린다. 특히 7자리는 앞 3 + 뒤 4 가 정확히 맞아떨어져
+	 * 가릴 자리가 하나도 남지 않는다 — 부분만 드러나는 게 아니라 원본이 그대로 나가버린다.
+	 * 그렇다고 남길 자리를 억지로 줄이면 짧은 번호일수록 더 많이 드러나는 역전이 생긴다.
 	 */
 	public static String maskPhone(String phone) {
 		if (isBlank(phone)) {
@@ -47,7 +48,7 @@ public final class PiiMasker {
 
 		int digitCount = countDigits(phone);
 
-		if (digitCount < 7) {
+		if (digitCount < 8) {
 			return maskAllDigits(phone);
 		}
 
