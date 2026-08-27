@@ -2,6 +2,7 @@ package com.mycom.petcoupon.reconciliation.controller;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,8 +24,10 @@ import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationBatchResult;
 import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationJobTriggerService;
 import com.mycom.petcoupon.reconciliation.converter.ReconciliationConverter;
+import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationReportSummaryResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationTriggerResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.VerificationDetailResponse;
+import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
 import com.mycom.petcoupon.reconciliation.entity.enums.ReconciliationResult;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
 
@@ -132,5 +135,44 @@ class AdminReconciliationControllerTest {
                 .andExpect(jsonPath("$.isSuccess").value(false))
                 .andExpect(jsonPath("$.code").value("COUPON404-0"))
                 .andExpect(jsonPath("$.message").value("존재하지 않는 쿠폰입니다."));
+    }
+
+    // 이력 목록(#154) — 기본 limit(30)이 그대로 서비스에 전달되는지, 응답이 최신순 그대로
+    // 담기는지 확인한다.
+    @Test
+    void listReconciliationReportsReturnsHistoryWithDefaultLimit() throws Exception {
+        ReconciliationReport latest = mock(ReconciliationReport.class);
+        ReconciliationReportSummaryResponse latestResponse = ReconciliationReportSummaryResponse.builder()
+                .reportId(11L)
+                .couponId(COUPON_ID)
+                .asOfAt(LocalDateTime.of(2026, 8, 26, 12, 0))
+                .result(ReconciliationResult.MISMATCHED)
+                .totalCount(100L)
+                .successCount(98L)
+                .errorCount(2L)
+                .build();
+
+        when(reconciliationJobTriggerService.listHistory(COUPON_ID, 30)).thenReturn(List.of(latest));
+        when(reconciliationConverter.toSummaryResponse(latest)).thenReturn(latestResponse);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.result[0].reportId").value(11L))
+                .andExpect(jsonPath("$.result[0].result").value("MISMATCHED"))
+                .andExpect(jsonPath("$.result[0].errorCount").value(2))
+                .andExpect(jsonPath("$.result[0].verificationDetails").doesNotExist());
+    }
+
+    // limit 쿼리 파라미터가 실제로 서비스 호출에 그대로 전달되는지 확인한다.
+    @Test
+    void listReconciliationReportsPassesLimitQueryParamToService() throws Exception {
+        when(reconciliationJobTriggerService.listHistory(COUPON_ID, 5)).thenReturn(List.of());
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result").isArray())
+                .andExpect(jsonPath("$.result").isEmpty());
     }
 }

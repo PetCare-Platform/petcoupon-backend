@@ -270,6 +270,35 @@ class ReconciliationJobTriggerServiceTest {
         assertThat(second.report().getAsOfAt()).isAfter(first.report().getAsOfAt());
     }
 
+    // 이력 목록(#154) — 트리거 응답은 그 순간에만 볼 수 있고, 나중에 다시 조회할 방법이
+    // 없었다. 같은 쿠폰을 두 번 트리거해 리포트 2건을 만든 뒤, listHistory()가 최신순(asOfAt
+    // DESC)으로 돌려주는지 확인한다.
+    @Test
+    void listHistory는_리포트를_최신순으로_반환한다() {
+        ReconciliationBatchResult first = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+        ReconciliationBatchResult second = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+
+        List<ReconciliationReport> history =
+                reconciliationJobTriggerService.listHistory(endedCoupon.getCouponId(), 10);
+
+        assertThat(history).hasSize(2);
+        assertThat(history.get(0).getReportId()).isEqualTo(second.report().getReportId());
+        assertThat(history.get(1).getReportId()).isEqualTo(first.report().getReportId());
+    }
+
+    // 리포트가 계속 쌓여도 그래프/대시보드가 요청한 만큼만 가져오는지 — limit이 실제로
+    // Pageable에 반영되는지 확인한다.
+    @Test
+    void listHistory는_limit만큼만_반환한다() {
+        reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+        reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+
+        List<ReconciliationReport> history =
+                reconciliationJobTriggerService.listHistory(endedCoupon.getCouponId(), 1);
+
+        assertThat(history).hasSize(1);
+    }
+
     @Test
     void 이미_실행_중인_쿠폰에_트리거하면_Job을_시작하지_않고_바로_거절한다() {
         long plantedExecutionId = plantRunningExecution(endedCoupon.getCouponId());
