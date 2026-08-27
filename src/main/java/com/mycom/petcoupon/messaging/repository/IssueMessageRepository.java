@@ -150,8 +150,23 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// status를 커밋하고 그 다음에 restoreStock()을 호출하는 구조라, restoreStock()이 실패해도
 	// status는 이미 ABANDONED로 남는다. 이 컬럼이 null인 ABANDONED 건만 정합성 검증 배치
 	// (stockNotRestoredReader)가 "미복구"로 잡는다.
+	//
+	// stockRestoredAt IS NULL 조건을 건다 — restoreStock() 성공 직후, 이 UPDATE 전에 앱이
+	// 죽는 등으로 기록이 누락되면 CouponIssueDlqReprocessServiceImpl.abandon()이 재시도로
+	// 다시 이 메서드를 부르는데, 그때 이미 기록된 최초 복구 시각을 재호출 시각으로 덮어쓰지
+	// 않기 위함이다.
 	@Transactional
 	@Modifying(clearAutomatically = true)
-	@Query("UPDATE IssueMessage im SET im.stockRestoredAt = :restoredAt WHERE im.messageId = :messageId")
-	int markStockRestored(@Param("messageId") Long messageId, @Param("restoredAt") LocalDateTime restoredAt);
+	@Query("""
+			UPDATE IssueMessage im
+			   SET im.stockRestoredAt = :restoredAt
+			 WHERE im.messageId = :messageId
+			   AND im.status = :expectedStatus
+			   AND im.stockRestoredAt IS NULL
+			""")
+	int markStockRestored(
+			@Param("messageId") Long messageId,
+			@Param("restoredAt") LocalDateTime restoredAt,
+			@Param("expectedStatus") IssueMessageStatus expectedStatus
+	);
 }
