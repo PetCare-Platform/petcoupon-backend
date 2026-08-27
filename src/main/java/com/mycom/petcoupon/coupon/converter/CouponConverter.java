@@ -74,7 +74,6 @@ public class CouponConverter {
 				.totalQuantity(couponStock.getTotalQuantity())
 				.issuedQuantity(couponStock.getIssuedQuantity())
 				.remainingQuantity(couponStock.getRemainingQuantity())
-				.stockUpdatedAt(couponStock.getUpdatedAt())
 				.build();
 	}
 

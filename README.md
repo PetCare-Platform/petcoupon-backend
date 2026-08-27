@@ -189,7 +189,11 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 목록과 단건은 재고의 출처가 다르다. 목록은 Kafka 소비까지 끝난 **확정 발급 현황**(`coupon_stock`)이라
 발급이 몰리는 동안에는 실시간 잔여와 어긋난다. 실시간 값이 필요하면 단건 조회를 쓴다.
 목록에서 쿠폰마다 Redis를 읽으면 20건 목록에 왕복이 20회 생기고, 쿠폰 한 건의 정합성 오류가
-페이지 전체를 실패시키기 때문이다. 그래서 목록에는 그 수치의 기준 시각(`stockUpdatedAt`)을 함께 싣는다.
+페이지 전체를 실패시키기 때문이다.
+
+재고 갱신 시각은 목록에 싣지 않는다. 발급 확정에 쓰는 `increaseIssuedQuantity`가 벌크 UPDATE라
+`coupon_stock.updated_at`이 갱신되지 않아, 수량이 바뀌어도 그 시각은 쿠폰 생성 또는 총수량 수정
+시점에 머문다. 기준 시각으로 오해할 값이라 갱신 경로를 고친 뒤에 추가한다.
 
 ```bash
 curl -s "localhost:8080/admin/coupons?eventId=1&status=ACTIVE&page=0&size=20" -H "X-ADMIN-KEY: {발급받은_토큰}"
