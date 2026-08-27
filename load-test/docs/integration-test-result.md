@@ -48,10 +48,10 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | B. 예외 흐름 | 19 | 19 | 0 | 0 | 0 |
 | C. 경계·동시성 | 7 | 5 | 0 | 0 | 2 |
 | D. 배치·정합성 | 16 | 14 | 0 | 0 | 2 |
-| E. 비동기 확정 | 10 | 0 | 0 | 0 | 10 |
+| E. 비동기 확정 | 10 | 8 | 0 | 0 | 2 |
 | F. 대량 데이터 | 6 | 0 | 0 | 0 | 6 |
 | G. 순서 보장 | 5 | 2 | 0 | 0 | 3 |
-| **합계** | **80** | **40** | **0** | **0** | **40** |
+| **합계** | **80** | **48** | **0** | **0** | **32** |
 
 > TC-63 · TC-70은 결번이라 집계에서 뺐다.
 
@@ -142,16 +142,16 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 | TC | 시나리오 | 결과 | 근거 |
 | --- | --- | --- | --- |
-| TC-71 | Consumer 정상 처리 | — | |
-| TC-72 | Consumer 일시 실패 후 재시도 | — | |
-| TC-73 | 재시도 최종 실패 → DLQ 적재 | — | |
-| TC-74 | Kafka 발행 자체 실패 | — | |
-| TC-75 | Consumer 중복 전달 (멱등) | — | |
-| TC-76 | 처리 전 앱 종료 후 재기동 | — | |
-| TC-77 | DLQ 목록 조회 | — | |
-| TC-78 | DLQ 수동 재발행 | — | |
-| TC-79 | DLQ 재발행 — 중복·잘못된 요청 방어 | — | 동시 재발행 검증 테스트가 없어 이 회차에서 실제 확인 필요 |
-| TC-95 | 관리자 DLQ 포기(abandon) → 재고 보상 | — | |
+| TC-71 | Consumer 정상 처리 | ✅ | 발급 10건 전건 ISSUED · 순번 1~10 · Outbox 전건 `CONSUMED` · Kafka LAG 0 |
+| TC-72 | Consumer 일시 실패 후 재시도 | ✅ | TC-73 과정에서 확인 — 재시도 후 `retry_count` 증가, 중복 저장 없음 (§5 참고) |
+| TC-73 | 재시도 최종 실패 → DLQ 적재 | ✅ | `coupon_stock` 행 제거로 저장 실패 유도 → `status=DLQ`. **Redis 재고 복구 안 됨**(의도된 설계) |
+| TC-74 | Kafka 발행 자체 실패 | — | Kafka 중단이 필요해 별도 회차로 미룸 |
+| TC-75 | Consumer 중복 전달 (멱등) | ✅ | 같은 `requestId` 2회 전달 → `coupon_issue` 1건만, `issued_quantity` 1 유지, 500 없음 |
+| TC-76 | 처리 전 앱 종료 후 재기동 | — | 앱 강제 종료가 필요해 별도 회차로 미룸 |
+| TC-77 | DLQ 목록 조회 | ✅ | `messageId`·`requestId`·`retryCount`·`lastError` 포함. 토큰 없으면 401 |
+| TC-78 | DLQ 수동 재발행 | ✅ | 원인(재고 행) 제거 후 재발행 → `CONSUMED`, `coupon_issue` 1건 추가, `issued_quantity` 0→1 |
+| TC-79 | DLQ 재발행 — 중복·잘못된 요청 방어 | ✅ | ① 동시 5요청 → **200 × 1 / `COUPON409-7` × 4** ② DLQ 아닌 건 → `COUPON409-7` ③ 없는 ID → `COUPON404-3` |
+| TC-95 | 관리자 DLQ 포기(abandon) → 재고 보상 | ✅ | `restoreStatus=RESTORED` · Redis 재고 2→3 · applicants 3→2 · `status=ABANDONED` |
 
 ### F. 대량 데이터·개인정보 — TC-80 ~ TC-85
 
@@ -235,6 +235,20 @@ TC-50 ~ TC-53의 **만료 배치는 외부에서 수동 실행할 방법이 없�
 
 발급 50만 건 쿠폰(`SEED-쿠폰-2`) 1건 검증에 **약 70초**가 걸렸다. TC-85(전체 쿠폰 커버리지)는 SEED 쿠폰 6개 × 50만이라 단순 합산으로 **7분 안팎**을 예상해야 한다.
 
+### ✅ TC-79 ① — 동시 재발행이 실제로 1건만 통과한다
+
+리뷰에서 "`retryCount` 조건부 증가만으로는 동시 재발행을 1회로 제한할 수 없다"는 지적이 있었으나, 실제 동시 5요청 결과는 **200 한 건 · `COUPON409-7` 네 건**이었다.
+
+`UPDATE ... WHERE message_id = ? AND status = 'DLQ' AND retry_count = ?` 가 CAS 라, 다섯 요청이 같은 `retryCount` 를 읽고 들어와도 행 잠금이 직렬화해서 첫 건만 1행을 갱신한다.
+
+다만 **순차 재요청은 여전히 막지 않는다.** 재발행 성공 후에도 상태가 `DLQ` 로 남아, 원인을 안 고친 채 다시 누르면 `retry_count` 만 오르며 또 선점된다(실제로 1→3 으로 올랐다). 이중 발급은 `coupon_issue.request_id` 유니크가 막는다.
+
+### DLQ 결함 주입 방법 — 순서가 중요하다
+
+`coupon_stock` 행을 지워 `increaseIssuedQuantity()` 가 0행을 반환하게 만드는 방식이 가장 깔끔했다. FK 를 건드리지 않으면서 저장만 실패시킨다.
+
+**단, 요청을 보낸 뒤에 지우면 늦다.** 파이프라인이 1~2초 안에 저장을 끝내버려서 첫 시도가 `CONSUMED` 로 성공했다. **재고 행을 먼저 지우고 요청해야** DLQ 로 간다.
+
 ### ⚠️ 판정 시 주의 — `errorCount` 와 `result` 는 다른 것을 센다
 
 `errorCount` 는 **발급 건 단위** 오류만 센다. 쿠폰 단위 오류(`STOCK_MISMATCH` · `SEQUENCE_GAP`)는 `errorCount` 에 안 잡힌다.
@@ -253,11 +267,12 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 | 300만 건 적재 | ✅ (2026-08-27, §5 참고) |
 | B 구간 전건 통과 | ✅ 19/19 |
 | D 구간 | ✅ 14/16 (TC-56 · TC-65 보류) |
-| A·E·F 구간 전건 통과 | 미실행 |
+| E 구간 | ✅ 8/10 (TC-74 · TC-76 보류) |
+| A·F 구간 전건 통과 | 미실행 |
 | 멱등키 확정 누락 수정 | 미머지 — TC-08 · 13~15 · 43이 막혀 있다 |
 
 **판정** — 보류. 남은 조건은 세 가지다.
 
 1. `fix/idempotency-persist-issue-message` 머지 (A 구간 상당수가 여기 걸려 있다)
-2. A·E·F 구간 실행
-3. 보류 2건 — TC-56(`prod` 프로파일 기동), TC-65(`fix/149-stock-not-restored-abandon` 머지)
+2. A·F 구간 실행
+3. 보류 4건 — TC-56(`prod` 프로파일 기동) · TC-65(`fix/149-stock-not-restored-abandon` 머지) · TC-74(Kafka 중단) · TC-76(앱 강제 종료)
