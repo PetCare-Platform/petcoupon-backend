@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.service.CouponIssueDlqReprocessService;
@@ -30,5 +31,10 @@ public class CouponIssueDlqAdminController {
 	@PostMapping("/{messageId}/reprocess")
 	public CustomResponse<CouponIssueDlqReprocessResponse> reprocess(@PathVariable("messageId") Long messageId) {
 		return CustomResponse.onSuccess(couponIssueDlqReprocessService.reprocess(messageId));
+	}
+
+	@PostMapping("/{messageId}/abandon")
+	public CustomResponse<CouponIssueDlqAbandonResponse> abandon(@PathVariable("messageId") Long messageId) {
+		return CustomResponse.onSuccess(couponIssueDlqReprocessService.abandon(messageId));
 	}
 }

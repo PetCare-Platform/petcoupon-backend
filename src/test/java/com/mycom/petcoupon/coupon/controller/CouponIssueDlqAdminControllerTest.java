@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -80,6 +81,36 @@ class CouponIssueDlqAdminControllerTest {
 				.thenThrow(new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
 
 		mockMvc.perform(post("/admin/coupon-issue/dlq/{messageId}/reprocess", 1L))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COUPON404-3"));
+	}
+
+	@Test
+	void abandon는_재고_복구_결과를_반환한다() throws Exception {
+		CouponIssueDlqAbandonResponse response = CouponIssueDlqAbandonResponse.builder()
+				.messageId(1L)
+				.requestId("request-1")
+				.restoreStatus("RESTORED")
+				.remainingStock(9)
+				.build();
+
+		when(couponIssueDlqReprocessService.abandon(1L)).thenReturn(response);
+
+		mockMvc.perform(post("/admin/coupon-issue/dlq/{messageId}/abandon", 1L))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true))
+				.andExpect(jsonPath("$.result.messageId").value(1L))
+				.andExpect(jsonPath("$.result.restoreStatus").value("RESTORED"))
+				.andExpect(jsonPath("$.result.remainingStock").value(9));
+	}
+
+	@Test
+	void abandon는_DLQ_메시지가_없으면_404를_반환한다() throws Exception {
+		when(couponIssueDlqReprocessService.abandon(1L))
+				.thenThrow(new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
+
+		mockMvc.perform(post("/admin/coupon-issue/dlq/{messageId}/abandon", 1L))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.isSuccess").value(false))
 				.andExpect(jsonPath("$.code").value("COUPON404-3"));

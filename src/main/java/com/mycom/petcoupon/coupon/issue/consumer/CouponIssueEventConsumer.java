@@ -76,9 +76,9 @@ public class CouponIssueEventConsumer {
 				couponIssuePersister.markConsumed(event.requestId());
 			} else {
 				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요.
-				// 다만 여기서 즉시 복구하지 않는다 — 이 메시지도 결국 DLQ로 전이되고 관리자가 수동 재처리(reprocess)로
+				// 다만 여기서 즉시 복구하지 않는다 — 이 메시지도 결국 DLQ로 전이되고 관리자가 reprocess API로
 				// 다시 살릴 수 있어, 즉시 복구하면 나중에 재처리가 성공했을 때 초과발급으로 이어질 수 있다.
-				// TODO: 재고 복구는 관리자가 재처리를 포기하기로 결정한 시점에만 실행돼야 한다 — 그 결정 지점 연결 대기
+				// 재고 복구는 관리자가 abandon API로 재처리를 포기했을 때만 실행된다.
 				// 여기서 삼키면 오프셋이 정상 커밋돼 재시도/DLQ 경로를 아예 안 타므로 재전파해서 그 경로를 타게 함
 				throw e;
 			}
