@@ -299,6 +299,17 @@ class ReconciliationJobTriggerServiceTest {
         assertThat(history).hasSize(1);
     }
 
+    // PR #155 리뷰 반영 — 존재하지 않는 쿠폰이면 빈 배열이 아니라 reconcile()과 동일하게
+    // COUPON_NOT_FOUND를 던져야 한다. 그래야 "이력이 아직 없다"와 "쿠폰 자체가 없다"를
+    // 호출하는 쪽이 구분할 수 있다.
+    @Test
+    void listHistory는_존재하지_않는_쿠폰이면_COUPON_NOT_FOUND를_던진다() {
+        assertThatThrownBy(() -> reconciliationJobTriggerService.listHistory(-1L, 10))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
+    }
+
     @Test
     void 이미_실행_중인_쿠폰에_트리거하면_Job을_시작하지_않고_바로_거절한다() {
         long plantedExecutionId = plantRunningExecution(endedCoupon.getCouponId());

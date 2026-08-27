@@ -164,6 +164,19 @@ class AdminReconciliationControllerTest {
                 .andExpect(jsonPath("$.result[0].verificationDetails").doesNotExist());
     }
 
+    // PR #155 리뷰 반영 — 존재하지 않는 쿠폰이면 서비스가 던지는 COUPON_NOT_FOUND가 그대로
+    // 404로 응답되는지 확인한다(reconcile()과 동일한 에러 계약).
+    @Test
+    void listReconciliationReportsReturnsCouponNotFound() throws Exception {
+        when(reconciliationJobTriggerService.listHistory(COUPON_ID, 30))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
+    }
+
     // limit 쿼리 파라미터가 실제로 서비스 호출에 그대로 전달되는지 확인한다.
     @Test
     void listReconciliationReportsPassesLimitQueryParamToService() throws Exception {
@@ -174,5 +187,49 @@ class AdminReconciliationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result").isArray())
                 .andExpect(jsonPath("$.result").isEmpty());
+    }
+
+    // PR #155 리뷰 반영 — limit이 0 이하면 PageRequest.of(0, limit)이 IllegalArgumentException을
+    // 던지는데, 검증 없이는 그게 그대로 500으로 나갔다. 컨트롤러가 직접 체크해 400을 주는지 확인한다.
+    @Test
+    void listReconciliationReportsRejectsZeroOrNegativeLimitWith400() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "-1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
+    // limit 상한(100) 초과 시 400을 받는지 확인한다 — 상한 없이는 과도하게 큰 값도 그대로
+    // 서비스에 넘어갔다.
+    @Test
+    void listReconciliationReportsRejectsLimitOver100With400() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "101"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+    }
+
+    // 경계값(1, 100)은 거부되면 안 된다 — limit < 1 || limit > 100 조건의 등호가 실수로
+    // 뒤바뀌었으면(<=, >=) 이 테스트가 잡아낸다.
+    @Test
+    void listReconciliationReportsAcceptsBoundaryLimits() throws Exception {
+        when(reconciliationJobTriggerService.listHistory(COUPON_ID, 1)).thenReturn(List.of());
+        when(reconciliationJobTriggerService.listHistory(COUPON_ID, 100)).thenReturn(List.of());
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "1"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/reconciliation-reports", COUPON_ID)
+                        .param("limit", "100"))
+                .andExpect(status().isOk());
     }
 }
