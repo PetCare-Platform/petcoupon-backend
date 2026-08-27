@@ -160,15 +160,17 @@ class IssueMessageRepositoryTest {
 		entityManager.persist(consumed1);
 		IssueMessage consumed2 = IssueMessage.pending(coupon, 21L, 21L, "throughput-consumed-2", "{}");
 		entityManager.persist(consumed2);
-		IssueMessage failed = IssueMessage.pending(coupon, 22L, 22L, "throughput-failed-1", "{}");
-		entityManager.persist(failed);
+		// failedCount는 최종 실패(DLQ/ABANDONED)만 세고 재시도 대기중인 FAILED는 안 세므로,
+		// DLQ로 넣어야 이 케이스가 failedCount에 잡힌다(PR 리뷰 반영).
+		IssueMessage dlq = IssueMessage.pending(coupon, 22L, 22L, "throughput-dlq-1", "{}");
+		entityManager.persist(dlq);
 		entityManager.flush();
 
 		issueMessageRepository.updateStatus(consumed1.getMessageId(), IssueMessageStatus.CONSUMED);
 		issueMessageRepository.updateStatus(consumed2.getMessageId(), IssueMessageStatus.CONSUMED);
-		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test failed");
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
 
-		for (IssueMessage message : List.of(consumed1, consumed2, failed)) {
+		for (IssueMessage message : List.of(consumed1, consumed2, dlq)) {
 			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
 					.setParameter("bucketTime", bucketTime)
 					.setParameter("id", message.getMessageId())
@@ -183,6 +185,37 @@ class IssueMessageRepositoryTest {
 
 		assertThat(issuedAfter - issuedBefore).isEqualTo(2L);
 		assertThat(failedAfter - failedBefore).isEqualTo(1L);
+	}
+
+	// FAILED는 Outbox Poller가 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가
+	// 아니다 — failedCount에 잡히면 안 된다(PR #156 리뷰 반영). issuedCount에도 당연히 안 잡힌다.
+	@Test
+	void findThroughputByHour는_재시도_대기중인_FAILED를_실패로_세지_않는다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(45).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		IssueMessage failed = IssueMessage.pending(coupon, 30L, 30L, "throughput-retrying-failed-1", "{}");
+		entityManager.persist(failed);
+		entityManager.flush();
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test retrying failed");
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+				.setParameter("bucketTime", bucketTime)
+				.setParameter("id", failed.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		assertThat(issuedAfter - issuedBefore).isZero();
+		assertThat(failedAfter - failedBefore).isZero();
 	}
 
 	private long findBucketCount(

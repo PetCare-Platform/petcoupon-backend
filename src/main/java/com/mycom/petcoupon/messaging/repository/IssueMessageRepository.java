@@ -173,14 +173,28 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("expectedStatus") IssueMessageStatus expectedStatus
 	);
 
-	// 발급 처리량 조회(#156)용 — 시간대(1시간 단위)별로 발급 성공(CONSUMED)/실패
-	// (FAILED·DLQ·ABANDONED) 건수를 집계한다. DATE_FORMAT으로 시간 버킷을 만드는 건 JPQL로
-	// 표현이 안 돼서 네이티브 쿼리를 쓴다. since 이후 것만 대상으로 해서 대시보드가 "최근 N시간"
-	// 같은 범위로 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	// 발급 처리량 조회(#156)용 — 시간대(1시간 단위)별로 발급 성공(CONSUMED)/최종 실패(DLQ·
+	// ABANDONED) 건수를 집계한다. DATE_FORMAT으로 시간 버킷을 만드는 건 JPQL로 표현이 안 돼서
+	// 네이티브 쿼리를 쓴다. since 이후 것만 대상으로 해서 대시보드가 "최근 N시간" 같은 범위로
+	// 좁혀 쓸 수 있게 한다 — 이력이 쌓일수록 전체를 긁지 않기 위함.
+	//
+	// [지표 정의 — PR 리뷰 반영] created_at(메시지 생성 시각) 기준으로 버킷을 나누고, 그
+	// 버킷 안의 메시지들이 "조회 시점 현재" 어떤 상태인지를 센다. 즉 "그 시간대에 들어온
+	// 요청들의 최신 결과"(요청 유입량 기준)이지, "그 시간대에 실제로 처리 완료된 건수"(완료
+	// 시각 기준)가 아니다 — processedAt은 Kafka 발행(SENT) 성공 시각일 뿐 완료 시각이 아니라
+	// 대체할 수 없다. 그래서 이 값은 확정된 이력이 아니라 스냅샷이다 — 예를 들어 10시에 생성된
+	// 메시지가 FAILED였다가 11시 재시도로 CONSUMED되면, 10시 버킷을 다시 조회했을 때
+	// failedCount는 줄고 issuedCount가 는다. "언제 처리가 끝났는지"가 아니라 "언제 들어온
+	// 요청인지"를 축으로 삼기로 한 의도적 설계다(완료 시각 기준으로 바꾸려면 별도 컬럼이
+	// 필요 — #156 PR 리뷰 코멘트 참고).
+	//
+	// FAILED는 실패에서 뺐다 — Outbox Poller(findByStatusInAndRetryCountLessThan)가 PENDING과
+	// 함께 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가 아니다. 최종 실패는
+	// DLQ(관리자 확인 대기)·ABANDONED(포기 확정)뿐이다.
 	@Query(value = """
 			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
-			       SUM(CASE WHEN status IN ('FAILED', 'DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount
 			  FROM issue_message
 			 WHERE created_at >= :since
 			 GROUP BY bucket
