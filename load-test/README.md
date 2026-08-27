@@ -364,7 +364,11 @@ docker cp load-test/sql/verify_order_inversion.sql petcoupon-mysql:/tmp/
 docker exec petcoupon-mysql mysql -uroot -proot --default-character-set=utf8mb4 petcoupon -e "source /tmp/verify_order_inversion.sql"
 ```
 
-**로그를 볼 필요가 없습니다.** 시나리오 문서는 "서버 도착 로그"라고 적고 있지만 컨트롤러에는 진입 로그가 없습니다. 대신 `request_id`가 그 역할을 합니다 — `issue:{idempotency_id}` 형식인데, 이 번호는 컨트롤러가 `begin()`으로 행을 만들 때 받는 `AUTO_INCREMENT`라 **서버가 요청을 받아들인 순서 그 자체**입니다.
+**로그를 볼 필요가 없습니다.** 시나리오 문서는 "서버 도착 로그"라고 적고 있지만 컨트롤러에는 진입 로그가 없습니다. 대신 `request_id`(`issue:{idempotency_id}`)의 번호를 씁니다.
+
+> ⚠️ **이 번호는 HTTP 도착 순서가 아닙니다.** `begin()` 처리 중 `idempotency_key` INSERT가 실행되어 `AUTO_INCREMENT`를 할당받은 순서입니다. HTTP가 먼저 도착한 요청이라도 그 사이에 톰캣 스레드 배정과 쿠폰·회원 존재 확인(MySQL 왕복 2회)을 거치면서 순서가 뒤집힐 수 있습니다.
+>
+> 따라서 역전율은 **요청 도착 순서에 대한 공정성을 증명하지 않습니다.** 멱등키 등록 순서와 Lua `sequence_no` 사이의 역전 정도를 재는 참고 지표로만 씁니다.
 
 실측 예시 (재고 100, 동시 200건):
 
@@ -374,11 +378,28 @@ docker exec petcoupon-mysql mysql -uroot -proot --default-character-set=utf8mb4 
 역전 쌍            1023
 역전율(%)          20.67
 순번 1..N 무결성   PASS
+  └ 검사 범위      DB 내부만(꼬리 유실 미검출) — verify_issue_result.sql 1번을 함께 볼 것
 ```
 
-> **역전율은 판정 대상이 아닙니다.** 동시 요청은 도착 순서 자체가 확정적이지 않아 기준값이 없습니다(시나리오 문서 G 구간). 기록만 하면 됩니다.
+> **역전율은 판정 대상이 아닙니다.** 위에 적은 이유로 앞의 순서 자체가 확정적이지 않아 기준값이 없습니다(시나리오 문서 G 구간). 기록만 하면 됩니다.
 >
-> **반드시 지켜져야 하는 건 `순번 1..N 무결성` 하나입니다.** Lua가 순번을 내줬는데 DB에 반영되지 않은 건이 있으면 여기서 FAIL이 납니다.
+> **반드시 지켜져야 하는 건 `순번 1..N 무결성` 하나입니다.**
+
+### 꼬리 유실까지 잡으려면
+
+기본 상태(`@expected_issued_count = NULL`)에서는 **DB에 있는 것끼리만** 봅니다. 그래서 중간이 빈 것은 잡지만 **마지막 번호가 통째로 빠진 것은 못 잡습니다** — `1..100` 중 100번만 유실되면 남은 `1..99`가 그 자체로 온전해 보이기 때문입니다.
+
+Lua가 몇 번까지 내줬는지는 Redis에만 있어서 SQL이 스스로 알 수 없습니다. 엄밀히 보려면 그 값을 읽어 SQL 상단에 넣습니다.
+
+```bash
+docker exec petcoupon-redis redis-cli GET "coupon:issue:sequence:{1}"
+```
+
+```sql
+SET @expected_issued_count = 100;
+```
+
+값을 넣지 않아도 **`verify_issue_result.sql` 1번 항목**이 `발급 건수 = MIN(접수 요청, 총재고)`로 같은 문제를 잡습니다. 그래서 이 값은 선택입니다.
 
 TC-93(저장 순서 역전)은 같은 데이터로 확인합니다. `created_at` 순서가 `sequence_no`와 달라도 정상이며, 비동기 구조에서 당연한 결과입니다.
 
