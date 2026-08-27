@@ -122,4 +122,30 @@ class ReconciliationConverterTest {
         assertThat(response.verificationDetails()).hasSize(501);
         assertThat(response.verificationDetailCount()).isEqualTo(10_000L);
     }
+
+    // 이력 목록(#154)용 — verificationDetails 없이 요약 필드만 매핑되는지 확인.
+    @Test
+    void toSummaryResponse는_verificationDetails_없이_요약_필드만_매핑한다() {
+        Coupon coupon = mock(Coupon.class);
+        when(coupon.getCouponId()).thenReturn(1L);
+
+        ReconciliationReport report = mock(ReconciliationReport.class);
+        when(report.getReportId()).thenReturn(10L);
+        when(report.getCoupon()).thenReturn(coupon);
+        when(report.getAsOfAt()).thenReturn(LocalDateTime.of(2026, 8, 26, 12, 0));
+        when(report.getResult()).thenReturn(ReconciliationResult.MISMATCHED);
+        when(report.getTotalCount()).thenReturn(100L);
+        when(report.getSuccessCount()).thenReturn(98L);
+        when(report.getErrorCount()).thenReturn(2L);
+
+        var response = converter.toSummaryResponse(report);
+
+        assertThat(response.reportId()).isEqualTo(10L);
+        assertThat(response.couponId()).isEqualTo(1L);
+        assertThat(response.asOfAt()).isEqualTo(LocalDateTime.of(2026, 8, 26, 12, 0));
+        assertThat(response.result()).isEqualTo(ReconciliationResult.MISMATCHED);
+        assertThat(response.totalCount()).isEqualTo(100L);
+        assertThat(response.successCount()).isEqualTo(98L);
+        assertThat(response.errorCount()).isEqualTo(2L);
+    }
 }

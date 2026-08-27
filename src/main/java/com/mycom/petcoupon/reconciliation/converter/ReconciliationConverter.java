@@ -3,6 +3,7 @@ package com.mycom.petcoupon.reconciliation.converter;
 import org.springframework.stereotype.Component;
 
 import com.mycom.petcoupon.reconciliation.batch.service.ReconciliationBatchResult;
+import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationReportSummaryResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.ReconciliationTriggerResponse;
 import com.mycom.petcoupon.reconciliation.dto.res.VerificationDetailResponse;
 import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
@@ -42,6 +43,19 @@ public class ReconciliationConverter {
                 .verificationDetails(result.topVerificationDetails().stream()
                         .map(this::toDetailResponse)
                         .toList())
+                .build();
+    }
+
+    // 이력 목록(#154)용 — verificationDetails 없이 요약 필드만 담아서 목록 N건을 가볍게 반환한다.
+    public ReconciliationReportSummaryResponse toSummaryResponse(ReconciliationReport report) {
+        return ReconciliationReportSummaryResponse.builder()
+                .reportId(report.getReportId())
+                .couponId(report.getCoupon().getCouponId())
+                .asOfAt(report.getAsOfAt())
+                .result(report.getResult())
+                .totalCount(report.getTotalCount())
+                .successCount(report.getSuccessCount())
+                .errorCount(report.getErrorCount())
                 .build();
     }
 
