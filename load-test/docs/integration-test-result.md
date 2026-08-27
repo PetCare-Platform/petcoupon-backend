@@ -47,11 +47,11 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | A. 정상 흐름 | 17 | 0 | 0 | 0 | 17 |
 | B. 예외 흐름 | 19 | 19 | 0 | 0 | 0 |
 | C. 경계·동시성 | 7 | 5 | 0 | 0 | 2 |
-| D. 배치·정합성 | 16 | 0 | 0 | 0 | 16 |
+| D. 배치·정합성 | 16 | 14 | 0 | 0 | 2 |
 | E. 비동기 확정 | 10 | 0 | 0 | 0 | 10 |
 | F. 대량 데이터 | 6 | 0 | 0 | 0 | 6 |
 | G. 순서 보장 | 5 | 2 | 0 | 0 | 3 |
-| **합계** | **80** | **26** | **0** | **0** | **54** |
+| **합계** | **80** | **40** | **0** | **0** | **40** |
 
 > TC-63 · TC-70은 결번이라 집계에서 뺐다.
 
@@ -121,22 +121,22 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 | TC | 시나리오 | 결과 | 근거 |
 | --- | --- | --- | --- |
-| TC-50 | 쿠폰 만료 배치 | — | |
-| TC-51 | 만료 대상 아닌 건 미변경 | — | |
-| TC-52 | 청크 경계 처리 | — | |
-| TC-53 | 배치 재실행 | — | |
-| TC-54 | Redis ↔ DB 재고 정합성 | — | |
-| TC-55 | 초기화 API 동작 | — | |
-| TC-56 | 초기화 API 운영 차단 | — | |
-| TC-57 | 정합성 배치 — 정상 판정 | — | |
-| TC-58 | 정합성 배치 — HISTORY_MISMATCH | — | |
-| TC-59 | 정합성 배치 — INVALID_STATUS | — | |
-| TC-60 | 정합성 배치 — DUPLICATE_ISSUE | — | |
-| TC-61 | 정합성 배치 — 재현성 | — | |
-| TC-62 | 정합성 배치 — STOCK_MISMATCH | — | |
-| TC-64 | 정합성 배치 — SEQUENCE_GAP | — | |
-| TC-65 | 정합성 배치 — STOCK_NOT_RESTORED | — | |
-| TC-66 | 정합성 배치 트리거 | — | |
+| TC-50 | 쿠폰 만료 배치 | ✅ | `CouponExpireBatchServiceImplTest`로 대체 검증 (§5 참고) |
+| TC-51 | 만료 대상 아닌 건 미변경 | ✅ | 동상 |
+| TC-52 | 청크 경계 처리 | ✅ | 동상 (`chunk-size=3`) |
+| TC-53 | 배치 재실행 | ✅ | 동상 |
+| TC-54 | Redis ↔ DB 재고 정합성 | ✅ | 쿠폰 612: 9+1=10 / 쿠폰 1101: 7+3=10 — 둘 다 총재고와 일치 |
+| TC-55 | 초기화 API 동작 | ✅ | 삭제 건수 응답(발급·이력·멱등키·메시지 각 3)이 실제와 일치, 재고 10 원복, `redisStock` 10 |
+| TC-56 | 초기화 API 운영 차단 | — | `prod` 프로파일 기동이 필요해 별도 회차로 미룸 |
+| TC-57 | 정합성 배치 — 정상 판정 | ✅ | 쿠폰 612 → `MATCHED` · `errorCount 0` · 상세 0건 · `stockRemaining 9 = redisRemaining 9` |
+| TC-58 | 정합성 배치 — HISTORY_MISMATCH | ✅ | 상태만 USED로 조작 → 기대 `ISSUED` / 실제 `USED` 탐지 |
+| TC-59 | 정합성 배치 — INVALID_STATUS | ✅ | `EXPIRED → USED` 이력 주입 → 허용되지 않은 전이로 탐지 |
+| TC-60 | 정합성 배치 — DUPLICATE_ISSUE | ✅ | 유니크 제약 제거 후 동일 회원 중복 발급 주입 → 2건 탐지 |
+| TC-61 | 정합성 배치 — 재현성 | ✅ | 쿠폰 612 재실행 → 리포트 77·78의 전 수치 동일 |
+| TC-62 | 정합성 배치 — STOCK_MISMATCH | ✅ | Redis 재고를 7→5로 조작 → 기대 7 / 실제 5 탐지 |
+| TC-64 | 정합성 배치 — SEQUENCE_GAP | ✅ | 순번 99 주입 → "4건 존재, 95개 번호 없음" 탐지 |
+| TC-65 | 정합성 배치 — STOCK_NOT_RESTORED | — | `fix/149-stock-not-restored-abandon` 머지 후 실행 |
+| TC-66 | 정합성 배치 트리거 | ✅ | `POST /admin/coupons/{id}/reconcile` → 즉시 실행되고 리포트 생성 (`BATCH_JOB_EXECUTION` 신규 행 확인) |
 
 ### E. 비동기 확정 — TC-71 ~ TC-79 · TC-95
 
@@ -211,9 +211,35 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 단독 요청(응답 540ms)에서도 재현되는 결정적 결함이다. `CouponIssueApiIntegrationTest` 2건이 실패하는 원인도 이것이다.
 
-### 미실행 — TC-45 · TC-46
+### 테스트로 대체 검증 — TC-45 · TC-46 · TC-50 ~ TC-53
 
-`CouponIssueConcurrencyIntegrationTest`(#59)가 같은 내용을 JUnit으로 검증한다. k6 대상이 아니다.
+TC-45 · TC-46은 `CouponIssueConcurrencyIntegrationTest`(#59)가 같은 내용을 검증한다.
+
+TC-50 ~ TC-53의 **만료 배치는 외부에서 수동 실행할 방법이 없다.** `CouponExpireBatchServiceImpl.expireOverdueCoupons()` 가 `@Scheduled(cron = "0 0 1 * * *")` 로 고정돼 있고 트리거 API도 없다. 유일한 실행 경로가 `CouponExpireBatchServiceImplTest`(`@DataJpaTest`, 실제 MySQL 사용)라 이것으로 판정한다 — 3건 전부 통과.
+
+| TC | 대응 테스트 |
+| --- | --- |
+| TC-50 · TC-51 | `expireOverdueCoupons_expiresOnlyIssuedAndPastDeadline` |
+| TC-52 | `expireOverdueCoupons_processesAllRowsAcrossMultipleChunks` (`chunk-size=3`) |
+| TC-53 | `expireOverdueCoupons_succeedsWhenNothingToExpire` |
+
+운영에서 배치를 즉시 돌려야 할 상황이 생기면 트리거가 없다는 게 문제가 될 수 있다. 별도 이슈감이다.
+
+### 실행 중 확인한 것 — 앱을 최신 코드로 다시 띄워야 했다
+
+첫 TC-57 호출이 **75초 뒤 500을 뱉고 앱이 죽었다.** `reconciliation_report` 는 생겼는데 `BATCH_JOB_EXECUTION` 에는 기록이 없어서, `#111` 머지 전 빌드가 계속 떠 있던 것으로 확인됐다. 구버전은 50만 건을 통째로 로딩하는 구조다.
+
+앱을 다시 띄운 뒤에는 `BATCH_JOB_EXECUTION` 에 신규 행이 남고 정상 응답했다. **소스를 머지한 뒤에는 앱을 반드시 재기동해야 한다.**
+
+### 정합성 배치 처리 시간 (참고)
+
+발급 50만 건 쿠폰(`SEED-쿠폰-2`) 1건 검증에 **약 70초**가 걸렸다. TC-85(전체 쿠폰 커버리지)는 SEED 쿠폰 6개 × 50만이라 단순 합산으로 **7분 안팎**을 예상해야 한다.
+
+### ⚠️ 판정 시 주의 — `errorCount` 와 `result` 는 다른 것을 센다
+
+`errorCount` 는 **발급 건 단위** 오류만 센다. 쿠폰 단위 오류(`STOCK_MISMATCH` · `SEQUENCE_GAP`)는 `errorCount` 에 안 잡힌다.
+
+TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result MISMATCHED` 였다. **정합성 판정은 `result` 로 해야 하고 `errorCount` 로 하면 안 된다.**
 
 ---
 
@@ -226,10 +252,12 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | 순번 빠짐·중복 0건 | ✅ (TC-41 · 90 · 94) |
 | 300만 건 적재 | ✅ (2026-08-27, §5 참고) |
 | B 구간 전건 통과 | ✅ 19/19 |
-| A·D·E·F 구간 전건 통과 | 미실행 |
+| D 구간 | ✅ 14/16 (TC-56 · TC-65 보류) |
+| A·E·F 구간 전건 통과 | 미실행 |
 | 멱등키 확정 누락 수정 | 미머지 — TC-08 · 13~15 · 43이 막혀 있다 |
 
-**판정** — 보류. 남은 조건은 두 가지다.
+**판정** — 보류. 남은 조건은 세 가지다.
 
 1. `fix/idempotency-persist-issue-message` 머지 (A 구간 상당수가 여기 걸려 있다)
-2. A·B·D·E·F 구간 실행
+2. A·E·F 구간 실행
+3. 보류 2건 — TC-56(`prod` 프로파일 기동), TC-65(`fix/149-stock-not-restored-abandon` 머지)
