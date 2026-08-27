@@ -140,8 +140,8 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 		}
 
 		log.warn(
-				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} Outbox미발행={} 검사실패={}",
-				couponId, status.streamUndelivered(), status.outboxUnpublished(), status.checkFailed()
+				"[Reset] 앞 회차 메시지가 남아 초기화를 거절한다. couponId={} Stream미배달={} Stream처리중={} Outbox미확정={} 검사실패={}",
+				couponId, status.streamUndelivered(), status.streamActivePending(), status.outboxUnconsumed(), status.checkFailed()
 		);
 		throw new GeneralException(CouponErrorCode.RESET_PRECONDITION_NOT_MET);
 	}

@@ -33,7 +33,12 @@ import jakarta.persistence.PersistenceContext;
 
 /**
  * Outbox 쪽은 실 DB(issue_message), Stream 쪽은 실 Redis Stream + Consumer Group으로 검증한다.
- * XINFO GROUPS 기반 판단(lastDeliveredId vs lastGeneratedId)은 목으로는 의미 있게 재현이 안 된다.
+ * XINFO GROUPS 기반 판단(lastDeliveredId vs lastGeneratedId)과 XPENDING 기반 idle 판단은
+ * 목으로는 의미 있게 재현이 안 된다.
+ *
+ * pending-idle-threshold-ms를 300ms로 짧게 잡는다 — "방금 배달된 pending"과 "오래 방치된
+ * pending"을 가르는 테스트가 몇 초씩 기다리지 않고도 돌아가게 하기 위함이다(운영값 30초는
+ * application.properties 참고).
  *
  * 실행 전 MySQL/Redis가 떠 있어야 한다: docker compose up -d
  * 실제 앱과 같은 전역 Stream 키를 쓰면 다른 테스트/실행 중인 앱과 충돌하므로, 이 테스트 전용
@@ -41,7 +46,8 @@ import jakarta.persistence.PersistenceContext;
  */
 @DataJpaTest(properties = {
         "coupon.issue.stream.key=coupon:issue:stream:drain-checker-test",
-        "coupon.issue.stream.group=drain-checker-test-group"
+        "coupon.issue.stream.group=drain-checker-test-group",
+        "coupon.issue.stream.pending-idle-threshold-ms=300"
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(CouponIssuePipelineDrainCheckerImpl.class)
@@ -90,22 +96,44 @@ class CouponIssuePipelineDrainCheckerImplTest {
     }
 
     @Test
-    void Outbox에_PENDING이_있으면_outboxUnpublished로_잡힌다() {
+    void Outbox에_PENDING이_있으면_outboxUnconsumed로_잡힌다() {
         insertIssueMessage("PENDING");
 
         PipelineDrainStatus status = checker.check(coupon.getCouponId());
 
-        assertThat(status.outboxUnpublished()).isEqualTo(1);
+        assertThat(status.outboxUnconsumed()).isEqualTo(1);
         assertThat(status.checkFailed()).isFalse();
         assertThat(status.isBlocked()).isTrue();
     }
 
     @Test
-    void Stream_키가_없으면_streamUndelivered는_0이다() {
+    void Outbox에_SENT가_있으면_outboxUnconsumed로_잡힌다() {
+        // SENT는 Kafka 발행까지만 끝나고 DB 저장(CONSUMED)은 아직인 상태 — 미확정으로 잡혀야 한다.
+        insertIssueMessage("SENT");
+
+        PipelineDrainStatus status = checker.check(coupon.getCouponId());
+
+        assertThat(status.outboxUnconsumed()).isEqualTo(1);
+        assertThat(status.isBlocked()).isTrue();
+    }
+
+    @Test
+    void Outbox에_CONSUMED만_있으면_outboxUnconsumed는_0이다() {
+        insertIssueMessage("CONSUMED");
+
+        PipelineDrainStatus status = checker.check(coupon.getCouponId());
+
+        assertThat(status.outboxUnconsumed()).isZero();
+        assertThat(status.isBlocked()).isFalse();
+    }
+
+    @Test
+    void Stream_키가_없으면_모든_집계가_0이다() {
         PipelineDrainStatus status = checker.check(coupon.getCouponId());
 
         assertThat(status.streamUndelivered()).isZero();
-        assertThat(status.outboxUnpublished()).isZero();
+        assertThat(status.streamActivePending()).isZero();
+        assertThat(status.outboxUnconsumed()).isZero();
         assertThat(status.isBlocked()).isFalse();
     }
 
@@ -125,22 +153,47 @@ class CouponIssuePipelineDrainCheckerImplTest {
     }
 
     @Test
-    void Stream_메시지를_전부_가져갔으면_streamUndelivered는_0이다() {
+    void 방금_배달돼_idle이_짧은_pending은_streamActivePending으로_잡힌다() throws InterruptedException {
         StreamOperations<String, Object, Object> streamOps = redisTemplate.opsForStream();
         String key = streamProperties.getKey();
 
         streamOps.add(key, Map.of("couponId", coupon.getCouponId().toString()));
         streamOps.createGroup(key, ReadOffset.from("0-0"), streamProperties.getGroup());
 
-        // 실제로 읽어가서 lastDeliveredId를 lastGeneratedId까지 끌어올린다(ACK 여부와는 무관).
+        // 실제로 읽어가서 lastDeliveredId를 lastGeneratedId까지 끌어올린다(ACK는 안 한다 — pending으로 남는다).
         streamOps.read(
                 Consumer.from(streamProperties.getGroup(), "test-consumer"),
                 StreamOffset.create(key, ReadOffset.lastConsumed())
         );
 
+        // 임계값(300ms) 안에 바로 확인 — 아직 idle이 짧으므로 "곧 ACK될 것"으로 봐야 한다.
         PipelineDrainStatus status = checker.check(coupon.getCouponId());
 
         assertThat(status.streamUndelivered()).isZero();
+        assertThat(status.streamActivePending()).isEqualTo(1);
+        assertThat(status.isBlocked()).isTrue();
+    }
+
+    @Test
+    void 오래_방치된_pending은_streamActivePending에_안_잡히고_경고만_남긴다() throws InterruptedException {
+        StreamOperations<String, Object, Object> streamOps = redisTemplate.opsForStream();
+        String key = streamProperties.getKey();
+
+        streamOps.add(key, Map.of("couponId", coupon.getCouponId().toString()));
+        streamOps.createGroup(key, ReadOffset.from("0-0"), streamProperties.getGroup());
+
+        streamOps.read(
+                Consumer.from(streamProperties.getGroup(), "dead-consumer"),
+                StreamOffset.create(key, ReadOffset.lastConsumed())
+        );
+
+        // 임계값(300ms)을 넘길 때까지 기다린다 — 죽은 Consumer가 방치한 상황을 흉내낸다.
+        Thread.sleep(400);
+
+        PipelineDrainStatus status = checker.check(coupon.getCouponId());
+
+        assertThat(status.streamUndelivered()).isZero();
+        assertThat(status.streamActivePending()).isZero();
         assertThat(status.isBlocked()).isFalse();
     }
 

@@ -104,7 +104,7 @@ class ReconciliationJobRestartTest {
     @BeforeEach
     void setUp() {
         transactionTemplate = new TransactionTemplate(platformTransactionManager);
-        when(pipelineDrainChecker.check(any())).thenReturn(new PipelineDrainStatus(0, 0, false));
+        when(pipelineDrainChecker.check(any())).thenReturn(new PipelineDrainStatus(0, 0, 0, false));
 
         // 이 테스트는 historyMismatchStep의 재시작(체크포인트 이어받기)에만 집중한다 — Redis에
         // 이 테스트 쿠폰 재고 키가 실제로 없어서 STOCK_MISMATCH가 섞여 들어오면(별도 경로로
