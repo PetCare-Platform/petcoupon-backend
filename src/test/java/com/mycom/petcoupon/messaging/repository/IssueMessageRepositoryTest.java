@@ -3,6 +3,7 @@ package com.mycom.petcoupon.messaging.repository;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -138,5 +139,59 @@ class IssueMessageRepositoryTest {
 				- before.getOrDefault(IssueMessageStatus.CONSUMED, 0L)).isEqualTo(1L);
 		assertThat(after.getOrDefault(IssueMessageStatus.DLQ, 0L)
 				- before.getOrDefault(IssueMessageStatus.DLQ, 0L)).isEqualTo(1L);
+	}
+
+	// findThroughputByHour()는 raw SQL로 로직만 확인했었지, 실제 Spring Data 프로젝션
+	// (IssueThroughputBucket)을 거쳐 값이 제대로 들어오는지는 검증한 적이 없었다 — 특히
+	// SUM(CASE...)는 MySQL에서 DECIMAL로 나올 수 있어 Long 매핑이 깨질 위험이 있다(리뷰 반영).
+	// created_at은 @CreatedDate가 persist 시점 값을 넣으므로, 원하는 시간대에 테스트 데이터를
+	// 두려면 네이티브 UPDATE로 덮어써야 한다. 같은 시간 버킷에 다른 테스트/실행이 남긴 데이터가
+	// 섞일 수 있어 절대값이 아니라 delta로 검증한다.
+	@Test
+	void findThroughputByHour는_SUM_CASE_결과를_Long으로_정확히_매핑한다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(30).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		IssueMessage consumed1 = IssueMessage.pending(coupon, 20L, 20L, "throughput-consumed-1", "{}");
+		entityManager.persist(consumed1);
+		IssueMessage consumed2 = IssueMessage.pending(coupon, 21L, 21L, "throughput-consumed-2", "{}");
+		entityManager.persist(consumed2);
+		IssueMessage failed = IssueMessage.pending(coupon, 22L, 22L, "throughput-failed-1", "{}");
+		entityManager.persist(failed);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(consumed1.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.updateStatus(consumed2.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test failed");
+
+		for (IssueMessage message : List.of(consumed1, consumed2, failed)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+					.setParameter("bucketTime", bucketTime)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+
+		assertThat(issuedAfter - issuedBefore).isEqualTo(2L);
+		assertThat(failedAfter - failedBefore).isEqualTo(1L);
+	}
+
+	private long findBucketCount(
+			LocalDateTime since, String bucketKey, java.util.function.ToLongFunction<IssueThroughputBucket> extractor
+	) {
+		return issueMessageRepository.findThroughputByHour(since).stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.mapToLong(extractor::applyAsLong)
+				.findFirst()
+				.orElse(0L);
 	}
 }
