@@ -70,13 +70,20 @@ SELECT '0-1. 검증 대상 쿠폰/재고 존재' AS 확인,
 --
 -- response_status 로 202 만 거르는 것도 안 된다 — 발급이 확정되면 CouponIssuePersister 가
 -- succeed(recordId, 200, ...) 으로 덮어써서 정상 발급 건이 통째로 빠진다.
-SELECT '1. 발급 건수 = MIN(접수 요청, 총재고)' AS 검증항목,
+--
+-- 행 수가 아니라 고유 user_id 수를 센다. 이 시스템은 1인 1매라, 한 회원이 몇 번을 신청했든
+-- 발급될 수 있는 상한은 1건이다. 행 수로 세면 같은 회원의 중복 신청까지 기대값에 더해져
+-- 정상 결과가 FAIL 로 나온다 — TC-42(같은 회원 동시 5건)가 정확히 그 경우다.
+-- 5건 접수 · 1건 발급이 정답인데 기대 5 · 실제 1 로 FAIL 이 떴다.
+-- 중복 탈락 건은 saveFailureResult 가 409 를 response_status 에 남기므로 위 필터에 걸리지
+-- 않아 그대로 세어진다. 고유 회원 수로 세면 기대 1 · 실제 1 이 되어 맞아떨어진다.
+SELECT '1. 발급 건수 = MIN(고유 신청자, 총재고)' AS 검증항목,
        CAST(LEAST(r.accepted, s.total_quantity) AS CHAR) AS 기대,
        CAST(i.cnt AS CHAR)                               AS 실제,
        IF(i.cnt = LEAST(r.accepted, s.total_quantity), 'PASS', 'FAIL') AS 결과
   FROM (SELECT total_quantity FROM coupon_stock WHERE coupon_id = @coupon_id) s
  CROSS JOIN (SELECT COUNT(*) AS cnt FROM coupon_issue WHERE coupon_id = @coupon_id) i
- CROSS JOIN (SELECT COUNT(*) AS accepted FROM idempotency_key
+ CROSS JOIN (SELECT COUNT(DISTINCT user_id) AS accepted FROM idempotency_key
               WHERE coupon_id = @coupon_id
                 AND NOT (status = 'FAILED' AND response_status IS NULL)) r
 
