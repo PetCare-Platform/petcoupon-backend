@@ -225,6 +225,9 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 
 		IssueMessage updated = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
 		assertThat(updated.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+		// restoreStock()이 RESTORED/ALREADY_RESTORED로 확인된 뒤에만 채워지는 컬럼(#149) —
+		// 정합성 검증 배치가 status만으로는 복구 성공 여부를 구분 못 해서 별도로 남긴다.
+		assertThat(updated.getStockRestoredAt()).isNotNull();
 	}
 
 	@Test
@@ -237,5 +240,40 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 				.isInstanceOf(GeneralException.class)
 				.extracting(ex -> ((GeneralException) ex).getErrorCode())
 				.isEqualTo(CouponErrorCode.NOT_DLQ_STATUS);
+	}
+
+	// restoreStock()이 실제로 성공(Redis 반영 완료)한 직후, markStockRestored() 호출 전에 앱이
+	// 죽은 상태를 재현한다 — claimForAbandon()과 restoreStock()만 직접 호출하고 markStockRestored()는
+	// 의도적으로 건너뛴다. status는 이미 ABANDONED로 커밋됐지만 stock_restored_at은 null인,
+	// #149 피드백이 지적한 "기록 누락" 상태 그 자체다.
+	@Test
+	void abandon는_재고복구는_됐지만_기록이_누락된_ABANDONED_건을_재호출하면_ALREADY_RESTORED로_완료_기록을_남긴다() {
+		IssueMessage issueMessage = saveDlqMessage("dlq-abandon-retry");
+
+		int claimedRows = issueMessageRepository.claimForAbandon(
+				issueMessage.getMessageId(), IssueMessageStatus.DLQ, issueMessage.getRetryCount(),
+				IssueMessageStatus.ABANDONED
+		);
+		assertThat(claimedRows).isEqualTo(1);
+
+		// 실제 abandon()이 markStockRestored() 직전에 죽은 것처럼, restoreStock()만 먼저
+		// 실행해 Redis 쪽 상태는 이미 복구 완료로 만들어둔다.
+		couponIssueLuaService.restoreStock(
+				issueMessage.getCoupon().getCouponId(), issueMessage.getUserId(),
+				issueMessage.getMessageKey(), issueMessage.getSequenceNo()
+		);
+
+		IssueMessage crashed = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+		assertThat(crashed.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+		assertThat(crashed.getStockRestoredAt()).isNull();
+
+		// 재시도: Lua가 ALREADY_RESTORED를 반환해도 예외 없이 완료 처리되고, 이번엔
+		// stock_restored_at이 채워져야 정합성 배치의 오탐 대상에서 벗어난다.
+		CouponIssueDlqAbandonResponse response = couponIssueDlqReprocessService.abandon(issueMessage.getMessageId());
+		assertThat(response.messageId()).isEqualTo(issueMessage.getMessageId());
+
+		IssueMessage recovered = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+		assertThat(recovered.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+		assertThat(recovered.getStockRestoredAt()).isNotNull();
 	}
 }

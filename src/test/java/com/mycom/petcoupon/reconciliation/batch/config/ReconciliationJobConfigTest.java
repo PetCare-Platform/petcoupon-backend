@@ -295,8 +295,12 @@ class ReconciliationJobConfigTest {
         // stockNotRestoredStep(청크, entityManager.getReference())로 서로 다른 경로를 거치지만
         // 최종적으로 같은 report에 쌓이는지를 실제 Job 실행으로 확인한다 — STOCK_NOT_RESTORED는
         // 원래 RemainingChecksTasklet 안에서 findStockNotRestored()(getResultList()로 전체 로드)로
-        // 처리했으나, DLQ 대량 적체 시 OOM 위험 때문에 청크 Step으로 옮겼다(ReconciliationJobConfig
+        // 처리했으나, 대량 적체 시 OOM 위험 때문에 청크 Step으로 옮겼다(ReconciliationJobConfig
         // 클래스 Javadoc 참고). 이 테스트는 그 이관 후에도 결과가 report에 정상 저장됨을 검증한다.
+        //
+        // DLQ 1건 + ABANDONED 1건을 같이 둔다(#149) — DLQ는 아직 관리자 결정을 기다리는 정상
+        // 상태라 STOCK_NOT_RESTORED 대상이 아니고(dbDlqCount 집계 대상일 뿐), ABANDONED만
+        // "재처리를 포기했지만 재고가 안 돌아온" 대상이다.
         transactionTemplate.executeWithoutResult(status -> {
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-1", "NONE", "ISSUED"); // sequenceNo=1
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-2", "NONE", "ISSUED"); // sequenceNo=2
@@ -304,6 +308,7 @@ class ReconciliationJobConfigTest {
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-4", "NONE", "ISSUED"); // sequenceNo=4
 
             insertIssueMessage(1L, "job-gap-dlq-1", "DLQ");
+            insertIssueMessage(1L, "job-gap-abandoned-1", "ABANDONED");
         });
 
         var jobParameters = new JobParametersBuilder()
@@ -331,21 +336,59 @@ class ReconciliationJobConfigTest {
         assertThat(details).anyMatch(d -> d.getErrorType() == VerificationErrorType.STOCK_NOT_RESTORED);
     }
 
+    // #149 회귀 테스트 — status='ABANDONED'만 보면 정상적으로 복구된 건까지 전부 오탐한다.
+    // stock_restored_at이 채워진 ABANDONED 건은 STOCK_NOT_RESTORED 대상이 아니어야 한다.
+    @Test
+    void 재고_복구가_확인된_ABANDONED_건은_STOCK_NOT_RESTORED로_잡지_않는다() throws Exception {
+        transactionTemplate.executeWithoutResult(status ->
+                insertIssueMessage(1L, "restored-abandon-1", "ABANDONED", true));
+
+        var jobParameters = new JobParametersBuilder()
+                .addLong("couponId", coupon.getCouponId())
+                .addLocalDateTime("asOfAt", LocalDateTime.now())
+                .toJobParameters();
+
+        JobExecution jobExecution = jobOperatorTestUtils.startJob(jobParameters);
+        assertThat(jobExecution.getStatus().toString()).isEqualTo("COMPLETED");
+
+        entityManager.clear();
+        ReconciliationReport report = reconciliationReportRepository.findAll().stream()
+                .filter(r -> r.getCoupon().getCouponId().equals(coupon.getCouponId()))
+                .findFirst()
+                .orElseThrow();
+
+        List<VerificationDetail> details = verificationDetailRepository.findAll().stream()
+                .filter(d -> d.getReport().getReportId().equals(report.getReportId()))
+                .toList();
+
+        assertThat(details).noneMatch(d -> d.getErrorType() == VerificationErrorType.STOCK_NOT_RESTORED);
+    }
+
     private int messageSequenceCounter = 900;
 
     private void insertIssueMessage(Long userId, String requestId, String status) {
+        insertIssueMessage(userId, requestId, status, false);
+    }
+
+    // stockRestored=true면 abandon()이 복구를 확인한 뒤 채우는 stock_restored_at까지 같이 넣는다
+    // (#149) — status='ABANDONED'만으로는 복구 여부를 구분 못 해서, 이 컬럼이 있는 ABANDONED 건은
+    // STOCK_NOT_RESTORED 대상이 아니어야 함을 증명하는 테스트용.
+    private void insertIssueMessage(Long userId, String requestId, String status, boolean stockRestored) {
         messageSequenceCounter++;
 
         entityManager.createNativeQuery("""
                 INSERT INTO issue_message
-                    (coupon_id, user_id, sequence_no, message_key, topic, payload, status, retry_count, created_at)
-                VALUES (:couponId, :userId, :sequenceNo, :requestId, 'coupon-issue-events', '{}', :status, 1, NOW(6))
+                    (coupon_id, user_id, sequence_no, message_key, topic, payload, status, retry_count,
+                     created_at, stock_restored_at)
+                VALUES (:couponId, :userId, :sequenceNo, :requestId, 'coupon-issue-events', '{}', :status, 1,
+                        NOW(6), :stockRestoredAt)
                 """)
                 .setParameter("couponId", coupon.getCouponId())
                 .setParameter("userId", userId)
                 .setParameter("sequenceNo", messageSequenceCounter)
                 .setParameter("requestId", requestId)
                 .setParameter("status", status)
+                .setParameter("stockRestoredAt", stockRestored ? LocalDateTime.now() : null)
                 .executeUpdate();
     }
 

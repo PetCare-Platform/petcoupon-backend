@@ -222,6 +222,10 @@ class IdempotencyKeyServiceImplTest {
         assertThat(result.type()).isEqualTo(IdempotencyKeyStatusResult.Type.IN_PROGRESS);
     }
 
+    // succeed()는 이제 findById+엔티티 조작이 아니라 조건부 UPDATE(completeIfAllowed) 한 번으로
+    // 끝난다 — Mockito로는 그 WHERE 조건이 실제로 지켜지는지 증명할 수 없어서, succeed()에 대한
+    // 시나리오는 IdempotencyKeyServiceImplSucceedIntegrationTest(실 DB)로 옮겼다.
+
     // "이미 존재하는 레코드를 만난 상태"를 시뮬레이션 — 실제로는 항상 INSERT를 먼저 시도하므로
     // (신규 키가 아닌 이상) 유니크 제약 위반 → 재조회 경로를 통해서만 이 상태에 도달한다.
     private void givenRaceLostTo(IdempotencyKey record) {

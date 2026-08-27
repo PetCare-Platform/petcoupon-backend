@@ -100,9 +100,18 @@ public class IssueMessage {
 	@Column(name = "created_at", nullable = false, updatable = false) 
 	private LocalDateTime createdAt; 
 	
-	@Column(name = "processed_at") 
+	@Column(name = "processed_at")
 	private LocalDateTime processedAt;
-	
+
+	// abandon() 처리에서 restoreStock()이 RESTORED/ALREADY_RESTORED로 확인된 뒤에만 채운다(#149).
+	// status(ABANDONED)만으로는 재고 복구 성공 여부를 알 수 없다 — claimForAbandon()이 먼저
+	// status를 ABANDONED로 커밋하고 그 다음에 restoreStock()을 호출하는 구조라, restoreStock()이
+	// 실패해도(Redis 장애 등) status는 이미 ABANDONED로 남는다. 그래서 "복구 안 됨"은 status가
+	// 아니라 이 컬럼이 null인지로 판단해야 한다 — 정합성 검증 배치(stockNotRestoredReader)가
+	// 이 컬럼을 본다.
+	@Column(name = "stock_restored_at")
+	private LocalDateTime stockRestoredAt;
+
 	public static IssueMessage pending(
 	        Coupon coupon,
 	        long userId,

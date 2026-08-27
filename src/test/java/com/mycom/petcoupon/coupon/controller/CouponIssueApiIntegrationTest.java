@@ -53,10 +53,15 @@ import tools.jackson.databind.ObjectMapper;
  * GET .../coupon-issue-requests/status 폴링(awaitRequestResolved 참고)으로 최종 결과를 기다린다.
  */
 @SpringBootTest(properties = {
-	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서, 테스트 도중 스케줄러가
-	// event_status_history를 만들어 tearDown의 event 삭제가 FK 위반으로 실패하는 걸 막는다.
-	"event.status.scheduler.enabled=false",
-	"coupon.status.enabled=false"
+		"coupon.issue.stream.enabled=true",
+		"coupon.issue.outbox.enabled=true",
+		"coupon.issue.outbox.publish-fixed-delay-ms=100",
+		"coupon.issue.outbox.batch-size=10",
+		"spring.kafka.consumer.auto-offset-reset=earliest",
+		// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서, 테스트 도중 스케줄러가
+		// event_status_history를 만들어 tearDown의 event 삭제가 FK 위반으로 실패하는 걸 막는다.
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false"
 })
 @AutoConfigureMockMvc
 class CouponIssueApiIntegrationTest {

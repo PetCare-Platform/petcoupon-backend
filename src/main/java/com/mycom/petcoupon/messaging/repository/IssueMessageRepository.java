@@ -53,8 +53,11 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// Kafka Consumer가 coupon_issue 저장까지 성공했을 때(CONSUMED) 호출 — markDlq와 동일하게
 	// topic+message_key(uk_message_key_topic) 기준. Kafka enqueue 성공(SENT)과 파이프라인 완주를
 	// 구분하기 위한 것이라 retryCount/lastError는 건드리지 않는다.
+	// 주의: clearAutomatically = true를 지정하면 CouponIssuePersister.persist() 트랜잭션 내에서
+	// 함께 수정 중인 idempotency_key 등의 1차 캐시가 flush 전에 clear되어 dirty checking UPDATE가
+	// 유실되므로 clearAutomatically를 지정하지 않는다.
 	@Transactional
-	@Modifying(clearAutomatically = true)
+	@Modifying
 	@Query("UPDATE IssueMessage im SET im.status = :status WHERE im.topic = :topic AND im.messageKey = :messageKey")
 	int updateStatusByMessageKey(
 			@Param("topic") String topic,
@@ -143,5 +146,30 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			@Param("expectedStatus") IssueMessageStatus expectedStatus,
 			@Param("expectedRetryCount") int expectedRetryCount,
 			@Param("newStatus") IssueMessageStatus newStatus
+	);
+
+	// abandon()이 restoreStock() 성공(RESTORED/ALREADY_RESTORED)을 확인한 뒤에만 호출한다(#149).
+	// status(ABANDONED)만으로는 재고 복구 성공 여부를 알 수 없어 — claimForAbandon()이 먼저
+	// status를 커밋하고 그 다음에 restoreStock()을 호출하는 구조라, restoreStock()이 실패해도
+	// status는 이미 ABANDONED로 남는다. 이 컬럼이 null인 ABANDONED 건만 정합성 검증 배치
+	// (stockNotRestoredReader)가 "미복구"로 잡는다.
+	//
+	// stockRestoredAt IS NULL 조건을 건다 — restoreStock() 성공 직후, 이 UPDATE 전에 앱이
+	// 죽는 등으로 기록이 누락되면 CouponIssueDlqReprocessServiceImpl.abandon()이 재시도로
+	// 다시 이 메서드를 부르는데, 그때 이미 기록된 최초 복구 시각을 재호출 시각으로 덮어쓰지
+	// 않기 위함이다.
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+			UPDATE IssueMessage im
+			   SET im.stockRestoredAt = :restoredAt
+			 WHERE im.messageId = :messageId
+			   AND im.status = :expectedStatus
+			   AND im.stockRestoredAt IS NULL
+			""")
+	int markStockRestored(
+			@Param("messageId") Long messageId,
+			@Param("restoredAt") LocalDateTime restoredAt,
+			@Param("expectedStatus") IssueMessageStatus expectedStatus
 	);
 }

@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.coupon.repository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -53,6 +54,18 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
 	@Lock(LockModeType.PESSIMISTIC_WRITE)
 	@Query("select c from Coupon c where c.couponId = :couponId")
 	Optional<Coupon> findByIdForUpdate(@Param("couponId") Long couponId);
+
+	// 공개 이벤트 상세(GET /events/{eventId})용. eventId에 연결된 쿠폰 기본정보를 한 번에 읽는다.
+	// c.event.eventId는 coupon.event_id(FK 컬럼)라 event 테이블 조인 없이 나가고, 변환 대상인
+	// EventCouponResponse가 이벤트 필드를 쓰지 않아 지연 로딩도 걸리지 않는다 — 쿠폰 수와 무관하게
+	// SELECT 1번. 정렬 기준은 관리자 쿠폰 목록(findCouponPage)과 같은 최신순 + couponId tie-break.
+	@Query("""
+			SELECT c
+			  FROM Coupon c
+			 WHERE c.event.eventId = :eventId
+			 ORDER BY c.createdAt DESC, c.couponId DESC
+			""")
+	List<Coupon> findAllByEventId(@Param("eventId") Long eventId);
 
 	// 발급 시작 여부 판정 기준 시각. 애플리케이션 시계를 쓰면 인스턴스마다 판단이 갈리고
 	// DB와 드리프트가 나므로, 모두가 공유하는 DB 시계를 기준으로 삼는다.
