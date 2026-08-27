@@ -77,6 +77,8 @@ class CouponQueryServiceImplTest {
         assertThat(response.content().get(0).totalQuantity()).isEqualTo(100);
         assertThat(response.content().get(0).issuedQuantity()).isZero();
         assertThat(response.content().get(0).remainingQuantity()).isEqualTo(100);
+        assertThat(response.content().get(0).stockUpdatedAt())
+                .isEqualTo(LocalDateTime.of(2026, 8, 22, 9, 0));
         assertThat(response.page()).isZero();
         assertThat(response.size()).isEqualTo(20);
         assertThat(response.totalElements()).isEqualTo(1);
@@ -205,6 +207,9 @@ class CouponQueryServiceImplTest {
                 .coupon(coupon)
                 .totalQuantity(100)
                 .build();
+        // updatedAt은 @LastModifiedDate라 영속성 컨텍스트 없이는 채워지지 않는다. 변환 결과에
+        // 실제로 실리는지 보려고 리플렉션으로 넣는다(ReflectionTestUtils.setField와 같은 이유).
+        ReflectionTestUtils.setField(couponStock, "updatedAt", LocalDateTime.of(2026, 8, 22, 9, 0));
 
         return new CouponWithStock(coupon, couponStock);
     }

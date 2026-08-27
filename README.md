@@ -191,9 +191,9 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 목록에서 쿠폰마다 Redis를 읽으면 20건 목록에 왕복이 20회 생기고, 쿠폰 한 건의 정합성 오류가
 페이지 전체를 실패시키기 때문이다.
 
-재고 갱신 시각은 목록에 싣지 않는다. 발급 확정에 쓰는 `increaseIssuedQuantity`가 벌크 UPDATE라
-`coupon_stock.updated_at`이 갱신되지 않아, 수량이 바뀌어도 그 시각은 쿠폰 생성 또는 총수량 수정
-시점에 머문다. 기준 시각으로 오해할 값이라 갱신 경로를 고친 뒤에 추가한다.
+목록에는 그 수치의 기준 시각(`stockUpdatedAt`)을 함께 싣는다. 발급 확정에 쓰는
+`increaseIssuedQuantity`가 벌크 UPDATE라 `coupon_stock.updated_at`이 갱신되지 않는 문제가
+있었는데, 그 메서드가 시각을 직접 갱신하도록 고친 뒤에야 이 필드를 실었다(이슈 #146).
 
 ```bash
 curl -s "localhost:8080/admin/coupons?eventId=1&status=ACTIVE&page=0&size=20" -H "X-ADMIN-KEY: {발급받은_토큰}"
