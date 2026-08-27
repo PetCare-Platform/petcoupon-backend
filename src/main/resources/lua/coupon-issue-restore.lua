@@ -46,14 +46,27 @@ if not currentRequestId and not storedSequenceNo then
     return { 2, stock }
 end
 
+-- 순번 기록은 있지만 신청 기록이 없으면 Redis 데이터 정합성 오류다.
+-- 이미 정상 복구된 상태라면 두 기록이 모두 삭제되어 있어야 한다.
+if not currentRequestId and storedSequenceNo then
+    return { 5, stock }
+end
+
 -- 현재 사용자의 신청이 다른 요청이면 건드리지 않는다.
 -- 복구 후 사용자가 새로 신청한 경우, 이전 요청의 재복구가 새 신청을 제거하면 안 된다.
 if currentRequestId ~= requestId then
     return { 3, stock }
 end
 
--- 신청 기록과 요청 순번이 서로 맞지 않거나 전달받은 순번과 다르면 복구하지 않는다.
-if not storedSequenceNo or storedSequenceNo ~= expectedSequenceNo then
+-- 신청 기록은 현재 요청과 일치하지만 순번 기록이 없으면
+-- Redis 데이터 정합성 오류다.
+if not storedSequenceNo then
+    return { 5, stock }
+end
+
+-- Redis에 저장된 순번과 전달받은 복구 대상 순번이 다르면
+-- 다른 발급 건일 수 있으므로 복구하지 않는다.
+if storedSequenceNo ~= expectedSequenceNo then
     return { 5, stock }
 end
 
@@ -63,5 +76,5 @@ redis.call('HDEL', requestSequenceKey, requestId)
 
 local restoredStock = redis.call('INCR', stockKey)
 
--- 전역 sequenceKey는 감소시키지 않는다.
+-- 전역 sequenceKey는 선착순 순번이므로 감소시키지 않는다.
 return { 1, restoredStock }

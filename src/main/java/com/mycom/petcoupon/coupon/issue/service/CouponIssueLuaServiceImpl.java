@@ -62,36 +62,17 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
 		}
 
-    	if (luaResult == null || luaResult.size() != 2) {
-    		log.error(
-    				"유효하지 않은 쿠폰 발급 Lua 실행 결과입니다. couponId={}, userId={}, requestId={}, result={}",
-    			couponId,
-    			userId,
-    			requestId,
-    			luaResult
-    		);
-    		throw new GeneralException(CouponErrorCode.ISSUE_REQUEST_SAVE_FAILED);
-    	}
-
     	try {
-    		Object resultCodeValue = luaResult.get(0);
-    		Object sequenceNoValue = luaResult.get(1);
-
-    		if (!(resultCodeValue instanceof Number resultCodeNumber)
-    		        || !(sequenceNoValue instanceof Number sequenceNoNumber)) {
-
-    		    throw new IllegalArgumentException("Lua 결과 값이 숫자 형식이 아닙니다. result=" + luaResult);
-    		}
+    		LuaNumericResult parsedResult = parseLuaNumericResult(luaResult);
     		
-    		long resultCode = resultCodeNumber.longValue();
-            long sequenceNo = sequenceNoNumber.longValue();
+    		long resultCode = parsedResult.code();
+            long sequenceNo = parsedResult.value();
             
             CouponIssueLuaResultStatus status = CouponIssueLuaResultStatus.from(resultCode);
     	    
             Long issuedSequenceNo = null;
             
-            if (status == CouponIssueLuaResultStatus.SUCCESS
-                    || status == CouponIssueLuaResultStatus.SAME_REQUEST_RETRY) {
+            if (status == CouponIssueLuaResultStatus.SUCCESS || status == CouponIssueLuaResultStatus.SAME_REQUEST_RETRY) {
             	
             	if(sequenceNo <= 0) {
             		throw new IllegalArgumentException("성공 또는 재시도 결과에 유효한 순번이 없습니다. sequenceNo=" + sequenceNo);
@@ -147,9 +128,46 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
     		);
     		throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
 		}
-		
+
 	}
-    
+
+    // 부하 테스트 초기화 전용 — 발급 상태를 지우고 재고를 다시 세운다.
+    // 재고 키 포맷을 호출부로 흘리지 않으려고 삭제 · 세팅 · 확인을 여기서 함께 처리한다.
+    // (예전에는 InternalCouponResetServiceImpl 이 키 문자열을 상수로 복사해 직접 조작했다.)
+    //
+    // 반환값의 null 은 "키가 없다 = 초기화가 끝나지 않았다"만 뜻한다.
+    // 방금 숫자를 SET 했는데 숫자가 아닌 값이 읽히는 건 미완료가 아니라 동시 변경이나 상태 오염이므로,
+    // null 로 뭉개지 않고 예외로 올린다 — 200 OK + redisStock=null 로 응답하면 성공 여부가 모호해진다.
+    @Override
+    public Integer resetIssueState(Long couponId, int totalQuantity) {
+        clearIssueState(couponId);
+
+        try {
+            String stockKey = issueKey("stock", couponId);
+            redisTemplate.opsForValue().set(stockKey, String.valueOf(totalQuantity));
+
+            String raw = redisTemplate.opsForValue().get(stockKey);
+
+            if (raw == null) {
+                return null;
+            }
+
+            return Integer.valueOf(raw);
+
+        } catch (DataAccessException e) {
+            log.error("쿠폰 재고 키 초기화 중 Redis 접근에 실패했습니다. couponId={}", couponId, e);
+            throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+
+        } catch (NumberFormatException e) {
+            log.error(
+                "쿠폰 재고 키 값이 숫자 형식이 아닙니다. 방금 세팅한 값이 아닌 것이 읽혔습니다. couponId={}",
+                couponId,
+                e
+            );
+            throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+        }
+    }
+
     private void validateCouponId(Long couponId) {
         if (couponId == null || couponId <= 0) {
             throw new GeneralException(CouponErrorCode.INVALID_ISSUE_REQUEST);
@@ -204,7 +222,10 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 						issueKey("applicants", couponId),
 						issueKey("request-sequence", couponId)
 					),
-					userId.toString(), requestId, sequenceNo.toString());
+					userId.toString(), 
+					requestId, 
+					sequenceNo.toString()
+			);
 			
 		} catch (DataAccessException e) {
 			
@@ -212,25 +233,20 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
 		}
 
-		if (luaResult == null || luaResult.size() != 2) {
-			
-			log.error("유효하지 않은 Redis 재고 복구 결과입니다. " + "couponId={}, userId={}, requestId={}, result={}", couponId, userId, requestId, luaResult);
-			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
-		}
-
 		try {
-			Object statusValue = luaResult.get(0);
-			Object stockValue = luaResult.get(1);
+			LuaNumericResult parsedResult = parseLuaNumericResult(luaResult);
 
-			if (!(statusValue instanceof Number statusNumber) || !(stockValue instanceof Number stockNumber)) {
-				throw new IllegalArgumentException("Redis 재고 복구 결과가 숫자 형식이 아닙니다. result=" + luaResult);
-			}
-
-			CouponIssueStockRestoreStatus status = CouponIssueStockRestoreStatus.from(statusNumber.longValue());
+			CouponIssueStockRestoreStatus status = CouponIssueStockRestoreStatus.from(parsedResult.code());
+			
+			long remainingStock = parsedResult.value();
+			
+			if (remainingStock < 0 || remainingStock > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Redis 재고 복구 결과가 유효한 범위를 벗어났습니다. " + "remainingStock=" + remainingStock);
+            }
 
 			return CouponIssueStockRestoreResult.builder()
 					.status(status)
-					.remainingStock(stockNumber.intValue())
+					.remainingStock((int) remainingStock)
 					.build();
 
 		} catch (IllegalArgumentException e) {
@@ -248,4 +264,24 @@ public class CouponIssueLuaServiceImpl implements CouponIssueLuaService {
 			throw new GeneralException(CouponErrorCode.INVALID_STOCK_RESTORE_REQUEST);
 		}
 	}
+	
+	// Lua Script의 공통 반환 형식인 {상태 코드, 결과 값}을 검증하고 숫자로 변환한다.
+	private LuaNumericResult parseLuaNumericResult(List<?> luaResult) {
+		
+	    if (luaResult == null || luaResult.size() != 2) {
+	        throw new IllegalArgumentException("Lua 실행 결과의 형식이 올바르지 않습니다. result=" + luaResult);
+	    }
+
+	    Object codeValue = luaResult.get(0);
+	    Object resultValue = luaResult.get(1);
+
+	    if (!(codeValue instanceof Number codeNumber) || !(resultValue instanceof Number resultNumber)) {
+	        throw new IllegalArgumentException("Lua 실행 결과가 숫자 형식이 아닙니다. result=" + luaResult);
+	    }
+
+	    return new LuaNumericResult(codeNumber.longValue(), resultNumber.longValue());
+	}
+	
+	// Lua Script의 공통 반환값
+	private record LuaNumericResult(long code, long value) {}
 }
