@@ -126,4 +126,8 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
 			   AND c.issueEndAt <= :now
 			""")
 	int endCoupons(@Param("now") LocalDateTime now);
+
+	// 대시보드 요약 집계(#172)용 — 전체 쿠폰 수는 JpaRepository.count()로 충분해서 따로
+	// 안 만들고, 발급 진행 중인(ACTIVE) 쿠폰 수만 별도로 센다.
+	long countByStatus(CouponStatus status);
 }

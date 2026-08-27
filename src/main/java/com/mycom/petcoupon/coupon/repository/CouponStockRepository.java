@@ -39,4 +39,28 @@ public interface CouponStockRepository extends JpaRepository<CouponStock, Long> 
 			   AND cs.remainingQuantity > 0
 			""")
 	int increaseIssuedQuantity(@Param("couponId") Long couponId);
+
+	// 대시보드 요약 집계(#172)용 — 전체 쿠폰 재고 대비 발급률(issuedQuantity/totalQuantity)을
+	// 계산하려고 전체 합계 3개를 한 번에 구한다.
+	//
+	// [PR 리뷰 반영] READY(발급 시작 전) 쿠폰은 뺀다 — READY는 issuedQuantity가 항상 0인데
+	// totalQuantity는 분모에 그대로 들어가서, READY 쿠폰을 많이 만들어둘수록 실제 수요와
+	// 무관하게 전체 발급률이 낮아 보이게 된다. ACTIVE(발급 중)·SOLD_OUT(품절)·ENDED(종료)는
+	// 전부 발급이 실제로 시작된 적 있는 쿠폰이라 포함한다 — ENDED까지 포함하는 건 누적
+	// 실적으로 의미가 있어서다. activeCoupons(CouponRepository.countByStatus(ACTIVE))와
+	// 기준을 맞추는 목적도 있다 — 한쪽은 "진행중만", 다른 쪽은 "READY 포함 전부"면 같은
+	// 응답 안에서 기준이 안 맞아 헷갈린다.
+	//
+	// coupon_stock이 비어 있으면(대상 쿠폰이 하나도 없으면) SUM이 NULL을 반환하므로 COALESCE로
+	// 0을 기본값으로 깐다 — 안 그러면 서비스가 매번 null 체크를 해야 한다. SUM(int)는 JPQL
+	// 스펙상 항상 Long으로 승격되므로(네이티브 쿼리처럼 DB 드라이버에 따라 DECIMAL로 나올
+	// 위험이 없다) 별도 검증 없이 Long 매핑을 신뢰할 수 있다.
+	@Query("""
+			SELECT COALESCE(SUM(cs.totalQuantity), 0) AS totalQuantity,
+			       COALESCE(SUM(cs.issuedQuantity), 0) AS issuedQuantity,
+			       COALESCE(SUM(cs.remainingQuantity), 0) AS remainingQuantity
+			  FROM CouponStock cs
+			 WHERE cs.coupon.status IN ('ACTIVE', 'SOLD_OUT', 'ENDED')
+			""")
+	CouponStockSummary sumStock();
 }

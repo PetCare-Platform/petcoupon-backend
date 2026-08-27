@@ -40,4 +40,8 @@ public interface EventRepository extends JpaRepository<Event, Long> {
 
 	// 종료 시각(closeAt)이 지났는데도 여전히 OPEN인 이벤트 (스케줄러가 CLOSED로 전환할 대상)
 	List<Event> findByStatusAndCloseAtLessThanEqual(EventStatus status, LocalDateTime now);
+
+	// 대시보드 요약 집계(#172)용 — 전체 이벤트 수는 JpaRepository.count()로 충분해서 따로
+	// 안 만들고, 진행 중인(OPEN) 이벤트 수만 별도로 센다.
+	long countByStatus(EventStatus status);
 }
