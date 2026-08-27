@@ -20,6 +20,7 @@ import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.CustomResponse;
+import com.mycom.petcoupon.global.common.util.PiiMasker;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
@@ -130,7 +131,10 @@ public class CouponIssuePersister {
 	// 재전달로 이미 저장된 건(Consumer의 스킵 분기)에서는 호출 안 함 — uk_noti_issue_channel
 	// 유니크 제약도 있고, 발급이 처음 일어난 시점에만 알림이 나가야 하기 때문이다.
 	//
-	// TODO(#119): recipientMasked는 마스킹 담당자가 별도 처리 예정 — 지금은 원본 전화번호 그대로.
+	// 수신자 번호는 PiiMasker를 거쳐 저장한다(#142). 이 컬럼이 이 시스템에서 개인정보가
+	// 실제로 저장되는 유일한 자리다 — 응답 DTO와 로그에는 userId(숫자)만 나간다.
+	// PiiMasker는 phone이 null이어도 "(없음)"을 돌려주므로, recipient_masked의 NOT NULL
+	// 제약 때문에 알림 기록이 실패하는 일은 없다.
 	@Transactional
 	public void recordNotification(CouponIssue couponIssue) {
 		AppUser user = couponIssue.getUser();
@@ -139,7 +143,7 @@ public class CouponIssuePersister {
 				.couponIssue(couponIssue)
 				.user(user)
 				.channel(Channel.SMS)
-				.recipientMasked(user.getPhone())
+				.recipientMasked(PiiMasker.maskPhone(user.getPhone()))
 				.content("[PetCoupon] 쿠폰이 발급되었습니다. 쿠폰코드: " + couponIssue.getCouponCode())
 				.status(NotificationStatus.SENT)
 				.sentAt(LocalDateTime.now())
