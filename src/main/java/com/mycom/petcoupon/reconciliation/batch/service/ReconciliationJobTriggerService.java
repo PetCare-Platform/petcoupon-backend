@@ -167,6 +167,14 @@ public class ReconciliationJobTriggerService {
         return "reconciliation:coupon:" + couponId;
     }
 
+    // 이력 목록(#154) — reconcile()과 달리 배치를 새로 돌리지 않고, 이미 쌓인 리포트를 최신순으로
+    // 조회만 한다. 트리거 응답은 그 순간에만 볼 수 있어서, 나중에 그래프/대시보드로 추이를 보려면
+    // 이 조회 경로가 필요하다. DTO 변환은 컨트롤러+컨버터가 맡는다(reconcile() 흐름과 동일한 책임 분리).
+    public List<ReconciliationReport> listHistory(Long couponId, int limit) {
+        return reconciliationReportRepository.findByCoupon_CouponIdOrderByAsOfAtDesc(
+                couponId, PageRequest.of(0, limit));
+    }
+
     // asOfAt을 무조건 LocalDateTime.now()로 새로 만들면 이 couponId로 두 번 다시 같은
     // JobParameters가 나올 수 없어서, Spring Batch의 재시작/중복실행 방지(JobParameters
     // 완전일치 기반 JobInstance 식별)가 실제 API 경로에서는 아예 동작하지 않는다.
