@@ -201,6 +201,34 @@ class CouponIssuePersisterIntegrationTest {
 		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
 	}
 
+	// #142 — notification_log.recipient_masked 는 이 시스템에서 개인정보가 실제로 저장되는
+	// 유일한 자리다. 평문이 들어가면 과제 전제 조건("개인정보는 로그 및 응답 데이터 등에서
+	// 반드시 마스킹")을 위반하므로, 저장된 값을 직접 읽어 원본이 없는지 확인한다.
+	@Test
+	void 알림_로그의_수신자_번호는_마스킹되어_저장된다() {
+		String requestId = "notification-masking-" + UUID.randomUUID();
+		CouponIssueEvent event = newEvent(requestId, 1L);
+
+		CouponIssue couponIssue = persister.persist(event);
+		persister.recordNotification(couponIssue);
+
+		entityManager.clear();
+
+		String storedRecipient = (String) entityManager.createNativeQuery("""
+				SELECT n.recipient_masked
+				  FROM notification_log n
+				  JOIN coupon_issue ci ON ci.coupon_issue_id = n.coupon_issue_id
+				 WHERE ci.request_id = :requestId
+				""")
+				.setParameter("requestId", requestId)
+				.getSingleResult();
+
+		// 픽스처 회원의 번호는 010-1234-5678 이다.
+		assertThat(storedRecipient)
+				.isEqualTo("010-****-5678")
+				.doesNotContain("1234");
+	}
+
 	@Test
 	void recordNotification_단독_호출은_예외를_전파하지만_Consumer_호출부에서는_새지_않는다() {
 		// phone 값에 의존하지 않는다 — app_user의 email/phone NOT NULL 제약이 마이그레이션 없이

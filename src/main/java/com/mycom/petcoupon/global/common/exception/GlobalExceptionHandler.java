@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import jakarta.validation.ConstraintViolationException;
 
@@ -84,6 +85,19 @@ public class GlobalExceptionHandler {
         BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
 
         log.warn("[MissingHeader] {}", ex.getMessage());
+
+        return ResponseEntity
+                .status(errorCode.getStatus())
+                .body(errorCode.getErrorResponse());
+    }
+
+    // 쿼리 파라미터·경로 변수 타입 변환 실패 (예: status=INVALID처럼 enum에 없는 값)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<CustomResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+
+        BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
+
+        log.warn("[TypeMismatch] {}", ex.getMessage());
 
         return ResponseEntity
                 .status(errorCode.getStatus())
