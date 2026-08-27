@@ -25,15 +25,17 @@
 [EC2 A] Spring Boot 애플리케이션
     │
     ▼
-[EC2 B] MySQL 8.0 + Redis 7.2 (Docker Compose)
+[EC2 B] MySQL 8.0 + Redis 7.2 + Kafka 3.7 (Docker)
 ```
 
 | 항목 | 이유 |
 | --- | --- |
 | k6를 별도 인스턴스로 분리 | 앱 서버에서 돌리면 부하 발생기가 CPU를 점유해 측정이 왜곡된다 |
-| 앱과 DB·Redis를 분리 | 한 대에 올리면 병목이 앱인지 DB인지 구분되지 않는다 |
-| 같은 VPC 안에서 실행 | 인터넷 왕복 지연이 응답 시간에 섞이지 않는다 |
-| RDS·ElastiCache 대신 EC2 + Compose | 로컬과 동일한 `docker-compose.yml`을 그대로 사용해 재현성을 확보한다 |
+| 앱과 DB·Redis·Kafka를 분리 | 한 대에 올리면 병목이 앱인지 인프라인지 구분되지 않는다 |
+| 같은 VPC · 같은 AZ | 인터넷 왕복 지연이 응답 시간에 섞이지 않는다. AZ 가 다르면 그만큼 지연이 붙는다 |
+| RDS·ElastiCache·MSK 대신 EC2 + Docker | 로컬과 동일한 구성을 그대로 써서 재현성을 확보한다 |
+
+> ⚠️ **Kafka 는 `docker-compose.yml` 에 없다.** 로컬에서는 `docker start petcoupon-kafka` 로 따로 띄우고 있다. EC2 B 에 올릴 때 이 부분을 어떻게 할지 미리 정해야 한다 — 파이프라인의 `Outbox → Kafka → Consumer → MySQL` 구간이 전부 여기 걸려 있어서, 빠지면 발급이 한 건도 확정되지 않는다.
 
 ### 로컬 PC에서 부하를 발생시키지 않는 이유
 
@@ -46,24 +48,52 @@
 
 ### 사전 설정
 
-| 항목 | 값 |
-| --- | --- |
-| Tomcat | `threads.max=2000`, `max-connections=25000`, `accept-count=5000` |
-| MySQL | `max_connections=500` |
-| 부하 발생기 | `ulimit -n` 상향 (셸 세션마다 재설정 필요) |
-| 커널 | `ip_local_port_range` 확장 (인스턴스 재시작 시 초기화됨) |
-| **로그 레벨** | `ISSUE_LOG_LEVEL=WARN` — 건당 로그가 응답 시간 측정에 섞이지 않도록 낮춘다. 에러 로그는 유지된다 |
+앱 기본값은 **평상시(로컬·통합 테스트) 기준**이라 그대로 두면 측정이 되지 않는다. 부하 테스트 값은 전부 환경변수로만 넘긴다.
+
+```bash
+ISSUE_LOG_LEVEL=WARN \
+TOMCAT_MAX_THREADS=2000 TOMCAT_MAX_CONNECTIONS=25000 TOMCAT_ACCEPT_COUNT=5000 \
+DB_POOL_SIZE=100 \
+COUPON_RECONCILIATION_SCHEDULER_ENABLED=false \
+./gradlew bootRun
+```
+
+| 항목 | 값 | 왜 |
+| --- | --- | --- |
+| `ISSUE_LOG_LEVEL` | `WARN` | 건당 추적 로그가 응답 시간에 섞인다. 에러 로그는 유지된다 |
+| `TOMCAT_MAX_THREADS` | `2000` | 동시 요청을 받아낼 워커 스레드 |
+| `TOMCAT_MAX_CONNECTIONS` | `25000` | 동시에 열어둘 커넥션 |
+| `TOMCAT_ACCEPT_COUNT` | `5000` | 대기 큐. 차면 연결이 거절된다 |
+| **`DB_POOL_SIZE`** | **`100`** | **스레드만 올리면 안 된다 (아래)** |
+| **`COUPON_RECONCILIATION_SCHEDULER_ENABLED`** | **`false`** | **켜두면 배치가 측정에 끼어든다 (아래)** |
+| MySQL | `max_connections=500` | 풀 상한. 앱 외에 Outbox 발행기·스케줄러도 커넥션을 쓴다 |
+| 부하 발생기 | `ulimit -n` 상향 | 셸 세션마다 재설정 필요 |
+| 커널 | `ip_local_port_range` 확장 | 인스턴스 재시작 시 초기화됨 |
+
+> ⚠️ **`DB_POOL_SIZE`를 빼먹으면 측정이 통째로 무너진다.** 스레드를 2,000으로 열어도 커넥션이 10개면 1,990개가 풀 앞에 줄만 선다. 실측으로 **200 VU에서 400건 전부 30초 타임아웃 후 500**이 났고, 풀만 100으로 올리자 500이 0건이 됐다(`integration-test-result.md` §1).
+
+> ⚠️ **정합성 자동 스케줄러(#155)는 기본값이 켜짐이다.** 기동 30분 뒤부터 30분 간격으로 `ENDED` 쿠폰 전체를 순회하는데, SEED 쿠폰만 50만 건 × 5개라 **한 번에 6분 안팎**이 걸린다. 측정 구간에 이게 끼어들면 응답 시간과 커넥션 풀이 그 영향을 받아 결과를 믿을 수 없다.
+
+**적정 풀 크기는 재서 정한다.** 1단계를 돌리면서 아래가 `0`을 유지하는 선까지 올린다.
+
+```bash
+curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.pending
+```
+
+`pending`이 0보다 크면 스레드가 커넥션을 기다리는 중이고, 그 상태의 p95는 앱 성능이 아니라 **풀 크기를 재고 있는 값**이다.
 
 ## 3. 단계 구성
 
 1~2단계는 기능이 도는지 확인하는 예비 단계이고, **3단계가 이번 테스트의 목표 규모**다. 4단계는 재고를 그대로 두고 요청만 늘려 경쟁률을 높인 보강 검증이다.
 
-| 단계 | 재고 | 요청 | 경쟁률 | 반복 | 목적 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 1,000 | 2,000 | 2:1 | 3회 | 기능 확인, 기준선 |
-| 2 | 5,000 | 10,000 | 2:1 | 3회 | 중간 규모 확인 |
-| 3 | **10,000** | **20,000** | 2:1 | **5회** | **최종 검증 — 프로젝트 목표 규모** |
-| 4 | 10,000 | 50,000 | 5:1 | 3회 | 극한 경쟁에서 정합성 보강 검증 (여유 시) |
+| 단계 | 재고 | 요청 | 경쟁률 | 반복 | 실행 명령 | 목적 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1,000 | 2,000 | 2:1 | 3회 | `-e TOTAL_QUANTITY=1000 -e VUS=2000` | 기능 확인, 기준선 |
+| 2 | 5,000 | 10,000 | 2:1 | 3회 | `-e TOTAL_QUANTITY=5000 -e VUS=10000` | 중간 규모 확인 |
+| 3 | **10,000** | **20,000** | 2:1 | **5회** | `-e TOTAL_QUANTITY=10000 -e VUS=20000` | **최종 검증 — 프로젝트 목표 규모** |
+| 4 | 10,000 | 50,000 | 5:1 | 3회 | `-e TOTAL_QUANTITY=10000 -e VUS=50000` | 극한 경쟁에서 정합성 보강 검증 (여유 시) |
+
+전부 `-e SCENARIO=burst -e ITERATIONS_PER_VU=1` 을 함께 준다. **총 요청 수는 `VUS × ITERATIONS_PER_VU`** 인데, 목표가 "동시 사용자 N명"이므로 VU 를 N 개 두고 각각 한 번씩 쏜다. `2000 VU × 10회` 는 총 20,000건이긴 해도 동시 사용자는 2,000명뿐이라 선착순 상황이 재현되지 않는다.
 
 3단계가 합격해야 프로젝트 요구사항을 충족한 것이다. 4단계는 같은 재고에 요청만 2.5배로 늘려 경쟁률을 5:1로 올린 조건으로, 3단계 통과 후에도 더 가혹한 상황에서 정합성이 유지되는지를 추가로 확인한다.
 
@@ -79,62 +109,90 @@
 
 선착순 쿠폰은 오픈 시각에 요청이 한꺼번에 몰린다. 점진적 ramp-up이 아니라 **순간 스파이크**로 구성한다.
 
-```js
-export const options = {
-  scenarios: {
-    burst: {
-      executor: 'shared-iterations',
-      vus: 20000,
-      iterations: 50000,
-      maxDuration: '5m',        // 초과 시 강제 종료 = 실패
-    },
-  },
-  thresholds: {
-    'http_req_duration{expected_response:true}': ['p(95)<500'],
-    'http_req_failed': ['rate<0.01'],
-  },
-};
+**스크립트는 이미 있다** — `load-test/k6/issue-coupon.js`. 여기 옵션을 새로 짜지 말고 환경변수로 조절한다. 실행 방법과 환경변수 전체 목록은 `load-test/README.md`에 있고, 이 문서는 **어떤 값으로 돌릴지**만 정한다.
+
+### 시나리오 세 가지
+
+`-e SCENARIO=` 로 고른다.
+
+| 값 | 실행자 | 용도 |
+| --- | --- | --- |
+| `smoke` | `per-vu-iterations` (10 VU × 1) | 스크립트가 도는지만 확인. 기본값 |
+| **`burst`** | `per-vu-iterations` (`VUS` × `ITERATIONS_PER_VU`) | **본 측정.** 모든 VU 가 동시에 출발해 선착순이 몰리는 순간을 재현한다 |
+| `rate` | `constant-arrival-rate` (`RATE`/초) | 초당 요청 수를 고정해 처리량 한계를 본다 |
+
+`shared-iterations` 가 아니라 **`per-vu-iterations`** 인 이유는 전자가 VU 들이 반복을 나눠 가지는 방식이라 출발 시점이 흩어지기 때문이다. 선착순은 "동시에 출발"이 핵심이다.
+
+### 3단계 실행 예
+
+```bash
+k6 run \
+  -e BASE_URL=http://<앱 사설 IP>:8080 \
+  -e SCENARIO=burst \
+  -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 \
+  -e VUS=20000 -e ITERATIONS_PER_VU=1 \
+  -e MAX_DURATION=10m \
+  load-test/k6/issue-coupon.js
 ```
 
-`thresholds`를 설정하면 k6가 자동으로 합격·불합격을 판정한다.
+### 합격·불합격 판정
+
+`thresholds` 는 스크립트가 들고 있고, k6 가 종료 코드로 판정해 준다. 문서에서 별도로 정의하지 않는다.
+
+| 임계값 | 뜻 |
+| --- | --- |
+| `dropped_iterations: count==0` | 부하 발생기가 요청을 못 보내고 버린 건이 있으면 측정 자체가 무효다 |
+| `issue_accept_rate`, `issue_conflict`, `issue_replayed` | 통합 테스트 전용 모드(`FIXED_IDEMPOTENCY_KEY` 등)를 켰을 때만 켜진다 |
+
+**`http_req_failed` 로 정합성을 판정하면 안 된다.** 이 API 는 재고가 없어도 `202` 를 돌려주는 비동기 구조라(§5.2), HTTP 실패율은 "발급이 잘 됐는가"와 무관하다. 정합성은 반드시 §5.1 의 SQL 로 본다.
+
+> 여러 대에서 나눠 쏠 때는 `INSTANCE_INDEX` · `INSTANCE_STRIDE` 로 기기마다 쓸 회원 구간을 갈라야 한다. 겹치면 뒤 기기 요청이 전부 중복 발급으로 튕긴다 — 방법은 `README.md` "여러 대에서 나눠 쏠 때" 참고.
 
 ## 5. 측정 지표
 
 ### 5.1 정합성 (최우선)
 
-부하 종료 후 SQL로 확인한다.
+부하 종료 후 **검증 스크립트 두 개**로 확인한다. 여기 쿼리를 새로 짜지 않는다 — 판정 기준이 스크립트 안에 주석과 함께 들어 있어서, 문서에 복사해두면 둘이 갈라진다.
 
-| 검증 항목 | 확인 방법 | 합격 조건 |
-| --- | --- | --- |
-| 초과 발급 | `SELECT COUNT(*) FROM coupon_issue WHERE coupon_id = ?` | 정확히 재고 수량 |
-| 재고 정합성 | Redis 잔여 + DB 발급 수 | = 총 재고 |
-| 중복 발급 | `GROUP BY user_id HAVING COUNT(*) > 1` | 0건 |
-| 순번 정합성 | `sequence_no` 분포 | 1~N이 빠짐·중복 없이 한 번씩 |
-| 멱등성 | 같은 Idempotency-Key 재전송 | 발급 1건만 |
-| 응답 ↔ DB 일치 | k6 성공 응답 수 vs DB 건수 | 일치 |
-
-**순번 검증 쿼리**
-
-```sql
-SELECT COUNT(*)                  AS total,
-       COUNT(DISTINCT sequence_no) AS distinct_no,
-       MIN(sequence_no)          AS min_no,
-       MAX(sequence_no)          AS max_no
-  FROM coupon_issue
- WHERE coupon_id = ?;
--- 재고 10,000인 경우 10000, 10000, 1, 10000 이어야 정상
+```bash
+docker cp load-test/sql/verify_issue_result.sql petcoupon-mysql:/tmp/
+docker exec petcoupon-mysql mysql -uroot -proot --default-character-set=utf8mb4 petcoupon \
+  -e "source /tmp/verify_issue_result.sql"
 ```
 
-**중복 발급 검증 쿼리**
+`--default-character-set=utf8mb4` 를 빼면 한글 별칭이 깨져 문법 오류로 끝난다.
 
-```sql
-SELECT user_id, COUNT(*)
-  FROM coupon_issue
- WHERE coupon_id = ?
- GROUP BY user_id
-HAVING COUNT(*) > 1;
--- 결과가 비어 있어야 정상
+두 스크립트 모두 대상 쿠폰이 1번이 아니면 파일 앞의 `SET @coupon_id` 를 바꾼다.
+
+| 스크립트 | 보는 것 |
+| --- | --- |
+| `verify_issue_result.sql` | 발급 건수·재고 정합성·중복 발급·순번 무결성·멱등키 상태 — **PASS/FAIL 로 판정** |
+| `verify_order_inversion.sql` | 선착순 순서 역전율(기록용) + 순번 1..N 무결성(판정용) |
+
+### 합격 조건
+
+| 검증 항목 | 합격 조건 |
+| --- | --- |
+| 발급 건수 | **`MIN(고유 신청자 수, 총재고)`** — 아래 참고 |
+| 재고 정합성 | Redis 잔여 + DB 발급 수 = 총재고 |
+| 중복 발급 | 0건 |
+| 순번 정합성 | 1~N 이 빠짐·중복 없이 한 번씩 |
+| 멱등성 | 같은 Idempotency-Key 재전송 시 발급 1건 |
+| 응답 ↔ DB 일치 | k6 접수 건수 vs DB 건수 |
+
+> **발급 건수를 "정확히 재고 수량"으로 보면 안 된다.** 이 시스템은 1인 1매라, 고유 신청자가 재고보다 적으면 재고가 남는 게 정상이다. 경쟁률 2:1 인 3단계에서는 결과적으로 재고와 같아지지만, 판정식 자체는 `MIN(고유 신청자, 총재고)` 여야 한다. `verify_issue_result.sql` 1번 항목이 이 식으로 되어 있다.
+
+### 꼬리 유실까지 보려면
+
+`verify_order_inversion.sql` 의 `@expected_issued_count` 를 비워두면 **DB 에 있는 것끼리만** 1..N 을 본다. 그러면 중간이 빈 것은 잡지만 **마지막 몇 건이 통째로 유실된 것은 못 잡는다** — 1..100 중 100번만 없으면 남은 1..99 가 그 자체로 온전해 보이기 때문이다.
+
+Lua 가 실제로 몇 번까지 내줬는지는 Redis 에만 있으므로, 값을 읽어서 채운다.
+
+```bash
+docker exec petcoupon-redis redis-cli GET "coupon:issue:sequence:{1}"
 ```
+
+`verify_issue_result.sql` 1번 항목도 같은 유실을 잡으므로 이 값은 선택이지만, **본 측정(3단계)에서는 채우는 것을 권한다.**
 
 ### 5.2 성능
 
@@ -212,23 +270,61 @@ coupon-issue-events  0          3200            10000           6800
 
 ## 7. 실행 절차
 
-각 회차마다 아래 순서를 반복한다.
+**0. 앱 기동** (회차마다 다시 띄우지 않는다) — §2 사전 설정의 환경변수를 전부 지정한다. `DB_POOL_SIZE` 와 `COUPON_RECONCILIATION_SCHEDULER_ENABLED=false` 를 빠뜨리지 않는다.
+
+기동 직후 컴포넌트 상태를 한 번 확인한다(#170).
+
+```bash
+curl -s -H "X-ADMIN-KEY: <토큰>" http://localhost:8080/admin/system/health
+```
+
+`db` · `redis` 가 `UP` 이어야 한다. **Kafka 는 이 API 에 안 나온다**(헬스 인디케이터 미구현) — Consumer Lag 으로 따로 본다(§6).
+
+---
+
+각 회차마다 아래를 반복한다.
 
 1. **초기화**
+   ```bash
+   curl -X POST http://localhost:8080/internal/coupons/1/reset \
+     -H "Content-Type: application/json" -d '{"totalQuantity": 10000}'
    ```
-   POST /internal/coupons/{couponId}/reset
-   ```
-   Redis 키(`stock`, `applicants`, `sequence`, `request-sequence`)도 함께 비운다.
+   발급·이력·멱등키·Outbox 를 지우고 Redis 키(`stock`, `applicants`, `sequence`, `request-sequence`)도 비운다. 응답의 `redisStock` 이 `totalQuantity` 와 같은지 확인하고 다음으로 넘어간다.
 
-2. **애플리케이션 기동** — Tomcat 튜닝값을 환경변수로 지정
+   > ⚠️ **발급 이력이 쌓여 있으면 오래 걸린다.** 발급 50만 + 이력 65만 건 삭제에 **470초(약 8분)** 가 걸렸다(TC-83 실측). 회차 간 대기 시간을 일정에 넣어야 한다 — 5회차면 초기화에만 40분이다. 부하 테스트용 쿠폰은 회차마다 2만 건 수준이라 훨씬 빠르지만, 300만 더미데이터가 같은 DB 에 있으면 삭제 대상 조회가 느려질 수 있다.
 
-3. **부하 실행** — k6 (별도 인스턴스)
+2. **부하 실행** — k6 (별도 인스턴스, §4)
 
-4. **확정 지연 측정** — 부하 종료 직후 폴링 스크립트 실행
+3. **확정 지연 측정** — 부하 종료 직후 폴링 스크립트 실행 (§6)
 
-5. **정합성 검증** — §5.1의 SQL 실행
+4. **정합성 검증** — §5.1 의 검증 스크립트 실행
 
-6. **결과 기록** — §8 표에 기입
+5. **결과 기록** — §8 표에 기입
+
+### 측정 중에 볼 것
+
+| 창구 | 보는 것 |
+| --- | --- |
+| `/actuator/metrics/hikaricp.connections.pending` | **0 유지** — 0보다 크면 풀 크기를 재고 있는 것이다 |
+| `/actuator/metrics/tomcat.threads.busy` | 워커 스레드 포화 여부 |
+| `GET /admin/coupon-issue/statistics` (#156) | 시간대별 처리량과 메시지 상태 분포. `inProgressCount` 가 줄어드는 속도로 밀림을 본다 |
+| `GET /admin/dashboard/summary` (#172) | 발급률·재고 합계 |
+| Kafka Consumer Lag | 최대값과 0 수렴 시각 (§6) |
+
+`/admin/**` 은 전부 `X-ADMIN-KEY` 가 필요하다.
+
+### 시각화용 회차는 따로 돈다
+
+발표용 선착순 시각화는 로그를 파싱하는데, **로그를 쌓으면서 재면 그 I/O 가 측정값에 섞인다.** 그래서 회차를 나눈다.
+
+| 회차 | 설정 | 용도 |
+| --- | --- | --- |
+| 성능 측정 | `ISSUE_LOG_LEVEL=WARN`, `LOG_FILE` 없음 | §8 성능 표에 기록 |
+| 시각화 | `ISSUE_LOG_LEVEL=INFO`, `LOG_FILE=logs/petcoupon.log` | **성능 수치로 쓰지 않는다** |
+
+```bash
+ISSUE_LOG_LEVEL=INFO LOG_FILE=logs/petcoupon.log ... ./gradlew bootRun
+```
 
 ## 8. 결과 기록표
 
@@ -263,14 +359,16 @@ coupon-issue-events  0          3200            10000           6800
 
 ## 9. 선행 조건
 
-부하 테스트는 통합 테스트 통과 후에 실행한다. 아래가 완료되어야 한다.
+부하 테스트는 통합 테스트 통과 후에 실행한다. **통합 테스트는 80건 전건 통과했다**(`integration-test-result.md`).
 
-| 항목 | 상태 |
-| --- | --- |
-| 발급 API ↔ Redis Lua ↔ Kafka 배선 | 진행 중 |
-| 초기화 API의 Redis 키 삭제 | 미구현 — 2회차부터 전건 실패 |
-| Redis 재고 초기화 로직 | 미구현 |
-| Redis 재고 보상(restore) | 미구현 |
-| Tomcat 튜닝 · Actuator 노출 | 미적용 |
-| 발급 이력 300만 더미데이터 | 미작성 |
-| AWS 인스턴스 3대 구성 | 미구성 |
+| 항목 | 상태 | 근거 |
+| --- | --- | --- |
+| 발급 API ↔ Redis Lua ↔ Kafka 배선 | ✅ | 통합 테스트 80/80 |
+| 초기화 API의 Redis 키 삭제 | ✅ | TC-55 — 삭제 건수·`redisStock` 대조 |
+| Redis 재고 초기화 로직 | ✅ | TC-55 · TC-17 |
+| Redis 재고 보상(restore) | ✅ | TC-95 — abandon 시 `RESTORED` |
+| Tomcat 튜닝 · Actuator 노출 | ✅ | `application.properties` (전부 환경변수) |
+| 발급 이력 대량 더미데이터 | ✅ | 250만 건 적재 (§7 참고) |
+| **AWS 인스턴스 3대 구성** | ❌ | **남은 유일한 블로커** |
+
+착수 판정과 근거는 `integration-test-result.md` §6에 있다.
