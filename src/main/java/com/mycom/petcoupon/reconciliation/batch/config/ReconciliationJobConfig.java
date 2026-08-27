@@ -278,12 +278,15 @@ public class ReconciliationJobConfig {
     // OOM 경로가 된다. 다른 대용량 검증(historyMismatchStep/invalidTransitionStep)과 같은
     // 청크 Step으로 옮겨서, 대량이어도 메모리에 한 번에 쌓이지 않게 한다.
     //
-    // issue_message에는 coupon_id로 시작하는 인덱스가 uk_message_sequence(coupon_id,
-    // sequence_no) 하나뿐이라, coupon_id 조건은 이 인덱스로 타지만(EXPLAIN: type=ref) 정렬 키인
-    // message_id와는 순서가 달라 필요하다. keyset 페이징 쿼리는 페이지마다 "message_id > 마지막값
-    // ORDER BY message_id LIMIT chunkSize" 형태라 실제로 정렬되는 건 페이지당 최대 chunkSize건뿐이고,
-    // 전체 DLQ 건수와 무관하게 coupon_id 인덱스로 대상 자체를 좁혀놓고 시작하므로 이 정도
-    // filesort는 허용 범위로 판단해 별도 인덱스를 추가하지 않았다.
+    // 처음엔 issue_message의 coupon_id 선두 인덱스가 uk_message_sequence(coupon_id,
+    // sequence_no) 하나뿐이라 "페이지당 chunkSize만 정렬되니 괜찮다"고 판단했는데, 틀렸다 —
+    // 이 인덱스로는 message_id 순으로 이어서 훑을 수 없어(정렬 순서가 다름) 매 페이지 남은
+    // 후보 전체를 스캔한 뒤에야 LIMIT으로 잘라내야 한다. DLQ가 N건이면 총 비용이
+    // N+(N-c)+(N-2c)+...≈O(N²/chunkSize)가 되어, 이 Step이 대비하려는 "대량 DLQ 적체" 시나리오
+    // 에서 정확히 느려진다. IssueMessage 엔티티에 idx_issue_message_coupon_dlq(coupon_id, status,
+    // message_id)를 추가해 이 필터+정렬을 인덱스 하나로 커버하게 했다 — 이제 페이지당
+    // chunkSize만큼만 실제로 훑는다(historyMismatchStep/invalidTransitionStep과 동일한
+    // idx_issue_coupon_id/idx_history_coupon_id 패턴).
     @Bean
     @StepScope
     public JdbcPagingItemReader<StockNotRestoredRow> stockNotRestoredReader(
