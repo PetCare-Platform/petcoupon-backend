@@ -37,13 +37,14 @@ class DataSourceWiringVerificationTest {
         HikariDataSource defaultHikari = (HikariDataSource) defaultDataSource;
         HikariDataSource lockHikari = (HikariDataSource) lockDataSource;
 
-        System.out.println("=== defaultDataSource pool name: " + defaultHikari.getPoolName()
-                + " maxPoolSize: " + defaultHikari.getMaximumPoolSize());
-        System.out.println("=== lockDataSource pool name: " + lockHikari.getPoolName()
-                + " maxPoolSize: " + lockHikari.getMaximumPoolSize());
+        // 실패했을 때만 두 풀의 이름·크기가 로그에 찍히면 되므로 System.out.println 대신
+        // .as()에 실어둔다 — 통과하면 조용하고, 실패하면 원인 파악에 필요한 값이 바로 보인다.
+        String context = "defaultDataSource pool name=%s maxPoolSize=%d, lockDataSource pool name=%s maxPoolSize=%d"
+                .formatted(defaultHikari.getPoolName(), defaultHikari.getMaximumPoolSize(),
+                        lockHikari.getPoolName(), lockHikari.getMaximumPoolSize());
 
-        assertThat(defaultHikari.getPoolName()).isNotEqualTo(lockHikari.getPoolName());
-        assertThat(defaultHikari.getMaximumPoolSize()).isEqualTo(10);
-        assertThat(lockHikari.getMaximumPoolSize()).isEqualTo(3);
+        assertThat(defaultHikari.getPoolName()).as(context).isNotEqualTo(lockHikari.getPoolName());
+        assertThat(defaultHikari.getMaximumPoolSize()).as(context).isEqualTo(10);
+        assertThat(lockHikari.getMaximumPoolSize()).as(context).isEqualTo(3);
     }
 }
