@@ -43,11 +43,27 @@ public class CouponIssueEventConsumer {
 		}
 
 		try {
-			couponIssuePersister.persist(event);
+			CouponIssue couponIssue = couponIssuePersister.persist(event);
 			log.info(
 				"[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}",
 				event.requestId(), event.sequenceNo()
 			);
+
+			// recordNotification()의 실패는 여기서만 삼킬 수 있다 — 메서드 내부 try/catch로는 막을 수
+			// 없다는 게 실측으로 확인됐다(JPA 스펙상 flush 실패로 트랜잭션이 rollback-only로 마킹되면,
+			// 메서드 안에서 예외를 잡아 삼켜도 프록시가 커밋을 시도하다가 UnexpectedRollbackException을
+			// 새로 던진다 — CouponIssuePersister.recordNotification() 주석 참고). 이 안쪽 try/catch를
+			// 없애고 바깥의 DataIntegrityViolationException 처리에 맡기면, persist() 재전달 감지
+			// 로직이 알림 실패까지 "저장 중 제약 위반"으로 오인해서 엉뚱한 경로(재고 보상/DLQ 재시도)를
+			// 타게 되므로 반드시 별도 catch로 분리해야 한다.
+			try {
+				couponIssuePersister.recordNotification(couponIssue);
+			} catch (Exception notificationException) {
+				log.error(
+					"[CouponIssueEvent] 알림 로그 기록 실패, 발급 자체는 정상 처리됨: requestId={}",
+					event.requestId(), notificationException
+				);
+			}
 		} catch (DataIntegrityViolationException e) {
 			Optional<CouponIssue> racedByOtherConsumer = couponIssueRepository.findByRequestId(event.requestId());
 			if (racedByOtherConsumer.isPresent()) {
