@@ -153,7 +153,11 @@ class CouponIssuePersisterTest {
 		NotificationLog notification = notificationCaptor.getValue();
 		assertThat(notification.getChannel()).isEqualTo(Channel.SMS);
 		assertThat(notification.getStatus()).isEqualTo(NotificationStatus.SENT);
-		assertThat(notification.getRecipientMasked()).isEqualTo("010-1234-5678");
+		// #142 — 원본(010-1234-5678)이 아니라 마스킹된 값이 저장돼야 한다.
+		// 이 단언이 평문으로 되돌아가면 마스킹이 빠진 것이다.
+		assertThat(notification.getRecipientMasked())
+				.isEqualTo("010-****-5678")
+				.doesNotContain("1234");
 		assertThat(notification.getSentAt()).isNotNull();
 	}
 
