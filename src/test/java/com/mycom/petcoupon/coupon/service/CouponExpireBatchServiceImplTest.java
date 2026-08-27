@@ -96,9 +96,10 @@ class CouponExpireBatchServiceImplTest {
 		CouponIssue notYetExpiredIssue = createCouponIssue(IssueStatus.ISSUED, LocalDateTime.now().plusDays(1), "EXP-NOTYET");
 		CouponIssue usedButExpiredIssue = createCouponIssue(IssueStatus.USED, LocalDateTime.now().minusDays(1), "EXP-USED");
 
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
 		entityManager.clear();
 
+		assertThat(expiredCount).isEqualTo(1);
 		CouponIssue reloadedExpired = couponIssueRepository.findById(expiredIssue.getCouponIssueId()).orElseThrow();
 		CouponIssue reloadedNotYet = couponIssueRepository.findById(notYetExpiredIssue.getCouponIssueId()).orElseThrow();
 		CouponIssue reloadedUsed = couponIssueRepository.findById(usedButExpiredIssue.getCouponIssueId()).orElseThrow();
@@ -116,7 +117,8 @@ class CouponExpireBatchServiceImplTest {
 
 	@Test
 	void expireOverdueCoupons_succeedsWhenNothingToExpire() {
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
+		assertThat(expiredCount).isEqualTo(0);
 	}
 
 	@Test
@@ -126,9 +128,10 @@ class CouponExpireBatchServiceImplTest {
 				.mapToObj(i -> createCouponIssue(IssueStatus.ISSUED, LocalDateTime.now().minusDays(1), "EXP-CHUNK-" + i))
 				.toList();
 
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
 		entityManager.clear();
 
+		assertThat(expiredCount).isEqualTo(7);
 		for (CouponIssue issue : issues) {
 			CouponIssue reloaded = couponIssueRepository.findById(issue.getCouponIssueId()).orElseThrow();
 			assertThat(reloaded.getStatus()).isEqualTo(IssueStatus.EXPIRED);

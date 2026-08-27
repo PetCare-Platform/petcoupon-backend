@@ -42,7 +42,7 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
 
     @Override
     @Scheduled(cron = "0 0 1 * * *", scheduler = "couponExpireBatchTaskScheduler") // 매일 새벽 1시에 실행
-    public void expireOverdueCoupons() {
+    public int expireOverdueCoupons() {
         LocalDateTime now = LocalDateTime.now();
         int totalExpired = 0;
 
@@ -57,6 +57,7 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
         }
 
         log.info("쿠폰 만료 배치 완료. 총 대상={}건", totalExpired);
+        return totalExpired;
     }
 
     private ChunkResult expireChunk(LocalDateTime now) {
