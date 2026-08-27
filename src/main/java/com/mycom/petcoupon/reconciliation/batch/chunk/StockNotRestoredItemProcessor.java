@@ -36,8 +36,8 @@ public class StockNotRestoredItemProcessor implements ItemProcessor<StockNotRest
                 .errorType(VerificationErrorType.STOCK_NOT_RESTORED)
                 .userId(row.userId())
                 .expectedValue("재고 복구됨")
-                .actualValue("DLQ 확정 (message_id=" + row.messageId() + ")")
-                .message("최종 실패했지만 예약된 재고가 복구되지 않았습니다")
+                .actualValue("ABANDONED 확정 (message_id=" + row.messageId() + ")")
+                .message("재처리를 포기(abandon)했지만 예약된 재고가 복구되지 않았습니다")
                 .build();
     }
 }

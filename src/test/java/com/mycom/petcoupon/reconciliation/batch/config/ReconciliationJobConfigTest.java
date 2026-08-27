@@ -295,8 +295,12 @@ class ReconciliationJobConfigTest {
         // stockNotRestoredStep(청크, entityManager.getReference())로 서로 다른 경로를 거치지만
         // 최종적으로 같은 report에 쌓이는지를 실제 Job 실행으로 확인한다 — STOCK_NOT_RESTORED는
         // 원래 RemainingChecksTasklet 안에서 findStockNotRestored()(getResultList()로 전체 로드)로
-        // 처리했으나, DLQ 대량 적체 시 OOM 위험 때문에 청크 Step으로 옮겼다(ReconciliationJobConfig
+        // 처리했으나, 대량 적체 시 OOM 위험 때문에 청크 Step으로 옮겼다(ReconciliationJobConfig
         // 클래스 Javadoc 참고). 이 테스트는 그 이관 후에도 결과가 report에 정상 저장됨을 검증한다.
+        //
+        // DLQ 1건 + ABANDONED 1건을 같이 둔다(#149) — DLQ는 아직 관리자 결정을 기다리는 정상
+        // 상태라 STOCK_NOT_RESTORED 대상이 아니고(dbDlqCount 집계 대상일 뿐), ABANDONED만
+        // "재처리를 포기했지만 재고가 안 돌아온" 대상이다.
         transactionTemplate.executeWithoutResult(status -> {
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-1", "NONE", "ISSUED"); // sequenceNo=1
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-2", "NONE", "ISSUED"); // sequenceNo=2
@@ -304,6 +308,7 @@ class ReconciliationJobConfigTest {
             createIssueWithHistory(IssueStatus.ISSUED, "SEQ-4", "NONE", "ISSUED"); // sequenceNo=4
 
             insertIssueMessage(1L, "job-gap-dlq-1", "DLQ");
+            insertIssueMessage(1L, "job-gap-abandoned-1", "ABANDONED");
         });
 
         var jobParameters = new JobParametersBuilder()

@@ -43,9 +43,9 @@ import lombok.RequiredArgsConstructor;
  * 반드시 historyMismatchStep/invalidTransitionStep/stockNotRestoredStep(청크, 대용량)보다
  * 먼저 와야 한다 — RemainingChecksTasklet가 쓰는 assignReport()는 부모 report의 지연로딩
  * 컬렉션에 append하는데, 청크 Step이 먼저 대량으로 써놨으면 그 전체를 메모리로 끌어오게 된다.
- * STOCK_NOT_RESTORED는 원래 remainingChecksStep 안에서 같이 처리했으나, DLQ가 대량으로
- * 쌓이는 실제 장애 상황(300만 건 규모)에서는 assignReport() 경로 자체가 OOM 위험이라
- * stockNotRestoredStep으로 분리했다.
+ * STOCK_NOT_RESTORED는 원래 remainingChecksStep 안에서 같이 처리했으나, 재처리 포기(abandon)
+ * 건이 대량으로 쌓이는 실제 장애 상황(300만 건 규모)에서는 assignReport() 경로 자체가 OOM
+ * 위험이라 stockNotRestoredStep으로 분리했다.
  *
  * historyMismatchStep/invalidTransitionStep/stockNotRestoredStep의 Reader는
  * JdbcPagingItemReader다 — MySQL provider는 OFFSET이 아니라 정렬 키(coupon_issue_id/
@@ -269,11 +269,18 @@ public class ReconciliationJobConfig {
                 .build();
     }
 
-    // STOCK_NOT_RESTORED: 재시도를 다 소진하고 최종 실패(DLQ)한 요청 — DLQ row 하나하나가 곧
+    // STOCK_NOT_RESTORED: 관리자가 재처리를 포기(abandon)한 요청 — ABANDONED row 하나하나가 곧
     // 미복구 재고 1개다. message_id 기준 keyset 페이징으로 chunkSize씩 읽는다.
     //
+    // DLQ가 아니라 ABANDONED를 본다(#149). DLQ 확정 시점(CouponIssueEventRecoverer.restoreStock())은
+    // 실제로는 아무것도 안 하고 로그만 남긴다 — 관리자가 reprocess로 되살릴 수 있어, 여기서
+    // 즉시 복구하면 나중에 재처리가 성공했을 때 초과발급으로 이어지기 때문이다. 재고 복구는
+    // 관리자가 abandon으로 재처리를 포기한다고 명시적으로 결정했을 때(CouponIssueDlqReprocessServiceImpl)
+    // 만 일어난다. 그래서 DLQ를 그대로 보면, 아직 관리자 결정을 기다리는 정상적인 건까지
+    // 전부 "미복구"로 오탐한다 — 진짜 봐야 할 건 ABANDONED인데 복구가 안 된 경우다.
+    //
     // 원래는 ReconciliationDetectionQueries.findStockNotRestored()가 getResultList()로 전체를
-    // 한 번에 읽어 RemainingChecksTasklet의 assignReport()로 쌓았다 — DLQ가 대량으로 쌓이는
+    // 한 번에 읽어 RemainingChecksTasklet의 assignReport()로 쌓았다 — 이런 요청이 대량으로 쌓이는
     // 실제 장애 상황(이 배치가 원래 대비하려는 300만 건 규모)에서는 이 한 줄이 그대로
     // OOM 경로가 된다. 다른 대용량 검증(historyMismatchStep/invalidTransitionStep)과 같은
     // 청크 Step으로 옮겨서, 대량이어도 메모리에 한 번에 쌓이지 않게 한다.
@@ -281,12 +288,13 @@ public class ReconciliationJobConfig {
     // 처음엔 issue_message의 coupon_id 선두 인덱스가 uk_message_sequence(coupon_id,
     // sequence_no) 하나뿐이라 "페이지당 chunkSize만 정렬되니 괜찮다"고 판단했는데, 틀렸다 —
     // 이 인덱스로는 message_id 순으로 이어서 훑을 수 없어(정렬 순서가 다름) 매 페이지 남은
-    // 후보 전체를 스캔한 뒤에야 LIMIT으로 잘라내야 한다. DLQ가 N건이면 총 비용이
-    // N+(N-c)+(N-2c)+...≈O(N²/chunkSize)가 되어, 이 Step이 대비하려는 "대량 DLQ 적체" 시나리오
-    // 에서 정확히 느려진다. IssueMessage 엔티티에 idx_issue_message_coupon_dlq(coupon_id, status,
-    // message_id)를 추가해 이 필터+정렬을 인덱스 하나로 커버하게 했다 — 이제 페이지당
-    // chunkSize만큼만 실제로 훑는다(historyMismatchStep/invalidTransitionStep과 동일한
-    // idx_issue_coupon_id/idx_history_coupon_id 패턴).
+    // 후보 전체를 스캔한 뒤에야 LIMIT으로 잘라내야 한다. 대상 건이 N건이면 총 비용이
+    // N+(N-c)+(N-2c)+...≈O(N²/chunkSize)가 되어, 이 Step이 대비하려는 "대량 적체" 시나리오에서
+    // 정확히 느려진다. IssueMessage 엔티티에 idx_issue_message_coupon_dlq(coupon_id, status,
+    // message_id)를 추가해 이 필터+정렬을 인덱스 하나로 커버하게 했다(이름은 DLQ 기준으로 붙였을
+    // 때 그대로지만 coupon_id+status+message_id 조합이라 ABANDONED 조회에도 그대로 유효하다) —
+    // 이제 페이지당 chunkSize만큼만 실제로 훑는다(historyMismatchStep/invalidTransitionStep과
+    // 동일한 idx_issue_coupon_id/idx_history_coupon_id 패턴).
     @Bean
     @StepScope
     public JdbcPagingItemReader<StockNotRestoredRow> stockNotRestoredReader(
@@ -299,7 +307,7 @@ public class ReconciliationJobConfig {
             queryProviderFactory.setFromClause("issue_message");
             queryProviderFactory.setWhereClause("""
                     coupon_id = :couponId
-                      AND status = 'DLQ'
+                      AND status = 'ABANDONED'
                       AND created_at <= :asOfAt
                     """);
             queryProviderFactory.setSortKey("message_id");
