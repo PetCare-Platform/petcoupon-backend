@@ -11,6 +11,12 @@ import lombok.Builder;
 // 포함하고, 재시도 대기중인 FAILED는 inProgressCount에 들어간다(PENDING·SENT와 함께) —
 // 그래서 issuedCount+failedCount+inProgressCount가 항상 그 버킷의 총 접수량과 같다.
 // IssueMessageRepository.findThroughputByHour() 참고.
+//
+// 24개 버킷 전부가 DB 조회 결과인 건 아니다 — GROUP BY 쿼리 특성상 요청이 0건인
+// 시간대는 결과에서 통째로 빠지는데, IssueStatisticsService가 그 빈 슬롯을 이
+// 레코드(issuedCount=0, failedCount=0, inProgressCount=0)로 직접 채워 넣는다
+// (zero-filling, IssueStatisticsService.buildTimeSeries() 참고). 프론트가 24개
+// 연속 배열을 기대하고 그래프를 그릴 수 있게 하기 위함이다.
 @Builder
 public record IssueThroughputBucketResponse(
         String bucket,
