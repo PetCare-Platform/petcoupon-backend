@@ -379,6 +379,6 @@ ISSUE_LOG_LEVEL=INFO LOG_FILE=logs/petcoupon.log ... ./gradlew bootRun
 | Redis 재고 보상(restore) | ✅ | TC-95 — abandon 시 `RESTORED` |
 | Tomcat 튜닝 · Actuator 노출 | ✅ | `application.properties` (전부 환경변수) |
 | 발급 이력 대량 더미데이터 | ✅ | 250만 건 적재 (§7 참고) |
-| **AWS 인스턴스 3대 구성** | ❌ | **남은 유일한 블로커** |
+| **AWS 인스턴스 3대 구성** | ❌ | **남은 유일한 블로커** — 사양·네트워크·OS 설정은 별도 이슈에서 확정한다 |
 
 착수 판정과 근거는 `integration-test-result.md` §6에 있다.
