@@ -43,11 +43,27 @@ public class CouponIssueEventConsumer {
 		}
 
 		try {
-			couponIssuePersister.persist(event);
+			CouponIssue couponIssue = couponIssuePersister.persist(event);
 			log.info(
 				"[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}",
 				event.requestId(), event.sequenceNo()
 			);
+
+			// recordNotification()의 실패는 여기서만 삼킬 수 있다 — 메서드 내부 try/catch로는 막을 수
+			// 없다는 게 실측으로 확인됐다(JPA 스펙상 flush 실패로 트랜잭션이 rollback-only로 마킹되면,
+			// 메서드 안에서 예외를 잡아 삼켜도 프록시가 커밋을 시도하다가 UnexpectedRollbackException을
+			// 새로 던진다 — CouponIssuePersister.recordNotification() 주석 참고). 이 안쪽 try/catch를
+			// 없애고 바깥의 DataIntegrityViolationException 처리에 맡기면, persist() 재전달 감지
+			// 로직이 알림 실패까지 "저장 중 제약 위반"으로 오인해서 엉뚱한 경로(재고 보상/DLQ 재시도)를
+			// 타게 되므로 반드시 별도 catch로 분리해야 한다.
+			try {
+				couponIssuePersister.recordNotification(couponIssue);
+			} catch (Exception notificationException) {
+				log.error(
+					"[CouponIssueEvent] 알림 로그 기록 실패, 발급 자체는 정상 처리됨: requestId={}",
+					event.requestId(), notificationException
+				);
+			}
 		} catch (DataIntegrityViolationException e) {
 			Optional<CouponIssue> racedByOtherConsumer = couponIssueRepository.findByRequestId(event.requestId());
 			if (racedByOtherConsumer.isPresent()) {
@@ -59,8 +75,10 @@ public class CouponIssueEventConsumer {
 				couponIssuePersister.confirmIdempotencySucceeded(racedByOtherConsumer.get(), event.requestId());
 				couponIssuePersister.markConsumed(event.requestId());
 			} else {
-				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요
-				// TODO: CouponIssueLuaService.restoreStock()이 아직 없어 실제 재고 보상 호출 불가 (작업 대기)
+				// requestId 충돌이 아닌 다른 제약 위반 (예: 존재하지 않는 coupon/user FK) — 저장은 안 됐으므로 재고 보상 필요.
+				// 다만 여기서 즉시 복구하지 않는다 — 이 메시지도 결국 DLQ로 전이되고 관리자가 수동 재처리(reprocess)로
+				// 다시 살릴 수 있어, 즉시 복구하면 나중에 재처리가 성공했을 때 초과발급으로 이어질 수 있다.
+				// TODO: 재고 복구는 관리자가 재처리를 포기하기로 결정한 시점에만 실행돼야 한다 — 그 결정 지점 연결 대기
 				// 여기서 삼키면 오프셋이 정상 커밋돼 재시도/DLQ 경로를 아예 안 타므로 재전파해서 그 경로를 타게 함
 				throw e;
 			}
