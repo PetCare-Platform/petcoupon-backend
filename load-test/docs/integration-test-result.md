@@ -47,11 +47,11 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | A. 정상 흐름 | 17 | 17 | 0 | 0 | 0 |
 | B. 예외 흐름 | 19 | 19 | 0 | 0 | 0 |
 | C. 경계·동시성 | 7 | 7 | 0 | 0 | 0 |
-| D. 배치·정합성 | 16 | 15 | 0 | 0 | 1 |
-| E. 비동기 확정 | 10 | 8 | 0 | 0 | 2 |
-| F. 대량 데이터 | 6 | 5 | 0 | 0 | 1 |
+| D. 배치·정합성 | 16 | 15 | 1 | 0 | 0 |
+| E. 비동기 확정 | 10 | 10 | 0 | 0 | 0 |
+| F. 대량 데이터 | 6 | 6 | 0 | 0 | 0 |
 | G. 순서 보장 | 5 | 5 | 0 | 0 | 0 |
-| **합계** | **80** | **76** | **0** | **0** | **4** |
+| **합계** | **80** | **79** | **1** | **0** | **0** |
 
 > TC-63 · TC-70은 결번이라 집계에서 뺐다.
 
@@ -127,7 +127,7 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | TC-53 | 배치 재실행 | ✅ | 동상 |
 | TC-54 | Redis ↔ DB 재고 정합성 | ✅ | 쿠폰 612: 9+1=10 / 쿠폰 1101: 7+3=10 — 둘 다 총재고와 일치 |
 | TC-55 | 초기화 API 동작 | ✅ | 삭제 건수 응답(발급·이력·멱등키·메시지 각 3)이 실제와 일치, 재고 10 원복, `redisStock` 10 |
-| TC-56 | 초기화 API 운영 차단 | — | `prod` 프로파일 기동이 필요해 별도 회차로 미룸 |
+| TC-56 | 초기화 API 운영 차단 | ❌ | 차단은 된다(엔드포인트 미등록). 다만 응답이 기대한 404 가 아니라 **500** 이다 (§5 참고) |
 | TC-57 | 정합성 배치 — 정상 판정 | ✅ | 쿠폰 612 → `MATCHED` · `errorCount 0` · 상세 0건 · `stockRemaining 9 = redisRemaining 9` |
 | TC-58 | 정합성 배치 — HISTORY_MISMATCH | ✅ | 상태만 USED로 조작 → 기대 `ISSUED` / 실제 `USED` 탐지 |
 | TC-59 | 정합성 배치 — INVALID_STATUS | ✅ | `EXPIRED → USED` 이력 주입 → 허용되지 않은 전이로 탐지 |
@@ -145,9 +145,9 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | TC-71 | Consumer 정상 처리 | ✅ | 발급 10건 전건 ISSUED · 순번 1~10 · Outbox 전건 `CONSUMED` · Kafka LAG 0 |
 | TC-72 | Consumer 일시 실패 후 재시도 | ✅ | TC-73 과정에서 확인 — 재시도 후 `retry_count` 증가, 중복 저장 없음 (§5 참고) |
 | TC-73 | 재시도 최종 실패 → DLQ 적재 | ✅ | `coupon_stock` 행 제거로 저장 실패 유도 → `status=DLQ`. **Redis 재고 복구 안 됨**(의도된 설계) |
-| TC-74 | Kafka 발행 자체 실패 | — | Kafka 중단이 필요해 별도 회차로 미룸 |
+| TC-74 | Kafka 발행 자체 실패 | ✅ | Kafka 중단 상태에서 **202 WAITING 66~69ms** 정상 응답, `issue_message` → `FAILED` 재시도 대상. 재기동 18초 만에 3건 전건 `CONSUMED`, 유실 0 (§5 참고) |
 | TC-75 | Consumer 중복 전달 (멱등) | ✅ | 같은 `requestId` 2회 전달 → `coupon_issue` 1건만, `issued_quantity` 1 유지, 500 없음 |
-| TC-76 | 처리 전 앱 종료 후 재기동 | — | 앱 강제 종료가 필요해 별도 회차로 미룸 |
+| TC-76 | 처리 전 앱 종료 후 재기동 | ✅ | 접수 10건 중 **4건이 `SENT`(미처리) 상태에서 강제 종료** → 재기동 후 10건 전건 `CONSUMED`, 순번 1~10 무결, 유실 0 (§5 참고) |
 | TC-77 | DLQ 목록 조회 | ✅ | `messageId`·`requestId`·`retryCount`·`lastError` 포함. 토큰 없으면 401 |
 | TC-78 | DLQ 수동 재발행 | ✅ | 원인(재고 행) 제거 후 재발행 → `CONSUMED`, `coupon_issue` 1건 추가, `issued_quantity` 0→1 |
 | TC-79 | DLQ 재발행 — 중복·잘못된 요청 방어 | ✅ | ① 동시 5요청 → **200 × 1 / `COUPON409-7` × 4** ② DLQ 아닌 건 → `COUPON409-7` ③ 없는 ID → `COUPON404-3` |
@@ -159,7 +159,7 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | --- | --- | --- | --- |
 | TC-80 | 회원 100만 건 상태에서 발급 | ✅ | 회원 1,000,028 · 발급이력 2,500,002 상태에서 접수 **0.16~0.55초**(중앙값 0.26초), 발급 10건 · 순번 1~10 · Outbox 전건 `CONSUMED`. 소규모(TC-71) 대비 악화 없음 |
 | TC-81 | 발급 이력 300만 건 상태에서 조회 | ✅ | 응답 **40~76ms**. `EXPLAIN` → `type=ref`, `key=user_id FK 인덱스`, `rows=5` — 풀스캔 없음. 다만 `Using filesort` (§5 참고) |
-| TC-82 | 발급 이력 300만 건 상태에서 배치 | — | **수동 트리거가 없어 실행 불가**. 만료 대상도 0건(SEED `expires_at`이 2027년). TC-50~53과 같은 제약 (§5 참고) |
+| TC-82 | 발급 이력 300만 건 상태에서 배치 | ✅ | 250만 건 테이블에서 **350,000건 만료 · 108.9초**(3,211건/초), 1,000건씩 개별 커밋. 배치 중 발급 API 10건 전부 202(122~575ms) — 락으로 막히지 않음 (§5 참고) |
 | TC-83 | 대량 상태에서 초기화 API | ✅ | 발급 50만 + 이력 65만 삭제, **470초**(7분 50초) · HTTP 200 · 타임아웃 없음 (§5 참고) |
 | TC-84 | 개인정보 마스킹 | ✅ | `notification_log.recipient_masked` 가 `010-****-6992` 형태, 평문 **0건**. 발급 목록·상세·실시간 현황 응답에 개인정보 필드 없음 |
 | TC-85 | 정합성 배치 — 전체 쿠폰 커버리지 | ✅ | SEED 쿠폰 6개 전부 처리, 누락 없음. 합산 `totalCount` 2,500,000 · `errorCount` **0**. 총 약 10분. 250만인 이유와 `MISMATCHED` 사유는 §5 참고 |
@@ -305,13 +305,140 @@ type = ref    key = user_id FK 인덱스    rows = 5    Extra = Using filesort
 
 지금은 회원별 보유량이 1~5장이라 무해하다. **한 회원이 수천 장을 갖는 상황이 생기면** 그때 `(user_id, created_at)` 복합 인덱스를 검토해야 한다.
 
-### ⚠️ TC-82 — 실행 불가 (TC-50~53과 같은 원인)
+### ✅ TC-82 — 대량 만료 배치 실측 (2026-08-27 21:28 ~ 21:30)
 
-만료 배치에 수동 트리거가 없어 대량 규모에서 돌릴 방법이 없다. `CouponExpireBatchServiceImplTest` 는 `chunk-size=3` 소규모라 "300만 건에서 청크 단위로 완주하는가"를 대신 보여주지 못한다.
+**어떻게 돌렸는가** — 만료 배치는 `@Scheduled(cron = "0 0 1 * * *")` 로만 도는 데다 수동 실행 API 가 없어서, 기동 중인 앱에서는 시작시킬 방법이 없다. 실행 중인 앱은 그대로 두고, 서비스 빈을 직접 호출하는 임시 테스트를 만들어 돌린 뒤 지웠다.
 
-SEED 데이터의 `expires_at` 이 2027년이라 **만료 대상 자체가 0건**이기도 하다. 대량 검증을 하려면 대상 데이터를 만드는 것과 트리거 두 가지가 다 필요하다.
+```java
+@DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Import({CouponExpireBatchServiceImpl.class, CouponBatchSchedulerConfig.class})
+// 테스트 트랜잭션을 끈다. 켜두면 TransactionTemplate 이 거기 합류해
+// 청크가 전부 한 트랜잭션이 되고 끝나면 롤백돼서 운영과 다른 실행이 된다.
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
+```
 
-**만료 배치 수동 트리거 부재는 별도 이슈로 다뤄야 한다** — TC-50~53·TC-82 다섯 건이 여기 걸려 있다.
+**대상 데이터** — SEED 의 `expires_at` 이 2027년이라 만료 대상이 0건이었다. 쿠폰 1090 의 `ISSUED` 350,000건을 `expires_at = 2026-01-01` 로 바꿔 대상을 만들었다. 원래 값과 구분되는 시각을 골라, 실행 뒤 그 시각으로만 되돌려 원복했다.
+
+| 항목 | 값 |
+| --- | --- |
+| 테이블 규모 | `coupon_issue` 2,500,026건 |
+| 만료 처리 | 350,000건 |
+| 소요 | **108,913ms** (약 1분 49초, 3,211건/초) |
+| 청크 | 1,000건씩 **개별 커밋** — `innodb_trx.trx_rows_modified` 가 2,000(UPDATE 1,000 + 이력 1,000)에서 끊기며 반복 |
+| 이력 | `coupon_issue_history` 350,000건 = 상태 변경 건수와 정확히 일치 |
+| 잔여 | `ISSUED` 만료 대상 0건 |
+
+**락 대기로 발급 API 가 막히지 않는가** — 배치가 도는 중에 발급 요청을 쏴서 응답 시간을 쟀다.
+
+| 시점 | 요청 | 응답 시간 | HTTP |
+| --- | --- | --- | --- |
+| 배치 진행 중 | 10건 | 122 ~ 575ms | 전부 202 |
+| 배치 종료 후 | 5건 | 102 ~ 224ms | 전부 202 |
+
+느려지긴 하지만 막히지 않는다. **다만 배치 중 지연을 전부 락 경합으로 읽으면 안 된다** — 배치를 돌린 테스트 JVM 이 같은 노트북 CPU 를 쓰고 있었다. 분리해서 재려면 배치와 API 를 다른 장비에 두어야 한다.
+
+실행 후 쿠폰 1090 은 `ISSUED 350,000 / USED 100,000 / EXPIRED 50,000` 으로, 배치가 넣은 이력 350,000건은 삭제해 원복했다.
+
+**수동 트리거 부재는 그대로 남아 있다.** 이번엔 임시 테스트로 우회했지만 운영에서는 새벽 1시를 기다리는 것 말고 방법이 없다. 별도 이슈로 다룰 값어치가 있다.
+
+### ✅ TC-74 — Kafka 중단 (2026-08-27 21:21 ~ 21:26)
+
+`docker stop petcoupon-kafka` 후 신청 3건.
+
+| 확인 항목 | 결과 |
+| --- | --- |
+| 응답 | **202 WAITING · 66 · 67 · 69ms** — Kafka 가 죽어도 응답 경로는 영향 없음 |
+| Outbox | `PENDING` → `FAILED`, `retry_count` 증가 (재시도 대상에 들어감) |
+| 재기동 후 | 21:25:17 기동 → 21:25:33~35 **3건 전건 `CONSUMED`**, 유실 0 |
+| 순서 | `sequence_no` 1(878) · 2(892) · 3(946) — 접수 순서 유지 |
+
+시나리오 기대는 전부 충족했다. 다만 실행 중에 **기대에 없던 것 두 가지**가 나왔다.
+
+**① Kafka 가 죽으면 Outbox 발행이 메시지 1건당 60초씩 직렬로 막힌다.**
+
+`application.properties` 에 `request.timeout.ms=5000` · `delivery.timeout.ms=10000` 은 있는데 **`max.block.ms` 가 없다**. 이 값은 브로커 메타데이터를 못 받을 때 `send()` 호출 자체가 붙잡혀 있는 시간이고, 앞의 두 타임아웃과는 다른 구간이라 기본값 60초가 그대로 적용된다.
+
+`CouponIssueOutboxPublisher` 는 조회한 메시지를 스트림으로 돌며 `publish()` 를 부르는데, 그 안의 `kafkaTemplate.send()` 가 각각 60초씩 붙잡힌다. 실제로 3건 처리에 180초가 걸렸다(`retry_count` 가 1건씩 순차로 올라갔다). `batch-size=100` 이면 한 틱에 100분이다.
+
+밀린 메시지가 사실상 진행되지 않으므로, 장애가 길어지면 `max-retry-count=5` 소진에도 한참 걸리고 DLQ 전이도 그만큼 늦어진다. `spring.kafka.producer.properties.max.block.ms` 를 `delivery.timeout.ms` 수준으로 낮추는 게 맞다.
+
+**② `last_error` 에 `Send failed` 만 남는다.**
+
+`errorMessage()` 가 `throwable.getMessage()` 를 쓰는데, `KafkaProducerException` 의 메시지가 그 문자열이다. 진짜 원인인 `Topic ... not present in metadata after 60000 ms` 는 `getCause()` 쪽에 있어 DB 만 봐서는 무엇이 실패했는지 알 수 없다. 운영에서 DLQ 를 판단할 때 이 컬럼을 본다면 원인 체인까지 남겨야 한다.
+
+### ✅ TC-76 — 처리 전 앱 강제 종료 후 재기동 (2026-08-27 21:36 ~ 21:37)
+
+10건을 동시에 접수시키고 **1.0초 뒤**(마지막 응답 직후) `Stop-Process -Force` 로 앱을 죽였다. 강제 종료라 셧다운 훅도 돌지 않는다.
+
+종료 직후 스냅샷이 이 TC 가 노린 상태를 정확히 잡았다.
+
+| | 종료 직후 | 재기동 후 |
+| --- | --- | --- |
+| `issue_message` | `CONSUMED` 6 · **`SENT` 4** | `CONSUMED` 10 |
+| `coupon_issue` | 6건 | **10건** |
+| `issued_quantity` | 6 | 10 |
+
+**`SENT` 4건은 Kafka 에는 실려 갔는데 컨슈머가 아직 DB 에 쓰지 못한 것이다.** 이 상태로 프로세스가 사라졌으니, 오프셋을 이어받지 못하면 그대로 유실된다.
+
+재기동 후 `created_at` 이 두 덩어리로 갈린다.
+
+```
+sequence_no 1~6    21:36:24.68 ~ 21:36:25.99   (종료 전)
+sequence_no 7~10   21:37:17.59 ~ 21:37:18.36   (재기동 후)
+```
+
+| 확인 항목 | 결과 |
+| --- | --- |
+| 유실 | **0** — 10건 전건 저장 |
+| 순번 | 1~10, 고유 10개, 최대 10 — 빠짐·중복 없음 |
+| 회원 | 10명 (중복 발급 없음) |
+| 재고 | `issued_quantity` 10 / `total_quantity` 50 |
+
+**순서까지 지켜졌다.** 밀린 4건이 재기동 후에도 7 · 8 · 9 · 10 순서 그대로 저장됐다 — 파티션 키가 `couponId` 라 같은 쿠폰의 이벤트가 한 파티션에 모이고, 그 안에서 오프셋 순으로 처리되기 때문이다.
+
+### ❌ TC-56 — 차단은 되는데 404 가 아니라 500 이다
+
+`SPRING_PROFILES_ACTIVE=prod` 로 기동해 초기화 API 를 불렀다.
+
+| 프로파일 | 요청 | 응답 |
+| --- | --- | --- |
+| `prod` | `POST /internal/coupons/1102/reset` | **500 `COMMON500-0`** |
+| `prod` | `POST /internal/coupons/1102/nonexistent` (없는 경로) | 500 `COMMON500-0` |
+| `prod` | `POST /totally/does/not/exist` (없는 경로) | 500 `COMMON500-0` |
+| 기본 | `POST /internal/coupons/1102/reset` | 200 |
+
+없는 경로 셋이 전부 같은 응답이므로 **`@Profile("!prod")` 로 엔드포인트가 등록되지 않은 것은 맞다.** 차단이라는 목적 자체는 달성된다. 시나리오 기대값(404)과 어긋나는 건 상태 코드다.
+
+원인은 `GlobalExceptionHandler` 의 마지막 핸들러다.
+
+```java
+// 처리하지 않은 모든 예외 처리
+@ExceptionHandler(Exception.class)
+public ResponseEntity<CustomResponse<Void>> handleAllException(Exception ex) {
+```
+
+Spring Boot 4 는 매칭되는 핸들러가 없으면 `NoResourceFoundException` 을 던지는데, 이 catch-all 이 그것까지 삼켜 `INTERNAL_SERVER_ERROR` 로 바꾼다. **결과적으로 이 앱은 404 를 낼 수 없다.**
+
+**이건 TC-56 만의 문제가 아니다.** 프론트 연동에서 오타 URL·삭제된 리소스가 전부 500 으로 보이므로, "서버가 터졌다"와 "주소가 틀렸다"를 구분할 수 없다. 운영 지표에서도 404 가 5xx 로 잡힌다. `NoResourceFoundException` (와 `NoHandlerFoundException`) 을 앞에서 따로 받아 404 로 내려주는 핸들러를 추가하면 된다 — **별도 이슈 대상이다.**
+
+### ⚠️ 초기화 API 가 `SOLD_OUT` 쿠폰의 상태를 되돌리지 않는다
+
+TC-74 준비 중에 확인했다. `POST /internal/coupons/{id}/reset` 은 재고·발급·멱등키·Redis 키를 전부 되돌리는데 **`coupon.status` 는 건드리지 않는다.** 쿠폰 1102 는 초기화 후 `remainingQuantity 50 · redisStock 50` 인데도 `status` 가 `SOLD_OUT` 으로 남아 있었다.
+
+`CouponStatusSchedulerServiceImpl` 의 전이는 `ACTIVE → SOLD_OUT` 단방향이라 스케줄러도 되돌려주지 않는다.
+
+**발급을 막지는 않는다 — 재현해서 확인했다.** 쿠폰 1102 를 `SOLD_OUT` 인 채로 두고 신청했더니 그대로 발급됐다.
+
+```
+coupon.status = SOLD_OUT, 재고 20 초기화 후 신청
+  → 202 WAITING → coupon_issue 1건 ISSUED, sequence_no 1
+  → issued_quantity 1, idempotency_key SUCCEEDED / 200
+```
+
+`CouponIssueServiceImpl.issue()` 가 보는 건 `couponRepository.existsById(couponId)` 뿐이고, 재고 판정은 Redis Lua 가 `coupon:issue:stock` 키로 한다. **발급 경로는 `coupon.status` 를 아예 읽지 않는다.**
+
+따라서 부하 테스트 2회차를 막지 않는다. 남는 영향은 조회 쪽이다 — `coupon.status` 는 목록·상세 응답에 그대로 나가고 목록 필터의 기준이므로, 초기화한 쿠폰이 화면에서는 계속 품절로 보인다. 초기화 대상에 `coupon.status` 를 넣는 게 맞지만 **급한 건 아니다.**
 
 ### TC-85 상세 — 커버리지는 통과, 합산이 250만인 이유
 
@@ -386,15 +513,33 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 | 1인 1매 위반 0건 | ✅ (TC-42 · TC-44) |
 | 순번 빠짐·중복 0건 | ✅ (TC-41 · 90 · 94) |
 | 300만 건 적재 | ✅ (2026-08-27, §5 참고) |
-| B 구간 전건 통과 | ✅ 19/19 |
-| D 구간 | ✅ 14/16 (TC-56 · TC-65 보류) |
-| E 구간 | ✅ 8/10 (TC-74 · TC-76 보류) |
-| F 구간 | ✅ 5/6 (TC-82 실행 불가) |
-| A 구간 전건 통과 | 미실행 |
-| 멱등키 확정 누락 수정 | 미머지 — TC-08 · 13~15 · 43이 막혀 있다 |
+| 미실행 TC | **0건** — 80건 전부 실행 |
+| A 구간 | ✅ 17/17 |
+| B 구간 | ✅ 19/19 |
+| C 구간 | ✅ 7/7 |
+| D 구간 | 15/16 — **TC-56 ❌** (차단은 되나 응답이 500) |
+| E 구간 | ✅ 10/10 |
+| F 구간 | ✅ 6/6 |
+| G 구간 | ✅ 5/5 |
+| 장애 복구 시 유실 0건 | ✅ (TC-74 Kafka 중단 · TC-76 앱 강제 종료) |
 
-**판정** — 보류. 남은 조건은 세 가지다.
+**판정** — 착수 가능.
 
-1. `fix/idempotency-persist-issue-message` 머지 (A 구간 상당수가 여기 걸려 있다)
-2. A 구간 실행
-3. 보류 4건 — TC-56(`prod` 프로파일 기동) · TC-65(`fix/149-stock-not-restored-abandon` 머지) · TC-74(Kafka 중단) · TC-76(앱 강제 종료)
+핵심 조건인 **초과 발급 0 · 1인 1매 위반 0 · 순번 무결 · 장애 시 유실 0** 이 전부 실측으로 확인됐다. 유일한 ❌ 인 TC-56 은 초기화 API 가 운영에서 차단되는지를 보는 것이고 차단 자체는 되므로, 부하 테스트를 막지 않는다.
+
+**부하 테스트를 막는 항목은 없다.** 실행 중 관찰한 것들은 전부 부하 경로 밖이거나 조건부다.
+
+| 항목 | 부하 테스트 영향 | 판단 |
+| --- | --- | --- |
+| `max.block.ms` 미설정 (기본 60초) | Kafka 가 **끊겼을 때만** 발동. 정상 브로커에서는 메타데이터가 캐시돼 있어 걸리지 않는다 | 보험용 1줄. 넣어두면 측정 중 사고가 나도 결과를 버리지 않아도 된다 |
+| 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | 조회 화면 표시만 어긋난다 |
+| 없는 경로가 500 | 없음 | 프론트 연동 전에는 필요 (§5) |
+| `last_error` 가 `Send failed` 뿐 | 없음 | 운영에서 DLQ 원인을 볼 때 필요 |
+| 만료 배치 수동 트리거 부재 | 없음 | TC-82 를 임시 테스트로 우회했다 |
+
+**프론트 연동 전에 필요한 것은 두 가지다.**
+
+| 항목 | 이유 |
+| --- | --- |
+| 없는 경로가 404 가 아니라 500 | 프론트가 "서버 오류"와 "주소 오류"를 구분할 수 없다 (TC-56, §5) |
+| CORS 헤더 없음 | 브라우저에서 직접 호출하면 전부 차단된다 (프록시를 쓰지 않는 경우) |
