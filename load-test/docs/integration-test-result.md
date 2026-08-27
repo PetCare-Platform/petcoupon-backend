@@ -4,7 +4,7 @@
 
 | 항목 | 값 |
 | --- | --- |
-| 대상 | `dev` (#111 · #125 · #137 머지 후) |
+| 대상 | `dev` (#111 · #125 · #136 · #137 · #149 · #157 머지 후) |
 | 실행 위치 | 로컬 (MySQL 8.0 · Redis 7.2 · Kafka 3.7, 전부 Docker) |
 | 실행자 | 함세연 |
 | 최종 갱신 | 2026-08-27 |
@@ -24,6 +24,8 @@ $env:DB_POOL_SIZE="100"; $env:TOMCAT_MAX_THREADS="400"; .\gradlew bootRun
 ```
 POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 ```
+
+**이 문서의 D 구간은 정합성 배치를 손으로 트리거해서 실행한 결과다.** 이후 `#155` 로 자동 스케줄러(`ReconciliationScheduler`)가 들어왔는데, 여기 기록된 수치에는 그게 관여하지 않았다. 아래 §6 에 부하 테스트 때 주의할 점을 적어뒀다.
 
 ---
 
@@ -457,6 +459,8 @@ coupon.status = SOLD_OUT, 재고 20 초기화 후 신청
 
 따라서 부하 테스트 2회차를 막지 않는다. 남는 영향은 조회 쪽이다 — `coupon.status` 는 목록·상세 응답에 그대로 나가고 목록 필터의 기준이므로, 초기화한 쿠폰이 화면에서는 계속 품절로 보인다. 초기화 대상에 `coupon.status` 를 넣는 게 맞지만 **급한 건 아니다.**
 
+`#160` 에서 발급 기간에 맞춰 `READY`/`ACTIVE`/`ENDED` 로 되돌리도록 수정 중이다(이 문서 기준 미머지).
+
 ### TC-85 상세 — 커버리지는 통과, 합산이 250만인 이유
 
 | 리포트 | 쿠폰 | result | totalCount | errorCount | 소요 |
@@ -485,7 +489,7 @@ SEED 쿠폰은 SQL 로 직접 만든 과거 데이터라 Redis 키가 애초에 
 
 이건 SEED 데이터만의 문제가 아니다. **정합성 배치는 `ENDED` 쿠폰만 대상으로 하는데, 발급이 끝나고 Redis 키가 정리된 쿠폰은 정상 상태다.** 지금 로직이면 그런 쿠폰이 전부 `MISMATCHED` 로 나온다 — 운영에서 일반적으로 발생하는 상황이다.
 
-`STOCK_MISMATCH` 가 **"Redis 키 없음"과 "값이 다름"을 구분**해야 할 것으로 보인다. `#149` 가 `STOCK_NOT_RESTORED` 를 손보는 중이니 같이 검토할 만하다.
+`STOCK_MISMATCH` 가 **"Redis 키 없음"과 "값이 다름"을 구분**해야 할 것으로 보인다. `#149` 로 `STOCK_NOT_RESTORED` 를 손볼 때 함께 보자고 적어뒀는데 그쪽만 머지됐으므로, 이건 별도 이슈로 남아 있다.
 
 ### TC-92 — 단일 요청 전 구간 통과 시각
 
@@ -544,6 +548,28 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 
 핵심 조건인 **초과 발급 0 · 1인 1매 위반 0 · 순번 무결 · 장애 시 유실 0** 이 전부 실측으로 확인됐다. 실행 중 유일하게 어긋났던 TC-56 도 `#157` 로 고쳐 재검증했으므로 **80 건 전건 통과**다.
 
+### ⚠️ 측정 전에 정합성 자동 스케줄러를 꺼야 한다
+
+`#155` 로 들어온 `ReconciliationScheduler` 는 **기본값이 켜짐**이다(`matchIfMissing = true`, `application.properties` 에 항목 없음). 기동 30분 뒤부터 30분 간격으로 `ENDED` 쿠폰을 전부 순회하며 정합성 배치를 돌린다.
+
+현재 DB 의 `ENDED` 쿠폰은 이렇다.
+
+| 쿠폰 | 발급 건수 |
+| --- | --- |
+| SEED-쿠폰-1 ~ 5 | 각 500,000 |
+| SEED-쿠폰-6 | 0 |
+| 612 · 1101 | 각 1 |
+
+§5 에 기록한 실측이 **50만 건 쿠폰 1개당 약 70초**이므로, 한 번 깨어날 때마다 **6분 안팎의 배치가 통째로 끼어든다.** 측정 중에 이게 돌면 응답 시간과 커넥션 풀이 그 영향을 받아 결과를 믿을 수 없다.
+
+부하 테스트를 돌리는 회차에서는 꺼야 한다.
+
+```powershell
+$env:COUPON_RECONCILIATION_SCHEDULER_ENABLED="false"
+```
+
+**`application.properties` 에 스위치가 노출돼 있지 않으므로** 위 환경변수가 먹는지 먼저 확인하고, 안 되면 `-Dcoupon.reconciliation.scheduler.enabled=false` 로 넘기거나 프로퍼티 항목을 추가해야 한다. 다른 스케줄러(`event.status.scheduler.enabled`)처럼 `application.properties` 에 기본값과 함께 노출해 두는 게 맞다.
+
 **부하 테스트를 막는 항목은 없다.** 실행 중 관찰한 것들은 전부 부하 경로 밖이거나 조건부다.
 
 | 항목 | 부하 테스트 영향 | 판단 |
@@ -552,6 +578,7 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 | 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | 조회 화면 표시만 어긋난다 |
 | `last_error` 가 `Send failed` 뿐 | 없음 | 운영에서 DLQ 원인을 볼 때 필요 |
 | 만료 배치 수동 트리거 부재 | 없음 | TC-82 를 임시 테스트로 우회했다 |
+| 정합성 자동 스케줄러 기본 켜짐 | **있음** — 30분마다 6분짜리 배치가 끼어든다 | 측정 회차에서는 반드시 끈다(위 참고) |
 
 **프론트 연동 전에 남은 것은 CORS 하나다.**
 
