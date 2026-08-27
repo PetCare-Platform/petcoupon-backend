@@ -191,10 +191,18 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// FAILED는 실패에서 뺐다 — Outbox Poller(findByStatusInAndRetryCountLessThan)가 PENDING과
 	// 함께 재시도 대상으로 다시 집어가는 "재시도 대기" 상태라 최종 실패가 아니다. 최종 실패는
 	// DLQ(관리자 확인 대기)·ABANDONED(포기 확정)뿐이다.
+	//
+	// [PR 리뷰 반영] issuedCount/failedCount만 있으면 PENDING/SENT/FAILED(전부 "아직 확정 안
+	// 됨" 상태)가 어느 쪽에도 안 잡혀서, 방금 들어온 요청이 많은 버킷(최근 시간대)일수록
+	// 실제보다 적어 보인다 — 누적 막대 그래프를 그리면 어긋난다. inProgressCount로 이 셋을
+	// 같이 묶어서, issuedCount+failedCount+inProgressCount = 그 버킷의 총 접수량이 항상
+	// 맞게 만든다. FAILED도 여기 포함한 이유는 위에서 이미 "확정 아님"으로 분류했기 때문 —
+	// failedCount에서 뺀 것과 짝을 맞춘다.
 	@Query(value = """
 			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
-			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
 			  FROM issue_message
 			 WHERE created_at >= :since
 			 GROUP BY bucket

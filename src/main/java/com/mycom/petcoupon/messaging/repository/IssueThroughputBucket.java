@@ -10,4 +10,6 @@ public interface IssueThroughputBucket {
     Long getIssuedCount();
 
     Long getFailedCount();
+
+    Long getInProgressCount();
 }

@@ -15,6 +15,7 @@ public class IssueStatisticsConverter {
                 .bucket(bucket.getBucket())
                 .issuedCount(bucket.getIssuedCount())
                 .failedCount(bucket.getFailedCount())
+                .inProgressCount(bucket.getInProgressCount())
                 .build();
     }
 

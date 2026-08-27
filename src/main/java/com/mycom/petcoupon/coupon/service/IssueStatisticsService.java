@@ -13,8 +13,8 @@ import lombok.RequiredArgsConstructor;
 
 // 발급 처리량/상태 분포 조회(#156) — 대시보드가 그래프+도넛을 한 화면에 같이 그리는
 // 경우가 대부분이라, 두 레포지토리 쿼리(findThroughputByHour/countGroupedByStatus)의
-// 결과를 한 응답으로 묶어 반환한다. "오늘 제외할 것"(사용자 지정 시간 단위)에 따라
-// timeSeries 범위는 최근 24시간으로 고정한다 — 파라미터를 안 받는다.
+// 결과를 한 응답으로 묶어 반환한다. 시간 단위를 사용자가 고를 수 있게 하는 대신 스코프를
+// 단순하게 유지하려고 timeSeries 범위는 최근 24시간으로 고정한다 — 파라미터를 안 받는다.
 @Service
 @RequiredArgsConstructor
 public class IssueStatisticsService {
