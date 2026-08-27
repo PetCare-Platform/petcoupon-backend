@@ -46,12 +46,12 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | --- | --- | --- | --- | --- | --- |
 | A. 정상 흐름 | 17 | 17 | 0 | 0 | 0 |
 | B. 예외 흐름 | 19 | 19 | 0 | 0 | 0 |
-| C. 경계·동시성 | 7 | 5 | 0 | 0 | 2 |
+| C. 경계·동시성 | 7 | 7 | 0 | 0 | 0 |
 | D. 배치·정합성 | 16 | 15 | 0 | 0 | 1 |
 | E. 비동기 확정 | 10 | 8 | 0 | 0 | 2 |
 | F. 대량 데이터 | 6 | 5 | 0 | 0 | 1 |
 | G. 순서 보장 | 5 | 5 | 0 | 0 | 0 |
-| **합계** | **80** | **74** | **0** | **0** | **6** |
+| **합계** | **80** | **76** | **0** | **0** | **4** |
 
 > TC-63 · TC-70은 결번이라 집계에서 뺐다.
 
@@ -114,8 +114,8 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 | TC-42 | 같은 회원 동시 5회 | ✅ | 발급 **1** · 멱등키 `SUCCEEDED 1 / FAILED 4` |
 | TC-43 | 동일 멱등키 재전송 | ✅ | 발급 **1** · 재고 1만 차감 (재현 응답 확인은 §5 참고) |
 | TC-44 | 재고 0, 동시 50명 | ✅ | 1회차 발급 1 · 재고 0 → 2회차 **99건 전부 `COUPON409-0`**, `409-1` 0건 |
-| TC-45 | 사용 동시 10요청 | — | `CouponIssueConcurrencyIntegrationTest`(#59)로 대체 검증 |
-| TC-46 | 취소 동시 10요청 | — | 동상 |
+| TC-45 | 사용 동시 10요청 | ✅ | `CouponIssueConcurrencyIntegrationTest.onlyOneUseSucceedsWhenCalledConcurrently` 통과 (§5 참고) |
+| TC-46 | 취소 동시 10요청 | ✅ | `CouponIssueConcurrencyIntegrationTest.onlyOneCancelSucceedsWhenCalledConcurrently` 통과 |
 
 ### D. 배치·정합성 — TC-50 ~ TC-66
 
@@ -246,7 +246,14 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 ### 테스트로 대체 검증 — TC-45 · TC-46 · TC-50 ~ TC-53
 
-TC-45 · TC-46은 `CouponIssueConcurrencyIntegrationTest`(#59)가 같은 내용을 검증한다.
+**여기 묶인 TC 는 전부 실제로 테스트를 실행해서 통과를 확인한 것이다.** "테스트가 있으니 됐다"고 넘긴 게 아니다.
+
+TC-45 · TC-46 은 `CouponIssueConcurrencyIntegrationTest`(#59) 2건 통과로 판정한다. 메서드 이름이 시나리오와 그대로 대응한다.
+
+| TC | 대응 테스트 |
+| --- | --- |
+| TC-45 | `onlyOneUseSucceedsWhenCalledConcurrently` |
+| TC-46 | `onlyOneCancelSucceedsWhenCalledConcurrently` |
 
 TC-50 ~ TC-53의 **만료 배치는 외부에서 수동 실행할 방법이 없다.** `CouponExpireBatchServiceImpl.expireOverdueCoupons()` 가 `@Scheduled(cron = "0 0 1 * * *")` 로 고정돼 있고 트리거 API도 없다. 유일한 실행 경로가 `CouponExpireBatchServiceImplTest`(`@DataJpaTest`, 실제 MySQL 사용)라 이것으로 판정한다 — 3건 전부 통과.
 
