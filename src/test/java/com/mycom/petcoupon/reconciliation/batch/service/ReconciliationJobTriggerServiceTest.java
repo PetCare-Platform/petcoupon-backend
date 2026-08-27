@@ -15,18 +15,30 @@ import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.batch.infrastructure.item.Chunk;
+import org.springframework.batch.infrastructure.item.ItemWriter;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.reconciliation.entity.ReconciliationReport;
+import com.mycom.petcoupon.reconciliation.entity.VerificationDetail;
+import com.mycom.petcoupon.reconciliation.entity.enums.ReconciliationResult;
 import com.mycom.petcoupon.reconciliation.entity.enums.VerificationErrorType;
+import com.mycom.petcoupon.reconciliation.repository.ReconciliationReportRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
 
@@ -52,10 +64,18 @@ import jakarta.persistence.PersistenceContext;
         "coupon.issue.stream.key=coupon:issue:stream:trigger-svc-test",
         "coupon.issue.stream.group=trigger-svc-test-group"
 })
+// PoisonWriterConfig는 항상 실패하는 청크 Writer라 이 클래스의 다른 테스트에도 적용되지만,
+// 다른 테스트의 쿠폰(endedCoupon/activeCoupon)에는 HISTORY_MISMATCH/INVALID_STATUS/
+// STOCK_NOT_RESTORED 대상 데이터가 없어 청크 Step의 write()가 애초에 호출되지 않는다 — 실패
+// 시나리오를 재현하는 아래 테스트에서만 실제로 영향을 준다.
+@Import(ReconciliationJobTriggerServiceTest.PoisonWriterConfig.class)
 class ReconciliationJobTriggerServiceTest {
 
     @Autowired
     private ReconciliationJobTriggerService reconciliationJobTriggerService;
+
+    @Autowired
+    private ReconciliationReportRepository reconciliationReportRepository;
 
     @Autowired
     private PlatformTransactionManager platformTransactionManager;
@@ -128,6 +148,23 @@ class ReconciliationJobTriggerServiceTest {
                     .setParameter("couponId", couponId).executeUpdate();
             entityManager.createNativeQuery("DELETE FROM coupon_stock WHERE coupon_id = :couponId")
                     .setParameter("couponId", couponId).executeUpdate();
+
+            // Job이_청크_Step에서_실패하면... 테스트가 endedCoupon에 coupon_issue를 만든다 —
+            // FK 순서상 coupon보다 먼저 지워야 한다(coupon_issue_history -> coupon_issue ->
+            // 참조하던 app_user 순).
+            entityManager.createNativeQuery("DELETE FROM coupon_issue_history WHERE coupon_id = :couponId")
+                    .setParameter("couponId", couponId).executeUpdate();
+            @SuppressWarnings("unchecked")
+            List<Number> issueUserIds = entityManager.createNativeQuery(
+                    "SELECT user_id FROM coupon_issue WHERE coupon_id = :couponId")
+                    .setParameter("couponId", couponId).getResultList();
+            entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE coupon_id = :couponId")
+                    .setParameter("couponId", couponId).executeUpdate();
+            for (Number userId : issueUserIds) {
+                entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id = :userId")
+                        .setParameter("userId", userId.longValue()).executeUpdate();
+            }
+
             entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
                     .setParameter("couponId", couponId).executeUpdate();
         }
@@ -159,6 +196,28 @@ class ReconciliationJobTriggerServiceTest {
                 .anyMatch(d -> d.getErrorType() == VerificationErrorType.STOCK_MISMATCH);
         assertThat(result.verificationDetailCountByType())
                 .containsEntry(VerificationErrorType.STOCK_MISMATCH, 1L);
+    }
+
+    // reportInitStep이 report row(임시값)를 커밋한 뒤, 청크 Step(historyMismatchStep)에서
+    // Job이 실패하면 그 row가 finishedAt=null, result=MATCHED로 영원히 남아 "검증했고
+    // 문제없음"으로 오인되는 문제를 고쳤다 — result는 ERROR로 초기화하고, 실패가 확정되면
+    // finishedAt도 채운다. PoisonWriterConfig로 historyMismatchStep의 write()를 항상 실패시켜
+    // 실제로 그렇게 되는지 확인한다.
+    @Test
+    void Job이_청크_Step에서_실패하면_리포트가_ERROR로_남고_finishedAt이_채워진다() {
+        transactionTemplate.executeWithoutResult(status -> createMismatchedIssue(endedCoupon, "TRIGGER-FAIL-1"));
+
+        assertThatThrownBy(() -> reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId()))
+                .isInstanceOf(GeneralException.class);
+
+        entityManager.clear();
+        ReconciliationReport report = reconciliationReportRepository.findAll().stream()
+                .filter(r -> r.getCoupon().getCouponId().equals(endedCoupon.getCouponId()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(report.getResult()).isEqualTo(ReconciliationResult.ERROR);
+        assertThat(report.getFinishedAt()).isNotNull();
     }
 
     @Test
@@ -329,5 +388,48 @@ class ReconciliationJobTriggerServiceTest {
     private long nextBatchId(String seqTable) {
         entityManager.createNativeQuery("UPDATE " + seqTable + " SET ID = ID + 1").executeUpdate();
         return ((Number) entityManager.createNativeQuery("SELECT ID FROM " + seqTable).getSingleResult()).longValue();
+    }
+
+    // status는 USED인데 이력은 ISSUED까지만 남겨서 historyMismatchStep이 집어갈
+    // HISTORY_MISMATCH 대상 1건을 만든다(ReconciliationJobRestartTest의 동명 헬퍼와 같은 패턴).
+    private void createMismatchedIssue(Coupon coupon, String couponCode) {
+        AppUser user = AppUser.builder()
+                .name("유저-" + couponCode).email(couponCode + "@test.com").phone("010-2222-2222")
+                .role(UserRole.ROLE_MEMBER).build();
+        entityManager.persist(user);
+
+        CouponIssue issue = CouponIssue.builder()
+                .coupon(coupon).user(user).sequenceNo(1)
+                .couponCode(couponCode).requestId("req-" + couponCode)
+                .status(IssueStatus.USED)
+                .usedAt(LocalDateTime.now())
+                .expiresAt(LocalDateTime.now().plusDays(1))
+                .build();
+        entityManager.persist(issue);
+        entityManager.flush();
+
+        entityManager.createNativeQuery("""
+                INSERT INTO coupon_issue_history
+                    (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, created_at)
+                VALUES (:issueId, :couponId, :userId, 'NONE', 'ISSUED', 'SYSTEM', NOW(6))
+                """)
+                .setParameter("issueId", issue.getCouponIssueId())
+                .setParameter("couponId", coupon.getCouponId())
+                .setParameter("userId", user.getUserId())
+                .executeUpdate();
+    }
+
+    // 이 클래스 전체에 @Primary로 적용되지만, 위 주석대로 다른 테스트는 청크 Step에 아무것도
+    // 안 넘어와 write()가 호출되지 않는다 — 상태(callCount 등) 없이 항상 실패해도 안전하다.
+    @TestConfiguration
+    static class PoisonWriterConfig {
+
+        @Bean
+        @Primary
+        ItemWriter<VerificationDetail> poisonVerificationDetailItemWriter() {
+            return (Chunk<? extends VerificationDetail> chunk) -> {
+                throw new RuntimeException("의도적 실패 — Job 중간 실패 시 리포트 상태 테스트용");
+            };
+        }
     }
 }

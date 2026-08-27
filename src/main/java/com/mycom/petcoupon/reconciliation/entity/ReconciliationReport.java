@@ -117,6 +117,14 @@ public class ReconciliationReport {
 		this.finishedAt = finishedAt;
 	}
 
+	// Job이 FinalizeReportTasklet까지 못 가고 중간에 실패했을 때 호출한다. result는 이미
+	// ReportInitTasklet이 ERROR로 넣어둔 값 그대로 두고(검증이 끝까지 못 갔다는 뜻 그대로 유지),
+	// finishedAt만 채워서 "언제 실패로 확정됐는지"를 남긴다 — finishedAt=null과 구분해야
+	// "아직 도는 중"과 "실패로 끝남"을 구별할 수 있다.
+	public void markFailed(LocalDateTime finishedAt) {
+		this.finishedAt = finishedAt;
+	}
+
 	@Builder
 	private ReconciliationReport(
 			Coupon coupon, LocalDateTime asOfAt, LocalDateTime startedAt, LocalDateTime finishedAt,

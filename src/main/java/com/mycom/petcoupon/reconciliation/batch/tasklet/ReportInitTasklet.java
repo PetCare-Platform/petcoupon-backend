@@ -85,7 +85,11 @@ public class ReportInitTasklet implements Tasklet {
                 .dbDlqCount(dbDlqCount)
                 .maxSequenceNo(maxSequenceNo)
                 .redisRemaining(redisRemaining)
-                .result(ReconciliationResult.MATCHED) // 임시값 — FinalizeReportTasklet에서 확정
+                // 임시값 — FinalizeReportTasklet에서 확정. MATCHED가 아니라 ERROR로 넣어둔다:
+                // 이후 Step이 실패해 Job이 FAILED로 끝나면 이 row는 FinalizeReportTasklet을
+                // 못 만나 영원히 이 임시값 그대로 남는데, MATCHED였다면 "검증했고 문제없음"으로
+                // 오인된다. ERROR로 시작해두면 검증이 끝까지 못 간 상태라는 게 그대로 드러난다.
+                .result(ReconciliationResult.ERROR)
                 .build();
 
         ReconciliationReport saved = reconciliationReportRepository.save(report);

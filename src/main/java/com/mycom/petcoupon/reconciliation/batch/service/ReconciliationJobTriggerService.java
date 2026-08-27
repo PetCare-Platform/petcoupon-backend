@@ -115,8 +115,27 @@ public class ReconciliationJobTriggerService {
             return result;
         }
 
+        markReportFailedIfCreated(execution);
         batchExecutionLogger.log(execution, null);
         throw resolveFailureException(execution);
+    }
+
+    // reportInitStep이 이미 커밋해둔 ReconciliationReport row가 있다면(즉 실패가
+    // reportInitStep 이후 Step에서 났다면) finishedAt을 채워 "실패로 끝남"을 남긴다.
+    // preconditionCheckStep에서 실패했다면 reportId 자체가 없으니(report row 미생성) 아무것도
+    // 하지 않는다. result는 ReportInitTasklet이 이미 ERROR로 넣어둔 값 그대로 둔다 — 검증이
+    // 끝까지 못 갔다는 뜻을 그대로 유지해야 한다.
+    private void markReportFailedIfCreated(JobExecution execution) {
+        if (!execution.getExecutionContext().containsKey("reportId")) {
+            return;
+        }
+        Long reportId = execution.getExecutionContext().getLong("reportId");
+        reconciliationReportRepository.findById(reportId).ifPresent(report -> {
+            // findById가 이미 자체 트랜잭션을 끝내고 반환한 detached 엔티티라 여기서 필드만
+            // 바꿔서는 반영되지 않는다 — save()로 명시적으로 merge(UPDATE)해야 한다.
+            report.markFailed(LocalDateTime.now());
+            reconciliationReportRepository.save(report);
+        });
     }
 
     // couponId별로 락 이름을 나눠서 다른 쿠폰의 실행은 서로 안 막는다. 대기하지 않는다
