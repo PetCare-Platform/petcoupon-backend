@@ -32,6 +32,11 @@ const conflict = new Counter('issue_conflict');
 const notFound = new Counter('issue_not_found');
 // 400. 서버가 아니라 요청이 잘못된 것 — 멱등키 누락·길이 초과 등 스크립트 설정 문제라 따로 센다.
 const badRequest = new Counter('issue_bad_request');
+// 200. 정상 응답이지 오류가 아니다 — 이미 DB 발급까지 확정된 요청에 같은 멱등키로 다시 오면
+// CouponIssuePersister 가 저장해둔 응답(200 + couponIssueId · sequenceNo)을 그대로 재현한다.
+// 접수(202)와 뜻이 달라 acceptRate 에는 넣지 않고, 서버 오류와도 섞지 않는다.
+// 요청마다 고유 키를 쓰는 부하 측정에서는 0 이어야 하고, 값이 있으면 키가 겹친 것이다.
+const replayed = new Counter('issue_replayed');
 const serverError = new Counter('issue_server_error');
 // 응답을 아예 못 받은 요청(연결 거절 · 리셋 · 타임아웃). k6 는 이때 status 를 0 으로 준다.
 // 서버가 500 을 돌려준 것과 원인이 완전히 다르므로 따로 센다.
@@ -153,6 +158,9 @@ if (cfg.FIXED_IDEMPOTENCY_KEY === null) {
 	// 409 는 멱등키가 겹쳤다는 뜻이다. 요청마다 고유한 키를 만드는 이상 나올 수 없고,
 	// 나왔다면 키 생성 규칙이 깨진 것이라 그 회차 측정은 믿을 수 없다.
 	thresholds.issue_conflict = ['count==0'];
+	// 200 재현도 같은 이유로 나올 수 없다 — 나왔다면 앞 회차와 키가 겹친 것이라
+	// 그 요청은 파이프라인을 타지 않아 처리량이 실제보다 높게 나온다.
+	thresholds.issue_replayed = ['count==0'];
 }
 
 export const options = {
@@ -349,6 +357,9 @@ export default function () {
 		// 처리 중(COUPON409-5) 또는 멱등키 재사용(COUPON409-6).
 		// 정상 부하에서는 0 이어야 하고, 값이 크면 키 생성 규칙을 의심한다.
 		conflict.add(1);
+	} else if (res.status === 200) {
+		// 확정까지 끝난 요청의 재현 응답이다(TC-43). 오류가 아니므로 serverError 로 세면 안 된다.
+		replayed.add(1);
 	} else if (res.status === 404) {
 		notFound.add(1);
 	} else if (res.status === 0) {

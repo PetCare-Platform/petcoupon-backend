@@ -334,7 +334,39 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon --batch --skip-column-
 발급 API는 비동기라 **중복 신청도 일단 202로 접수됩니다.** 탈락 판정은 그 뒤 Lua가 합니다.
 
 - **TC-42**: k6에는 5건 모두 202로 찍힙니다. 실제로 1건만 발급됐는지는 SQL 1번으로 봅니다.
-- **TC-43**: 서버가 최초 응답을 그대로 재현하면 202, 아직 처리 중이면 409(`COUPON409-5`)입니다. **둘 중 뭐가 나올지는 타이밍에 달렸습니다.** 그래서 이 모드에서는 `issue_accept_rate`와 `issue_conflict` 임계값이 자동으로 해제됩니다. k6 회차만으로는 발급 건수까지밖에 못 봅니다.
+- **TC-43**: 서버 응답이 네 갈래입니다. **뭐가 나올지는 타이밍에 달렸습니다.** 그래서 이 모드에서는 `issue_accept_rate`·`issue_conflict`·`issue_replayed` 임계값이 자동으로 해제됩니다.
+
+| 시점 | 응답 |
+|---|---|
+| 최초 요청 | `202` · `WAITING` |
+| 최초 요청이 아직 처리 중일 때 재요청 | `409` `COUPON409-5` |
+| `202`만 저장된 시점의 재요청 | `202` · `WAITING` 재현 |
+| **DB 발급 확정 후 재요청** | **`200` + `couponIssueId`·`sequenceNo` 재현** |
+
+마지막 `200`은 `CouponIssuePersister`가 확정 시점에 저장 응답을 덮어쓰기 때문에 나옵니다. **정상 응답이라 `issue_replayed`로 따로 셉니다** — 서버 오류로 세면 안 됩니다.
+
+#### TC-42·TC-44는 실패 코드까지 확인합니다
+
+시나리오 기대값이 "성공 1건, 나머지 `COUPON409-1`"(TC-42) · "전건 `COUPON409-0`"(TC-44)이라 **건수만으로는 부족합니다.** 중복으로 막힌 건지 품절로 막힌 건지가 갈립니다. 회차가 끝난 뒤 아래를 돌립니다.
+
+```sql
+SET @coupon_id = 1;
+
+SELECT response_status,
+       JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code')) AS response_code,
+       COUNT(*) AS count
+  FROM idempotency_key
+ WHERE coupon_id = @coupon_id
+ GROUP BY response_status,
+          JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code'));
+```
+
+| TC | 기대 |
+|---|---|
+| TC-42 | `200`/`null` 1건 + `409`/`COUPON409-1` 4건 |
+| TC-44 2회차 | `409`/`COUPON409-0` 50건 (겹치지 않는 회원으로 돌렸을 때) |
+
+`response_body`가 `NULL`인 행은 접수 자체가 `500`으로 끝난 건입니다. 나오면 그 회차는 다시 돌립니다.
 
 > ⚠️ **`FIXED_IDEMPOTENCY_KEY`는 `FIXED_USER_ID`와 반드시 같이 주세요.** 멱등키 유니크 제약이 `(user_id, idempotency_key)`라서, 키만 고정하고 회원이 다르면 서버가 서로 다른 요청으로 보고 **전건을 발급합니다.** 실제로 회원 없이 3건을 쐈더니 발급이 3건 나왔습니다. 지금은 둘 중 하나만 주면 `setup()`에서 중단됩니다.
 
@@ -346,9 +378,13 @@ k6로 하면 안 됩니다. 재현 응답은 **200**인데 스크립트의 `issu
 
 검증 SQL 0번 블록의 `대기`·`재시도대기`·`발행중`이 **모두 0**이 된 걸 확인한 뒤, k6와 **똑같은 회원·똑같은 키**로 한 번 더 호출합니다.
 
+**`userId`는 헤더가 아니라 요청 본문으로 보냅니다.** 헤더로 보내면 본문이 비어 `400`이 떨어집니다.
+
 ```bash
 curl -s -X POST "localhost:8080/coupons/1/issues" \
-  -H "Idempotency-Key: tc43-key" -H "X-USER-ID: <k6에 준 회원ID>"
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: tc43-key" \
+  -d '{"userId": <k6에 준 회원ID>}'
 ```
 
 | 확인 | 기대 |
