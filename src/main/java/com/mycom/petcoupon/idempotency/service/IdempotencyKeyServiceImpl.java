@@ -9,6 +9,7 @@ import java.util.HexFormat;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -99,11 +100,22 @@ public class IdempotencyKeyServiceImpl implements IdempotencyKeyService {
         return Duration.ofSeconds(ttlSeconds);
     }
 
+    // 비동기 파이프라인(Kafka Consumer/Stream Consumer)이 먼저 최종 성공(200 OK) 또는 실패(FAILED)로
+    // 확정한 경우, HTTP 스레드의 뒤늦은 202 ACCEPTED(WAITING) 접수 응답이 최종 결과를 덮어쓰지 않도록
+    // 방어해야 한다. findById로 읽어서 조건을 확인한 뒤 엔티티를 고치는 방식(read-then-write)은 그
+    // 확인~반영 사이에 Consumer가 먼저 커밋해버릴 수 있어 레이스에 안전하지 않다 — HTTP 스레드가
+    // IN_PROGRESS를 읽은 "직후"에 Consumer가 200으로 커밋해도, HTTP 스레드는 그걸 모른 채 뒤늦게
+    // 202로 덮어쓸 수 있다. completeIfAllowed()의 조건부 UPDATE(WHERE status=IN_PROGRESS)로 이
+    // 확인과 반영을 한 원자적 SQL 문으로 묶어서 그 틈을 없앤다.
     @Override
     @Transactional
     public void succeed(Long recordId, int responseStatus, String responseBody) {
-        idempotencyKeyRepository.findById(recordId)
-                .ifPresent(record -> record.complete(IdempotencyStatus.SUCCEEDED, responseStatus, responseBody));
+        boolean provisional = responseStatus == HttpStatus.ACCEPTED.value();
+
+        idempotencyKeyRepository.completeIfAllowed(
+                recordId, IdempotencyStatus.SUCCEEDED, responseStatus, responseBody,
+                provisional, IdempotencyStatus.IN_PROGRESS
+        );
     }
 
     @Override
