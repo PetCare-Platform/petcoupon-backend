@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
@@ -21,6 +22,8 @@ import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueLuaResult;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.event.entity.Event;
@@ -59,12 +62,26 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 	@Autowired
 	private EntityManagerFactory entityManagerFactory;
 
+	@Autowired
+	private CouponIssueLuaService couponIssueLuaService;
+
+	@Autowired
+	private StringRedisTemplate redisTemplate;
+
 	private final List<Long> couponIds = new ArrayList<>();
 
 	@AfterEach
 	void tearDown() {
 		issueMessageRepository.deleteAll();
-		couponIds.forEach(couponRepository::deleteById);
+		couponIds.forEach(id -> {
+			redisTemplate.delete(List.of(
+					"coupon:issue:stock:{" + id + "}",
+					"coupon:issue:applicants:{" + id + "}",
+					"coupon:issue:sequence:{" + id + "}",
+					"coupon:issue:request-sequence:{" + id + "}"
+			));
+			couponRepository.deleteById(id);
+		});
 		couponIds.clear();
 	}
 
@@ -179,8 +196,16 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 		couponIds.add(coupon.getCouponId());
 
 		String requestId = requestIdPrefix + "-" + UUID.randomUUID();
+
+		// abandon()의 restoreStock()이 RESTORED를 돌려주려면 Redis에 실제 발급 상태(재고/신청자/
+		// 시퀀스)가 있어야 한다 — DB에 IssueMessage만 만들면 Redis 쪽엔 아무 흔적이 없어
+		// STOCK_NOT_INITIALIZED로 예외가 던져진다. 실제 issue()를 태워 진짜 상태를 만든다.
+		redisTemplate.opsForValue().set("coupon:issue:stock:{" + coupon.getCouponId() + "}", "10");
+		CouponIssueLuaResult luaResult =
+				couponIssueLuaService.issue(coupon.getCouponId(), user.getUserId(), requestId);
+
 		IssueMessage issueMessage = issueMessageRepository.saveAndFlush(
-				IssueMessage.pending(coupon, user.getUserId(), 1L, requestId, "{}")
+				IssueMessage.pending(coupon, user.getUserId(), luaResult.sequenceNo(), requestId, "{}")
 		);
 		issueMessageRepository.markDlq(
 				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error"

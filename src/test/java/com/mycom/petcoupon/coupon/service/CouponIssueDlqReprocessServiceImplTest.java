@@ -216,7 +216,7 @@ class CouponIssueDlqReprocessServiceImplTest {
 	}
 
 	@Test
-	void abandon는_재고복구_상태가_RESTORED가_아니어도_예외없이_응답을_반환한다() {
+	void abandon는_재고복구_상태가_INCONSISTENT_STATE면_예외를_던진다() {
 		Coupon coupon = mock(Coupon.class);
 		when(coupon.getCouponId()).thenReturn(10L);
 
@@ -231,10 +231,42 @@ class CouponIssueDlqReprocessServiceImplTest {
 				.status(CouponIssueStockRestoreStatus.INCONSISTENT_STATE)
 				.remainingStock(9)
 				.build();
+
+		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
+		when(issueMessageRepository.claimForAbandon(1L, IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED))
+				.thenReturn(1);
+		when(couponIssueLuaService.restoreStock(10L, 100L, "request-1", 5L)).thenReturn(restoreResult);
+
+		// 정합성 이상(INCONSISTENT_STATE)이면 이미 ABANDONED로 커밋된 뒤라 DB는 되돌릴 수 없지만,
+		// 응답만은 200으로 조용히 넘기지 않고 예외(503)로 명확히 실패를 알린다.
+		assertThatThrownBy(() -> couponIssueDlqReprocessService.abandon(1L))
+				.isInstanceOf(GeneralException.class)
+				.extracting(ex -> ((GeneralException) ex).getErrorCode())
+				.isEqualTo(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+
+		verify(couponIssueDlqConverter, never()).toAbandonResponse(any(), any());
+	}
+
+	@Test
+	void abandon는_재고복구_상태가_ALREADY_RESTORED면_예외없이_응답을_반환한다() {
+		Coupon coupon = mock(Coupon.class);
+		when(coupon.getCouponId()).thenReturn(10L);
+
+		IssueMessage issueMessage = mock(IssueMessage.class);
+		when(issueMessage.getRetryCount()).thenReturn(1);
+		when(issueMessage.getCoupon()).thenReturn(coupon);
+		when(issueMessage.getUserId()).thenReturn(100L);
+		when(issueMessage.getMessageKey()).thenReturn("request-1");
+		when(issueMessage.getSequenceNo()).thenReturn(5L);
+
+		CouponIssueStockRestoreResult restoreResult = CouponIssueStockRestoreResult.builder()
+				.status(CouponIssueStockRestoreStatus.ALREADY_RESTORED)
+				.remainingStock(9)
+				.build();
 		CouponIssueDlqAbandonResponse response = CouponIssueDlqAbandonResponse.builder()
 				.messageId(1L)
 				.requestId("request-1")
-				.restoreStatus("INCONSISTENT_STATE")
+				.restoreStatus("ALREADY_RESTORED")
 				.remainingStock(9)
 				.build();
 
@@ -244,8 +276,7 @@ class CouponIssueDlqReprocessServiceImplTest {
 		when(couponIssueLuaService.restoreStock(10L, 100L, "request-1", 5L)).thenReturn(restoreResult);
 		when(couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult)).thenReturn(response);
 
-		// 정합성 이상(INCONSISTENT_STATE)이어도 이미 ABANDONED로 커밋된 뒤라 예외를 던지지 않고
-		// 응답으로만 상태를 알린다 — 대신 서비스 내부에서 WARN 로그를 남겨 운영에서 놓치지 않게 한다.
+		// ALREADY_RESTORED는 같은 요청이 이미 한 번 복구된 정상적인 케이스라 실패로 취급하지 않는다.
 		CouponIssueDlqAbandonResponse result = couponIssueDlqReprocessService.abandon(1L);
 
 		assertThat(result).isEqualTo(response);

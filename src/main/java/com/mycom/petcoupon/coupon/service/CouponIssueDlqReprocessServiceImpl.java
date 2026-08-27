@@ -98,15 +98,23 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 				issueMessage.getSequenceNo()
 		);
 
-		// status는 이미 ABANDONED로 커밋된 뒤라 여기서 되돌릴 방법이 없다 — RESTORED가 아니면
-		// 응답 필드만으로는 운영자가 놓치기 쉬우므로 서버 로그에도 남겨 grep으로 찾을 수 있게 한다.
-		if (restoreResult.status() != CouponIssueStockRestoreStatus.RESTORED) {
-			log.warn(
-					"[DLQ Abandon] 재고 복구가 정상 완료되지 않았습니다. messageId={}, requestId={}, restoreStatus={}, remainingStock={}",
-					messageId, issueMessage.getMessageKey(), restoreResult.status(), restoreResult.remainingStock()
-			);
-		}
+		validateRestoreResult(messageId, issueMessage.getMessageKey(), restoreResult);
 
 		return couponIssueDlqConverter.toAbandonResponse(issueMessage, restoreResult);
+	}
+
+	// status는 이미 ABANDONED로 커밋된 뒤라 여기서 DB를 되돌릴 방법은 없다 — 대신 REQUEST_MISMATCH/
+	// STOCK_NOT_INITIALIZED/INCONSISTENT_STATE처럼 정상 복구가 아닌 경우 응답을 성공(200)으로 주지
+	// 않고 예외(503)로 명확히 알린다. ALREADY_RESTORED는 같은 요청이 이미 한 번 복구된 정상적인
+	// 케이스라 실패로 보지 않는다.
+	private void validateRestoreResult(Long messageId, String requestId, CouponIssueStockRestoreResult restoreResult) {
+		if (restoreResult.status() != CouponIssueStockRestoreStatus.RESTORED
+				&& restoreResult.status() != CouponIssueStockRestoreStatus.ALREADY_RESTORED) {
+			log.warn(
+					"[DLQ Abandon] 재고 복구가 정상 완료되지 않았습니다. messageId={}, requestId={}, restoreStatus={}, remainingStock={}",
+					messageId, requestId, restoreResult.status(), restoreResult.remainingStock()
+			);
+			throw new GeneralException(CouponErrorCode.ISSUE_STOCK_RESTORE_FAILED);
+		}
 	}
 }
