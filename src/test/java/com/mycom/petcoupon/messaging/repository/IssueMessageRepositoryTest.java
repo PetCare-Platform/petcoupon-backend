@@ -26,9 +26,11 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 /**
- * Outbox Poller(findByStatusInAndRetryCountLessThan)가 DLQ 상태 메시지를 실제로
- * 조회 대상에서 제외하는지 검증. DLQ 수동 재처리가 실패해도 poison message가
- * 다시 자동 재시도 대상에 걸리면 안 된다는 리뷰 코멘트를 근거로 추가.
+ * IssueMessageRepository의 커스텀 쿼리 검증. 처음엔 Outbox Poller(findByStatusInAndRetryCountLessThan)가
+ * DLQ 상태 메시지를 재시도 대상에서 실제로 제외하는지 확인하려고 만들었고(DLQ 수동 재처리가
+ * 실패해도 poison message가 다시 자동 재시도에 걸리면 안 된다는 리뷰 코멘트 근거),
+ * 이후 발급 처리량/상태 분포 조회(#156, findThroughputByHour/countGroupedByStatus)
+ * 검증도 여기 추가됐다.
  *
  * 실행 전 MySQL이 떠 있어야 한다: docker compose up -d mysql
  */
@@ -272,10 +274,61 @@ class IssueMessageRepositoryTest {
 		assertThat(totalAfter - totalBefore).isEqualTo(6L);
 	}
 
+	// PR 리뷰 반영 — from만 있고 to가 없던 구조가 맨 앞 버킷이 부분치만 담기는 문제의
+	// 근본 원인이었다. to가 실제로 배타적 상한(created_at < to)으로 동작하는지 —
+	// to 정각 그 자체는 다음 구간으로 빠지고, to 1초 전은 이번 구간에 포함되는지 —
+	// 두 메시지를 각각 그 경계에 놓고 inProgressCount 델타로 확인한다.
+	@Test
+	void findThroughputByHour는_to_경계를_배타적으로_적용한다() {
+		LocalDateTime to = LocalDateTime.now().withMinute(0).withSecond(0).withNano(0).plusHours(1);
+		LocalDateTime from = to.minusHours(1);
+		String bucketKey = from.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+
+		long inProgressBefore = findBucketCountInRange(from, to, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage justBeforeTo = IssueMessage.pending(coupon, 50L, 50L, "boundary-included", "{}");
+		entityManager.persist(justBeforeTo);
+		IssueMessage exactlyAtTo = IssueMessage.pending(coupon, 51L, 51L, "boundary-excluded", "{}");
+		entityManager.persist(exactlyAtTo);
+		entityManager.flush();
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", to.minusSeconds(1))
+				.setParameter("id", justBeforeTo.getMessageId())
+				.executeUpdate();
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", to)
+				.setParameter("id", exactlyAtTo.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long inProgressAfter = findBucketCountInRange(from, to, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		// to 1초 전 것만 잡혀야 한다(+1) — to 그 자체인 것까지 잡히면(+2) 배타적 상한이
+		// 깨진 것이다.
+		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
+	}
+
+	private long findBucketCountInRange(
+			LocalDateTime from, LocalDateTime to, String bucketKey,
+			java.util.function.ToLongFunction<IssueThroughputBucket> extractor
+	) {
+		return issueMessageRepository.findThroughputByHour(from, to).stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.mapToLong(extractor::applyAsLong)
+				.findFirst()
+				.orElse(0L);
+	}
+
+	// to는 넉넉한 미래로 잡아서(이 테스트들은 to 경계를 검증 대상으로 삼지 않는다) since 이후
+	// 전부가 조회되게 한다 — findThroughputByHour(from, to)의 to 경계 자체를 검증하는 건
+	// 바로 위 findThroughputByHour는_to_경계를_배타적으로_적용한다() 전용이다.
 	private long findBucketCount(
 			LocalDateTime since, String bucketKey, java.util.function.ToLongFunction<IssueThroughputBucket> extractor
 	) {
-		return issueMessageRepository.findThroughputByHour(since).stream()
+		return issueMessageRepository.findThroughputByHour(since, LocalDateTime.now().plusDays(1)).stream()
 				.filter(b -> b.getBucket().equals(bucketKey))
 				.mapToLong(extractor::applyAsLong)
 				.findFirst()
