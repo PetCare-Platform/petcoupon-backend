@@ -136,7 +136,7 @@ public class GlobalExceptionHandler {
 
     	// 스택 트레이스를 남기지 않는다. 잘못된 주소로 들어온 요청이라 서버 결함이 아니고,
     	// 스캐너가 없는 경로를 훑으면 로그가 그것만으로 가득 찬다.
-    	log.warn("[NoResourceFound] 매칭되는 핸들러 없음: {}", ex.getResourcePath());
+    	log.warn("[NoResourceFound] 매칭되는 핸들러 없음: {} {}", ex.getHttpMethod(), ex.getResourcePath());
 
     	BaseErrorCode errorCode = CommonErrorCode.NOT_FOUND;
 
