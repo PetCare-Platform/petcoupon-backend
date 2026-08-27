@@ -16,9 +16,13 @@ import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -32,6 +36,7 @@ import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.notification.NotificationLogTestSupport;
+import com.mycom.petcoupon.notification.entity.NotificationLog;
 import com.mycom.petcoupon.notification.repository.NotificationLogRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
 
@@ -70,7 +75,9 @@ class CouponIssuePersisterIntegrationTest {
 	@Autowired
 	private CouponStockRepository couponStockRepository;
 
-	@Autowired
+	// Consumer 내부에서 매번 새로 생성되는 CouponIssue는 PK를 미리 알 수 없어 uk_noti_issue_channel
+	// 중복으로 실패를 유도할 수 없다 — 그 케이스만 특정 유저의 save()에 한해 예외를 강제한다.
+	@MockitoSpyBean
 	private NotificationLogRepository notificationLogRepository;
 
 	@Autowired
@@ -196,54 +203,56 @@ class CouponIssuePersisterIntegrationTest {
 
 	@Test
 	void recordNotification_단독_호출은_예외를_전파하지만_Consumer_호출부에서는_새지_않는다() {
-		// phone null인 유저 2명 — 하나는 persister.recordNotification()을 직접 호출하는 회귀 가드용,
-		// 하나는 실제 진입점인 consumer.consume()을 통한 end-to-end 검증용이다. 같은 유저로 같은
-		// 쿠폰에 두 번 발급하면 uk_issue_coupon_user(coupon_id, user_id) 위반이라 유저를 나눈다.
+		// phone 값에 의존하지 않는다 — app_user의 email/phone NOT NULL 제약이 마이그레이션 없이
+		// DB에만(예: ROLE_MEMBER 전용 CHECK) 걸려 있는 환경도 있어, phone-null 픽스처로는 실패
+		// 재현을 항상 보장할 수 없다. phone과 무관한 두 가지 실패 트리거를 쓴다.
 		AppUser directCallUser = AppUser.builder()
-				.name("phone 없는 사용자(직접호출)")
-				.email("no-phone-direct-" + UUID.randomUUID() + "@test.com")
-				.phone(null)
+				.name("알림 중복 사용자(직접호출)")
+				.email("noti-dup-direct-" + UUID.randomUUID() + "@test.com")
+				.phone("010-1111-1111")
 				.build();
 		AppUser consumerCallUser = AppUser.builder()
-				.name("phone 없는 사용자(Consumer)")
-				.email("no-phone-consumer-" + UUID.randomUUID() + "@test.com")
-				.phone(null)
+				.name("알림 중복 사용자(Consumer)")
+				.email("noti-dup-consumer-" + UUID.randomUUID() + "@test.com")
+				.phone("010-2222-2222")
 				.build();
 		transactionTemplate.executeWithoutResult(status -> {
 			entityManager.persist(directCallUser);
 			entityManager.persist(consumerCallUser);
 		});
 
-		String directRequestId = "no-phone-direct-" + UUID.randomUUID();
+		// (1) 단독 호출: NotificationLog 자신의 유니크 제약 uk_noti_issue_channel(coupon_issue_id,
+		// channel)을 이용한다 — 같은 발급 건에 SMS 알림을 두 번 기록하면 두 번째 save()가 실패한다.
+		String directRequestId = "noti-dup-direct-" + UUID.randomUUID();
 		CouponIssueEvent directEvent = new CouponIssueEvent(
 			couponId, directCallUser.getUserId(), directRequestId, 1L,
 			"CODE-1-" + shortSuffix(), LocalDateTime.now().plusDays(7)
 		);
 
 		CouponIssue directCouponIssue = persister.persist(directEvent);
+		persister.recordNotification(directCouponIssue);
 
 		entityManager.clear();
-
-		// 발급 자체는 정상 커밋됐다 — phone null로 인한 알림 저장 실패가 여기까지 영향을 주지 않는다
 		assertThat(couponIssueRepository.existsByRequestId(directRequestId)).isTrue();
+		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
 
-		// recordNotification()을 단독 호출하면 예외가 그대로 전파된다 — notificationLogRepository.save()가
-		// 실패하는 순간 JPA 스펙상 트랜잭션이 rollback-only로 마킹되고, @Transactional 프록시가 메서드
-		// 반환 후 커밋을 시도하다가 실패해 예외를 던진다(실측: UnexpectedRollbackException). 메서드 안에서
-		// 삼키려 해도 이 커밋 실패는 메서드 몸통 바깥이라 못 막는다 — CouponIssuePersister.recordNotification()
-		// 주석 참고. 이 단언은 "내부 try/catch로 다시 삼키려는 시도"가 재발하면 실패하도록 남겨둔 회귀 가드다.
+		// 커밋 실패(rollback-only 마킹 후 UnexpectedRollbackException)는 메서드 몸통 바깥에서
+		// 일어나 내부 try/catch로 못 막는다 — CouponIssuePersister.recordNotification() 주석 참고.
 		assertThatThrownBy(() -> persister.recordNotification(directCouponIssue))
-				.isInstanceOfAny(
-						org.springframework.dao.DataIntegrityViolationException.class,
-						org.springframework.transaction.UnexpectedRollbackException.class
-				);
+				.isInstanceOfAny(DataIntegrityViolationException.class, UnexpectedRollbackException.class);
 
 		entityManager.clear();
-		assertThat(notificationCountOf(couponId)).isZero();
+		assertThat(notificationCountOf(couponId)).isEqualTo(1L); // 실패한 재시도는 건수를 늘리지 않는다
 
-		// 실제 안전장치는 호출부(CouponIssueEventConsumer)에 있다 — 이게 진짜 프로덕션 진입점이고,
-		// Kafka 리스너까지 예외가 새지 않아야 무한 재시도로 이어지지 않는다.
-		String consumerRequestId = "no-phone-consumer-" + UUID.randomUUID();
+		// (2) 실제 안전장치는 호출부(CouponIssueEventConsumer)에 있다 — Kafka 리스너까지 예외가 새지
+		// 않아야 무한 재시도로 이어지지 않는다. consume()이 생성하는 CouponIssue는 PK를 미리 알 수
+		// 없어 (1)과 같은 방법을 못 쓰므로, 이 유저의 save()만 예외를 던지도록 스텁한다.
+		Mockito.doThrow(new DataIntegrityViolationException("simulated notification save failure"))
+				.when(notificationLogRepository)
+				.save(Mockito.<NotificationLog>argThat(log -> log != null && log.getUser() != null
+						&& log.getUser().getUserId().equals(consumerCallUser.getUserId())));
+
+		String consumerRequestId = "noti-dup-consumer-" + UUID.randomUUID();
 		CouponIssueEvent consumerEvent = new CouponIssueEvent(
 			couponId, consumerCallUser.getUserId(), consumerRequestId, 2L,
 			"CODE-2-" + shortSuffix(), LocalDateTime.now().plusDays(7)
@@ -255,13 +264,18 @@ class CouponIssuePersisterIntegrationTest {
 
 		entityManager.clear();
 
-		// 발급은 그대로 남아있고, 알림 로그만 안 남아야 한다
+		// 발급은 그대로 남아있고, 알림 로그만 안 남아야 한다(직접 호출 케이스의 1건에서 늘지 않는다)
 		assertThat(couponIssueRepository.existsByRequestId(consumerRequestId)).isTrue();
-		assertThat(notificationCountOf(couponId)).isZero();
+		assertThat(notificationCountOf(couponId)).isEqualTo(1L);
 
 		// tearDownData()가 couponId 기준으로 coupon_issue를 지우기 전에, 이 유저들을 참조하는
-		// coupon_issue_history/coupon_issue를 먼저 지워야 app_user 삭제가 FK 위반 없이 끝난다
+		// notification_log(직접 호출 케이스는 실제로 1건 남아있다)/coupon_issue_history/coupon_issue를
+		// 먼저 지워야 app_user 삭제가 FK 위반 없이 끝난다
 		transactionTemplate.executeWithoutResult(status -> {
+			entityManager.createNativeQuery(
+					"DELETE n FROM notification_log n JOIN coupon_issue ci ON n.coupon_issue_id = ci.coupon_issue_id WHERE ci.request_id IN :requestIds")
+					.setParameter("requestIds", List.of(directRequestId, consumerRequestId))
+					.executeUpdate();
 			entityManager.createNativeQuery(
 					"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.request_id IN :requestIds")
 					.setParameter("requestIds", List.of(directRequestId, consumerRequestId))

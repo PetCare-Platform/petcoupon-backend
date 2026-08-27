@@ -155,9 +155,13 @@ class CouponIssueEventConsumerConcurrencyIntegrationTest {
 		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id = :couponId")
 				.setParameter("couponId", couponId)
 				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
-				.setParameter("eventId", event.getEventId())
-				.executeUpdate();
+		// user persist 단계에서 setUp이 실패하면 event는 null인 채로 tearDown에 들어온다 —
+		// getEventId() 호출 전에 가드한다(CouponIssuePipelineIntegrationTest와 동일한 패턴).
+		if (event != null) {
+			entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
+					.setParameter("eventId", event.getEventId())
+					.executeUpdate();
+		}
 		List<Long> allUserIds = new ArrayList<>(extraUserIds);
 		allUserIds.add(user.getUserId());
 		entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id IN (:userIds)")
