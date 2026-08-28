@@ -215,7 +215,6 @@ class CouponConverterTest {
 		CouponPipelineDrainStatusResponse response = couponConverter.toPipelineDrainStatusResponse(coupon, drainStatus);
 
 		assertSame(CouponStatus.ENDED, response.couponStatus());
-		assertEquals(true, response.blocked());
 		assertEquals(3L, response.outboxUnconsumed());
 		assertEquals(1L, response.streamUndelivered());
 		assertEquals(2L, response.streamActivePending());

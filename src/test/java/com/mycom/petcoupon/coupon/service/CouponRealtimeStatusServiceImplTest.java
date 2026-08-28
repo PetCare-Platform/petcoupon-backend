@@ -153,7 +153,6 @@ class CouponRealtimeStatusServiceImplTest {
         PipelineDrainStatus drainStatus = new PipelineDrainStatus(0L, 0L, 0L, false);
         CouponPipelineDrainStatusResponse expected = CouponPipelineDrainStatusResponse.builder()
                 .couponStatus(CouponStatus.ENDED)
-                .blocked(false)
                 .outboxUnconsumed(0L)
                 .streamUndelivered(0L)
                 .streamActivePending(0L)

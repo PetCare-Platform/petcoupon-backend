@@ -184,7 +184,6 @@ class AdminCouponStatusControllerTest {
     void getPipelineDrainStatusReturnsDrainStatusWhenAdminTokenIsValid() throws Exception {
         CouponPipelineDrainStatusResponse response = CouponPipelineDrainStatusResponse.builder()
                 .couponStatus(CouponStatus.ENDED)
-                .blocked(false)
                 .outboxUnconsumed(0L)
                 .streamUndelivered(0L)
                 .streamActivePending(0L)
@@ -199,7 +198,6 @@ class AdminCouponStatusControllerTest {
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.code").value("200"))
                 .andExpect(jsonPath("$.result.couponStatus").value("ENDED"))
-                .andExpect(jsonPath("$.result.blocked").value(false))
                 .andExpect(jsonPath("$.result.outboxUnconsumed").value(0))
                 .andExpect(jsonPath("$.result.streamUndelivered").value(0))
                 .andExpect(jsonPath("$.result.streamActivePending").value(0))
@@ -212,7 +210,6 @@ class AdminCouponStatusControllerTest {
     void getPipelineDrainStatusReturnsDrainStatusWithCheckFailedTrueWhenRedisCheckFails() throws Exception {
         CouponPipelineDrainStatusResponse response = CouponPipelineDrainStatusResponse.builder()
                 .couponStatus(CouponStatus.ACTIVE)
-                .blocked(true)
                 .outboxUnconsumed(2L)
                 .streamUndelivered(0L)
                 .streamActivePending(0L)
@@ -227,7 +224,6 @@ class AdminCouponStatusControllerTest {
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.code").value("200"))
                 .andExpect(jsonPath("$.result.couponStatus").value("ACTIVE"))
-                .andExpect(jsonPath("$.result.blocked").value(true))
                 .andExpect(jsonPath("$.result.outboxUnconsumed").value(2))
                 .andExpect(jsonPath("$.result.streamUndelivered").value(0))
                 .andExpect(jsonPath("$.result.streamActivePending").value(0))

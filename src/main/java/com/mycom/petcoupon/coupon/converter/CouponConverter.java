@@ -137,7 +137,6 @@ public class CouponConverter {
 			Coupon coupon, PipelineDrainStatus drainStatus) {
 		return CouponPipelineDrainStatusResponse.builder()
 				.couponStatus(coupon.getStatus())
-				.blocked(drainStatus.isBlocked())
 				.outboxUnconsumed(drainStatus.outboxUnconsumed())
 				.streamUndelivered(drainStatus.streamUndelivered())
 				.streamActivePending(drainStatus.streamActivePending())
