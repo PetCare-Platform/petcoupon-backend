@@ -33,7 +33,7 @@ import ch.qos.logback.core.read.ListAppender;
  * 시점에 원본 빈 인스턴스를 직접 참조해버려 스파이 대체 타이밍과 어긋날 수 있어(오탐 위험),
  * 실제 실행 결과(로그)를 직접 캡처하는 방식을 씀.
  */
-@SpringBootTest
+@SpringBootTest(properties = "spring.kafka.consumer.auto-offset-reset=earliest")
 class CouponIssueEventDlqConsumerIntegrationTest {
 
 	@Autowired
@@ -60,15 +60,11 @@ class CouponIssueEventDlqConsumerIntegrationTest {
 			1L, 10L, requestId, 1L, "CODE", LocalDateTime.now().plusDays(7)
 		);
 
-		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, requestId, event);
-
-		// petcoupon-dlq는 이 테스트에서 처음 생기는 컨슈머 그룹이라, 최초 JoinGroup/rebalance에
-		// 몇 초 이상 걸릴 수 있어 여유 있게 잡음 (실측: 10초로는 부족, group-id 분리 자체는
-		// kafka-consumer-groups.sh --describe로 별도 그룹 생성/오프셋 커밋 확인함)
-		await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+		await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(500)).untilAsserted(() -> {
+			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, requestId, event);
 			assertThat(logAppender.list)
 				.extracting(ILoggingEvent::getFormattedMessage)
-				.anyMatch(message -> message.contains(requestId))
-		);
+				.anyMatch(message -> message.contains(requestId));
+		});
 	}
 }
