@@ -138,6 +138,43 @@ class DashboardSummaryServiceTest {
 
         DashboardSummaryResponse response = dashboardSummaryService.getSummary();
 
-        assertThat(response.couponIssueStatusDistribution()).containsExactly(distributionResponse);
+        assertThat(response.couponIssueStatusDistribution()).contains(distributionResponse);
+    }
+
+    // [PR 리뷰 반영] countGroupedByStatus()는 GROUP BY라 실제로 0건인 상태는 결과에서
+    // 통째로 빠진다. IssueStatus 3개(ISSUED/USED/EXPIRED)가 항상 다 채워지는지, 실제
+    // 데이터가 있는 상태 외 나머지는 count=0으로 채워지는지 확인한다.
+    @Test
+    void getSummary는_실제_건이_없는_발급_상태를_0건으로_채운다() {
+        when(eventRepository.count()).thenReturn(0L);
+        when(eventRepository.countByStatus(EventStatus.OPEN)).thenReturn(0L);
+        when(couponRepository.count()).thenReturn(0L);
+        when(couponRepository.countByStatus(CouponStatus.ACTIVE)).thenReturn(0L);
+
+        CouponStockSummary stockSummary = mock(CouponStockSummary.class);
+        when(stockSummary.getTotalQuantity()).thenReturn(0L);
+        when(stockSummary.getIssuedQuantity()).thenReturn(0L);
+        when(stockSummary.getRemainingQuantity()).thenReturn(0L);
+        when(couponStockRepository.sumStock()).thenReturn(stockSummary);
+
+        CouponIssueStatusCount issuedCount = mock(CouponIssueStatusCount.class);
+        when(couponIssueRepository.countGroupedByStatus()).thenReturn(List.of(issuedCount));
+
+        var issuedResponse = CouponIssueStatusDistributionResponse.builder()
+                .status(IssueStatus.ISSUED).count(7).build();
+        when(dashboardSummaryConverter.toDistributionResponse(issuedCount)).thenReturn(issuedResponse);
+
+        DashboardSummaryResponse response = dashboardSummaryService.getSummary();
+
+        assertThat(response.couponIssueStatusDistribution()).hasSize(IssueStatus.values().length);
+        assertThat(response.couponIssueStatusDistribution())
+                .extracting(CouponIssueStatusDistributionResponse::status)
+                .containsExactlyInAnyOrder(IssueStatus.values());
+        assertThat(response.couponIssueStatusDistribution())
+                .filteredOn(r -> r.status() == IssueStatus.ISSUED)
+                .containsExactly(issuedResponse);
+        assertThat(response.couponIssueStatusDistribution())
+                .filteredOn(r -> r.status() != IssueStatus.ISSUED)
+                .allSatisfy(r -> assertThat(r.count()).isZero());
     }
 }
