@@ -16,7 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
@@ -40,8 +42,22 @@ import jakarta.persistence.EntityManagerFactory;
  * listDlqMessages()가 @Transactional 없이 lazy(coupon)를 컨버터에서 접근하는 구조라,
  * Mockito 단위 테스트로는 실제 LazyInitializationException 여부를 검증할 수 없다.
  * @SpringBootTest로 실제 open-in-view=false 환경/트랜잭션 경계를 그대로 재현해서 확인한다.
+ *
+ * [버그 리포트 반영] Hibernate Statistics(generate_statistics=true)는 SessionFactory
+ * 하나에 딸린 프로세스 전역 카운터라, 이 클래스만 단독 실행할 땐 문제없다가 전체 테스트를
+ * 같이 돌리면 실패하는 게 관찰됐다 — 배경 스케줄러(Outbox 발행 1초 주기 등)가 살아있는
+ * 컨텍스트가 캐시돼 있으면, statistics.clear()와 측정 사이에 그 스케줄러가 쏜 쿼리까지
+ * 같이 세어져 카운트가 오염된다. README의 "새 @SpringBootTest를 추가할 때는 스케줄러를
+ * 꺼야 한다" 컨벤션을 안 지켰던 게 근본 원인 — #174가 만든 문제가 아니라 이 클래스가
+ * 처음 만들어질 때부터 있던 결함이고, 그동안 우연히 안 걸렸을 뿐이다.
  */
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
+@SpringBootTest(properties = {
+		"spring.jpa.properties.hibernate.generate_statistics=true",
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.outbox.enabled=false",
+		"coupon.reconciliation.scheduler.enabled=false"
+})
 class CouponIssueDlqReprocessServiceIntegrationTest {
 
 	@Autowired
@@ -116,9 +132,11 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 
 		// 서비스 메서드는 @Transactional이 아니므로, 여기서 실제로 세션이 닫힌 뒤 컨버터가 접근하는
 		// 흐름이 그대로 재현됨 — JOIN FETCH가 없으면 여기서 LazyInitializationException이 터짐
-		List<CouponIssueDlqResponse> result = couponIssueDlqReprocessService.listDlqMessages();
+		CouponIssueDlqPageResponse pageResponse = couponIssueDlqReprocessService.listDlqMessages(
+				CouponPageRequest.from(CouponPageRequest.DEFAULT_PAGE, CouponPageRequest.DEFAULT_SIZE)
+		);
 
-		CouponIssueDlqResponse found = result.stream()
+		CouponIssueDlqResponse found = pageResponse.content().stream()
 				.filter(r -> r.messageId().equals(issueMessage.getMessageId()))
 				.findFirst()
 				.orElseThrow();
@@ -162,14 +180,24 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 		Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
 		statistics.clear();
 
-		List<CouponIssueDlqResponse> result = couponIssueDlqReprocessService.listDlqMessages();
+		CouponIssueDlqPageResponse pageResponse = couponIssueDlqReprocessService.listDlqMessages(
+				CouponPageRequest.from(CouponPageRequest.DEFAULT_PAGE, CouponPageRequest.DEFAULT_SIZE)
+		);
 
 		long queryCount = statistics.getQueryExecutionCount();
 
-		assertThat(result).hasSizeGreaterThanOrEqualTo(3);
-		// JOIN FETCH로 한 방에 가져오면 1건, 없으면 목록조회 1 + 쿠폰별 지연로딩 3 = 4건 이상이어야 함
+		assertThat(pageResponse.content()).hasSizeGreaterThanOrEqualTo(3);
+		// [PR 리뷰 반영] 페이지네이션(#174) — findByStatus가 Page<>를 반환하도록 바뀌면서
+		// countQuery가 추가됐지만, 실측해보니 여전히 쿼리 1건이다. Spring Data JPA가
+		// PageableExecutionUtils로 count 쿼리 실행 자체를 건너뛰기 때문이다 — offset이 0(첫
+		// 페이지)이고 content 크기(3)가 요청한 size(기본 20)보다 작으면, "더 볼 페이지가 없다"는
+		// 걸 content 크기만으로 알 수 있어 count 쿼리를 아예 안 던진다. 이 페이지가 꽉 차는
+		// 경우(content 크기 == size)에는 다음 페이지 존재 여부를 알 수 없어 count 쿼리가
+		// 실제로 추가된다 — 그 케이스까지 이 테스트가 검증하진 않는다.
+		// JOIN FETCH가 없었다면 목록 1 + 쿠폰별 지연로딩 3 = 4건 이상이었을 거라 N+1 여부는
+		// 여전히 이 숫자로 구분된다 — 이 테스트가 원래 검증하려던 것은 그대로 유효하다.
 		assertThat(queryCount)
-				.as("listDlqMessages 호출 시 실행된 쿼리 수 (JOIN FETCH 있으면 1이어야 함)")
+				.as("listDlqMessages 호출 시 실행된 쿼리 수 (JOIN FETCH 있으면 1, 없으면 4 이상)")
 				.isEqualTo(1);
 	}
 

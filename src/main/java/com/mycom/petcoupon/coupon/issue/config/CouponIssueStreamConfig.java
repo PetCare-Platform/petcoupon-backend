@@ -1,7 +1,9 @@
 package com.mycom.petcoupon.coupon.issue.config;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -40,11 +42,11 @@ public class CouponIssueStreamConfig {
 	
 	private final CouponIssueStreamConsumer consumer;
 
-	// Redis 오류 발생 후 복구 시도까지의 지연 시간
-	private static final long ERROR_RETRY_DELAY_MILLIS = 1_000L;
-
 	// 동일한 장애에 대해 복구 작업이 중복 예약되지 않도록 방지
 	private final AtomicBoolean recoveryScheduled = new AtomicBoolean(false);
+	
+	// Consumer가 정상 메시지를 다시 처리할 때까지 유지하는 연속 복구 실패 횟수
+	private final AtomicInteger recoveryFailedAttempts = new AtomicInteger(0);
 
 	private StreamMessageListenerContainer<String, MapRecord<String, String, String>> container;
 
@@ -104,7 +106,12 @@ public class CouponIssueStreamConfig {
                 .cancelOnError(error -> true)
                 .build();
 
-        container.register(request, consumer);
+        container.register(request, message -> {
+        	// 메시지를 읽었다는 것으로 Redis 연결 복구는 확인됐다.
+            recoveryFailedAttempts.set(0);
+
+            consumer.onMessage(message);
+        });
     }
 	
 	// Consumer Group이 없으면 생성하고, 이미 존재하면 기존 그룹을 사용
@@ -133,33 +140,97 @@ public class CouponIssueStreamConfig {
 	private void handleStreamError(Throwable error) {
 	    log.error("Redis Stream 읽기 오류가 발생했습니다.", error);
 
+	    // 이미 복구 재시도 체인이 실행 중이면 중복 예약하지 않음 
 	    if (!recoveryScheduled.compareAndSet(false, true)) {
 	        return;
 	    }
 
+	    // 첫 오류면 0(1초), 이후 연속 오류면 누적 횟수에 맞는 지연 시간을 사용한다.
+	    int failedAttempts = recoveryFailedAttempts.getAndIncrement();
+	    
+	    scheduleRecovery(error, failedAttempts);
+	}
+	
+	/**
+	 * 복구 실패 횟수에 따라 지수 백오프를 적용해 다음 복구 작업을 예약한다.
+	 *
+	 * failedAttempts=0 -> 1초
+	 * failedAttempts=1 -> 2초
+	 * failedAttempts=2 -> 4초
+	 * ...
+	 * 최대 30초
+	 */
+	private void scheduleRecovery(Throwable cause, int failedAttempts) {
+	    Duration delay = calculateRecoveryDelay(failedAttempts);
+
 	    taskScheduler.schedule(
 	        () -> {
-	        	try {
-	        		recoverConsumer(error);
-	        		log.info("Redis Stream Consumer 재시작 완료");
-	                
-	        	} catch (Exception recoveryError) {
-	        		recoveryScheduled.set(false);
-	        		
-	        		log.error(
-	        			"Redis Stream Consumer 복구에 실패했습니다.",
-	        			recoveryError
-	        		);
-	        		
-	        		// TODO(#26, #47): 복구 실패 시 지수 백오프 재시도 및 장애 복구 통합 테스트 추가
-	        		
-	        	} 
+	            try {
+	                recoverConsumer(cause);
+
+	                // start()가 호출되었으므로 다음 오류는 다시 복구 작업을 예약할 수 있게 한다.
+	                // 단, recoveryFailedAttempts는 실제 메시지 소비가 성공할 때까지 초기화하지 않는다.
+	                recoveryScheduled.set(false);
+
+	                log.info(
+	                    "Redis Stream Consumer 재시작을 요청했습니다. failedAttempts={}, delay={}",
+	                    failedAttempts,
+	                    delay
+	                );
+
+	            } catch (Exception recoveryError) {
+	                Duration nextDelay = calculateRecoveryDelay(failedAttempts + 1);
+
+	                log.error(
+	                    "Redis Stream Consumer 복구에 실패했습니다. 다음 재시도를 예약합니다. "
+	                        + "failedAttempts={}, nextDelay={}",
+	                    failedAttempts + 1,
+	                    nextDelay,
+	                    recoveryError
+	                );
+
+	                // recoveryScheduled는 true인 채로 유지한다.
+	                // 그래서 읽기 오류가 여러 번 발생해도 중복 재시도 작업이 생기지 않는다.
+	                int nextFailedAttempts = failedAttempts + 1;
+
+	                // 다음 오류가 비동기로 발생해도 그다음 백오프 횟수부터 이어지도록 한다.
+	                recoveryFailedAttempts.accumulateAndGet(
+	                	nextFailedAttempts + 1,
+	                	Math::max
+	                );
+
+	                scheduleRecovery(recoveryError, nextFailedAttempts);
+	            }
 	        },
-	        
-	        Instant.now().plusMillis(ERROR_RETRY_DELAY_MILLIS)
+	        Instant.now().plus(delay)
 	    );
 	}
 
+	/**
+	 * initialDelay * multiplier^failedAttempts 값을 계산하되,
+	 * maxDelay를 넘으면 maxDelay로 고정한다.
+	 */
+	private Duration calculateRecoveryDelay(int failedAttempts) {
+	    CouponIssueStreamProperties.Recovery recovery = properties.getRecovery();
+
+	    Duration delay = recovery.getInitialDelay();
+	    Duration maxDelay = recovery.getMaxDelay();
+
+	    for (int i = 0; i < failedAttempts && delay.compareTo(maxDelay) < 0; i++) {
+	        try {
+	            delay = delay.multipliedBy(recovery.getMultiplier());
+	        } catch (ArithmeticException e) {
+	            return maxDelay;
+	        }
+
+	        if (delay.compareTo(maxDelay) >= 0) {
+	            return maxDelay;
+	        }
+	    }
+
+	    return delay;
+	}
+	
 	private void recoverConsumer(Throwable error) {
 		
 		 // 취소된 Subscription을 다시 시작할 수 있도록 Container 상태를 초기화
@@ -169,9 +240,6 @@ public class CouponIssueStreamConfig {
 	        ensureConsumerGroup();
 	        log.info("Redis Stream Consumer Group을 복구했습니다.");
 	    }
-	    
-	    // 재시작 직후 발생하는 오류도 다음 복구 작업을 예약할 수 있도록 해제
-	    recoveryScheduled.set(false);
 	    
 	    container.start();
 	}
