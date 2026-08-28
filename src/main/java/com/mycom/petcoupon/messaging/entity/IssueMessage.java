@@ -7,6 +7,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 
 import jakarta.persistence.Column;
@@ -63,6 +64,14 @@ import lombok.NoArgsConstructor;
 		@Index(
 			name = "idx_issue_message_dlq_list",
 			columnList = "status, created_at, message_id"
+		),
+		// 쿠폰별 발급 시계열 조회(#198, IssueMessageRepository.findThroughputByCouponAndSeconds)가
+		// coupon_id = :couponId AND created_at >= :from AND created_at < :to 조건으로
+		// 대시보드에서 초 단위 폴링으로 호출된다. (coupon_id, created_at) 복합 인덱스로
+		// 해당 쿠폰의 특정 시간 범위만 인덱스 레인지 스캔하게 한다.
+		@Index(
+			name = "idx_issue_message_coupon_created_at",
+			columnList = "coupon_id, created_at"
 		)
 	},
 	uniqueConstraints = {
@@ -111,9 +120,16 @@ public class IssueMessage {
 	@Column(name = "retry_count", nullable = false) 
 	private int retryCount;
 	
-	@Column(name = "last_error", length = 500) 
-	private String lastError; 
-	
+	@Column(name = "last_error", length = 500)
+	private String lastError;
+
+	// 실패 사유 분류 집계(#195)용 — lastError는 예외 메시지 자유 텍스트라 집계에 못 쓴다.
+	// markPublishFailed/markDlq를 부르는 지점(발행 실패 vs Consumer 처리 실패) 자체를 사유로 남긴다.
+	// 이 컬럼이 생기기 전 DLQ 행(SEED 등)은 null로 남으므로, 집계 시 별도 처리 없이 자연히 제외된다.
+	@Enumerated(EnumType.STRING)
+	@Column(name = "failure_reason", length = 30)
+	private IssueFailureReason failureReason;
+
 	@CreatedDate
 	@Column(name = "created_at", nullable = false, updatable = false) 
 	private LocalDateTime createdAt; 

@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -109,7 +110,9 @@ public class CouponIssueEventProducer {
 		boolean shouldGoToDlq = fromDlqReprocess || retryExhausted;
 		IssueMessageStatus status = shouldGoToDlq ? IssueMessageStatus.DLQ : IssueMessageStatus.FAILED;
 
-		issueMessageRepository.markPublishFailed(issueMessage.getMessageId(), status, errorMessage(ex));
+		issueMessageRepository.markPublishFailed(
+			issueMessage.getMessageId(), status, errorMessage(ex), IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
 
 		if (shouldGoToDlq) {
 			// 관리자 수동 재처리(claimForReprocess) 경로에서는 issueMessage의 retryCount가

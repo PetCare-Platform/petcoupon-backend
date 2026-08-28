@@ -13,6 +13,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 
 public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long> {
@@ -40,14 +41,16 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	@Modifying(clearAutomatically = true)
 	@Query("""
 			UPDATE IssueMessage im
-			   SET im.status = :status, im.retryCount = im.retryCount + 1, im.lastError = :lastError
+			   SET im.status = :status, im.retryCount = im.retryCount + 1, im.lastError = :lastError,
+			       im.failureReason = :failureReason
 			 WHERE im.topic = :topic AND im.messageKey = :messageKey
 			""")
 	int markDlq(
 			@Param("topic") String topic,
 			@Param("messageKey") String messageKey,
 			@Param("status") IssueMessageStatus status,
-			@Param("lastError") String lastError
+			@Param("lastError") String lastError,
+			@Param("failureReason") IssueFailureReason failureReason
 	);
 	
 	
@@ -80,28 +83,31 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		UPDATE IssueMessage im
 			SET im.status = :status,
 				im.processedAt = :processedAt,
-				im.lastError = null
+				im.lastError = null,
+				im.failureReason = null
 		WHERE im.messageId = :messageId
 	""")
 	int markSent(
-		@Param("messageId") Long messageId, 
+		@Param("messageId") Long messageId,
 		@Param("status") IssueMessageStatus status,
 		@Param("processedAt") LocalDateTime processedAt
 	);
-	
+
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
 	    UPDATE IssueMessage im
 	       SET im.status = :status,
 	           im.retryCount = im.retryCount + 1,
-	           im.lastError = :lastError
+	           im.lastError = :lastError,
+	           im.failureReason = :failureReason
 	     WHERE im.messageId = :messageId
 	""")
 	int markPublishFailed(
 	    @Param("messageId") Long messageId,
 	    @Param("status") IssueMessageStatus status,
-	    @Param("lastError") String lastError
+	    @Param("lastError") String lastError,
+	    @Param("failureReason") IssueFailureReason failureReason
 	);
 
 	// 목록 조회용 — 재고 조회(findByStatusInAndRetryCountLessThan)와 동일하게 Pageable로 크기 제한.
@@ -243,4 +249,69 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
 	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
 	List<IssueStatusCount> countGroupedByStatus();
+
+	// 부하 테스트 현황 조회(#195)용 — 쿠폰 하나로 좁힌 파이프라인 상태 분포.
+	// idx_issue_message_coupon_dlq(coupon_id, status, message_id)가 coupon_id+status를
+	// 그대로 커버해서, countGroupedByStatus()와 달리 5초 폴링에도 풀스캔이 안 난다.
+	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im WHERE im.coupon.couponId = :couponId GROUP BY im.status")
+	List<IssueStatusCount> countGroupedByStatusForCoupon(@Param("couponId") Long couponId);
+
+	// 실패 사유 분류 집계(#195)용 — 아직 관리자 확인 대기 중인 DLQ만 대상으로 한다. ABANDONED는
+	// 이미 처리(포기)가 끝난 건이라 다시 분류해서 보여줄 실익이 없다. idx_issue_message_coupon_dlq
+	// (coupon_id, status, message_id)로 coupon_id+status 필터가 커버된다.
+	@Query("""
+			SELECT im.failureReason AS failureReason, COUNT(im) AS count FROM IssueMessage im
+			 WHERE im.coupon.couponId = :couponId AND im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ
+			 GROUP BY im.failureReason
+			""")
+	List<IssueFailureReasonCount> countDlqGroupedByFailureReasonForCoupon(@Param("couponId") Long couponId);
+
+	// 부하 테스트 현황 조회(#195/#200)용 — Kafka 발행에 실제로 성공한 건수. SENT/CONSUMED는
+	// 무조건 발행된 것이고, DLQ/ABANDONED는 failureReason으로 갈린다 — KAFKA_PUBLISH_FAILED는
+	// 발행 자체가 실패한 것(CouponIssueEventProducer.markFailed), CONSUME_PROCESSING_FAILED는
+	// 발행엔 성공했는데 Consumer 처리가 실패한 것(CouponIssueEventRecoverer.markDlq)이다.
+	// FAILED는 발행 실패(KAFKA_PUBLISH_FAILED) 전용 상태라 항상 제외한다 — Consumer 처리 실패는
+	// 재시도 없이 곧장 DLQ로 가서 FAILED를 거치지 않는다(CouponIssueEventRecoverer가 상태를
+	// 무조건 DLQ로 세팅). failureReason이 null인 옛 DLQ 행(컬럼 도입 전)은 발행 여부를 알 수
+	// 없어 제외한다.
+	@Query("""
+			SELECT COUNT(im) FROM IssueMessage im
+			 WHERE im.coupon.couponId = :couponId
+			   AND (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.SENT,
+			                       com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED)
+			        OR (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ,
+			                           com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED)
+			            AND im.failureReason = com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason.CONSUME_PROCESSING_FAILED))
+			""")
+	long countPublishedByCoupon(@Param("couponId") Long couponId);
+
+	// 쿠폰별 초 단위 발급 처리량 시계열 조회(#198)용 — 특정 쿠폰의 [from, to) 기간 동안
+	// bucketSeconds 단위로 발급 성공(CONSUMED)/최종 실패(DLQ·ABANDONED)/진행 중(PENDING·SENT·FAILED)
+	// 건수를 집계한다.
+	//
+	// [타임존 독립성 보장] UNIX_TIMESTAMP/FROM_UNIXTIME은 MySQL 세션 타임존에 의존하여
+	// JVM 타임존과 불일치 시 버킷이 어긋나는 문제가 있다. 기준 시각(:from)으로부터의
+	// 초 차이(TIMESTAMPDIFF)와 DATE_ADD를 사용해 순수 LocalDateTime 연산으로 버킷을 계산함으로써
+	// 타임존 설정과 bucketSeconds 값에 상관없이 자바의 버킷 슬롯과 항상 100% 일치하도록 보장한다.
+	@Query(value = """
+			SELECT DATE_FORMAT(
+			           DATE_ADD(:from, INTERVAL FLOOR(TIMESTAMPDIFF(SECOND, :from, created_at) / :bucketSeconds) * :bucketSeconds SECOND),
+			           '%Y-%m-%d %H:%i:%s'
+			       ) AS bucket,
+			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			  FROM issue_message
+			 WHERE coupon_id = :couponId
+			   AND created_at >= :from
+			   AND created_at < :to
+			 GROUP BY bucket
+			 ORDER BY bucket ASC
+			""", nativeQuery = true)
+	List<IssueThroughputBucket> findThroughputByCouponAndSeconds(
+			@Param("couponId") Long couponId,
+			@Param("bucketSeconds") int bucketSeconds,
+			@Param("from") LocalDateTime from,
+			@Param("to") LocalDateTime to
+	);
 }

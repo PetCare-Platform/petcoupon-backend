@@ -18,8 +18,10 @@ import org.springframework.data.domain.PageRequest;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.user.entity.AppUser;
 
@@ -85,7 +87,7 @@ class IssueMessageRepositoryTest {
 	void DLQ_상태_메시지는_Outbox_재시도_조회_대상에서_제외된다() {
 		IssueMessage dlqMessage = IssueMessage.pending(coupon, 1L, 1L, "dlq-request", "{}");
 		entityManager.persist(dlqMessage);
-		issueMessageRepository.markPublishFailed(dlqMessage.getMessageId(), IssueMessageStatus.DLQ, "poison message");
+		issueMessageRepository.markPublishFailed(dlqMessage.getMessageId(), IssueMessageStatus.DLQ, "poison message", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		IssueMessage pendingMessage = IssueMessage.pending(coupon, 2L, 2L, "pending-request", "{}");
 		entityManager.persist(pendingMessage);
@@ -119,8 +121,8 @@ class IssueMessageRepositoryTest {
 		entityManager.persist(dlq2);
 		entityManager.flush();
 
-		issueMessageRepository.markPublishFailed(dlq1.getMessageId(), IssueMessageStatus.DLQ, "test");
-		issueMessageRepository.markPublishFailed(dlq2.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(dlq1.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.markPublishFailed(dlq2.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		entityManager.flush();
 		entityManager.clear();
@@ -149,8 +151,8 @@ class IssueMessageRepositoryTest {
 		entityManager.persist(tieNewer);
 		entityManager.flush();
 
-		issueMessageRepository.markPublishFailed(tieOlder.getMessageId(), IssueMessageStatus.DLQ, "test");
-		issueMessageRepository.markPublishFailed(tieNewer.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(tieOlder.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.markPublishFailed(tieNewer.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		LocalDateTime sameInstant = LocalDateTime.now();
 		for (IssueMessage message : List.of(tieOlder, tieNewer)) {
@@ -197,7 +199,7 @@ class IssueMessageRepositoryTest {
 		IssueMessage dlq = IssueMessage.pending(coupon, 13L, 13L, "status-count-dlq", "{}");
 		entityManager.persist(dlq);
 		entityManager.flush();
-		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		entityManager.flush();
 		entityManager.clear();
@@ -240,7 +242,7 @@ class IssueMessageRepositoryTest {
 
 		issueMessageRepository.updateStatus(consumed1.getMessageId(), IssueMessageStatus.CONSUMED);
 		issueMessageRepository.updateStatus(consumed2.getMessageId(), IssueMessageStatus.CONSUMED);
-		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq");
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		for (IssueMessage message : List.of(consumed1, consumed2, dlq)) {
 			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
@@ -275,7 +277,7 @@ class IssueMessageRepositoryTest {
 		IssueMessage failed = IssueMessage.pending(coupon, 30L, 30L, "throughput-retrying-failed-1", "{}");
 		entityManager.persist(failed);
 		entityManager.flush();
-		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test retrying failed");
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test retrying failed", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
 				.setParameter("bucketTime", bucketTime)
@@ -323,9 +325,9 @@ class IssueMessageRepositoryTest {
 
 		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
 		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
-		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test");
-		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test");
-		issueMessageRepository.markPublishFailed(abandoned.getMessageId(), IssueMessageStatus.ABANDONED, "test");
+		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.markPublishFailed(abandoned.getMessageId(), IssueMessageStatus.ABANDONED, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 
 		for (IssueMessage message : List.of(pending, sent, consumed, failed, dlq, abandoned)) {
 			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
@@ -403,5 +405,214 @@ class IssueMessageRepositoryTest {
 				.mapToLong(extractor::applyAsLong)
 				.findFirst()
 				.orElse(0L);
+	}
+
+	// 실패 사유 분류 집계(#195)용. coupon이 테스트마다 새로 생성되므로(setUp) 절대값 검증이 가능하다.
+	@Test
+	void countDlqGroupedByFailureReasonForCoupon은_사유별_건수를_따로_센다() {
+		IssueMessage publishFailed1 = IssueMessage.pending(coupon, 80L, 80L, "publish-failed-1", "{}");
+		entityManager.persist(publishFailed1);
+		IssueMessage publishFailed2 = IssueMessage.pending(coupon, 81L, 81L, "publish-failed-2", "{}");
+		entityManager.persist(publishFailed2);
+		IssueMessage consumeFailed = IssueMessage.pending(coupon, 82L, 82L, "consume-failed-1", "{}");
+		entityManager.persist(consumeFailed);
+		// DLQ가 아닌 FAILED는 집계 대상이 아니다 — 아직 재시도 대기 중이라 관리자가 볼 최종 실패가 아님
+		IssueMessage stillRetrying = IssueMessage.pending(coupon, 83L, 83L, "still-retrying", "{}");
+		entityManager.persist(stillRetrying);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				publishFailed1.getMessageId(), IssueMessageStatus.DLQ, "kafka down", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.markPublishFailed(
+				publishFailed2.getMessageId(), IssueMessageStatus.DLQ, "kafka down", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.markDlq(
+				consumeFailed.getTopic(), consumeFailed.getMessageKey(), IssueMessageStatus.DLQ,
+				"consume error", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		issueMessageRepository.markPublishFailed(
+				stillRetrying.getMessageId(), IssueMessageStatus.FAILED, "kafka down", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueFailureReasonCount> counts =
+				issueMessageRepository.countDlqGroupedByFailureReasonForCoupon(coupon.getCouponId());
+
+		Map<IssueFailureReason, Long> byReason = counts.stream()
+				.collect(Collectors.toMap(IssueFailureReasonCount::getFailureReason, IssueFailureReasonCount::getCount));
+
+		assertThat(byReason.get(IssueFailureReason.KAFKA_PUBLISH_FAILED)).isEqualTo(2L);
+		assertThat(byReason.get(IssueFailureReason.CONSUME_PROCESSING_FAILED)).isEqualTo(1L);
+	}
+
+	@Test
+	void findThroughputByCouponAndSeconds는_특정쿠폰의_초단위_집계를_정확히_수행한다() {
+		LocalDateTime now = LocalDateTime.now().withNano(0);
+		// 초를 5의 배수로 맞춘다
+		int remainder = now.getSecond() % 5;
+		LocalDateTime bucketStart = now.minusSeconds(remainder);
+		String bucketKey = bucketStart.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+		LocalDateTime from = bucketStart.minusSeconds(10);
+		LocalDateTime to = bucketStart.plusSeconds(10);
+
+		// 1. 대상 쿠폰 메시지 생성
+		IssueMessage consumed = IssueMessage.pending(coupon, 101L, 101L, "coupon-ts-consumed", "{}");
+		entityManager.persist(consumed);
+		IssueMessage dlq = IssueMessage.pending(coupon, 102L, 102L, "coupon-ts-dlq", "{}");
+		entityManager.persist(dlq);
+		IssueMessage pending = IssueMessage.pending(coupon, 103L, 103L, "coupon-ts-pending", "{}");
+		entityManager.persist(pending);
+
+		// 2. 다른 쿠폰 메시지 생성 (집계에서 제외되어야 함)
+		Coupon otherCoupon = Coupon.builder()
+				.event(coupon.getEvent())
+				.name("다른 테스트 쿠폰")
+				.discountType(coupon.getDiscountType())
+				.discountValue(1_000)
+				.minOrderAmount(10_000)
+				.maxDiscountAmount(null)
+				.issueStartAt(now.minusMinutes(10))
+				.issueEndAt(now.plusHours(1))
+				.validDays(7)
+				.build();
+		entityManager.persist(otherCoupon);
+
+		IssueMessage otherConsumed = IssueMessage.pending(otherCoupon, 104L, 104L, "other-ts-consumed", "{}");
+		entityManager.persist(otherConsumed);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(
+				dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.updateStatus(otherConsumed.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		for (IssueMessage msg : List.of(consumed, dlq, pending, otherConsumed)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+					.setParameter("time", bucketStart.plusSeconds(1))
+					.setParameter("id", msg.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueThroughputBucket> buckets = issueMessageRepository.findThroughputByCouponAndSeconds(
+				coupon.getCouponId(), 5, from, to
+		);
+
+		IssueThroughputBucket targetBucket = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.findFirst()
+				.orElseThrow();
+
+		assertThat(targetBucket.getIssuedCount()).isEqualTo(1L);
+		assertThat(targetBucket.getFailedCount()).isEqualTo(1L);
+		assertThat(targetBucket.getInProgressCount()).isEqualTo(1L);
+	}
+
+	@Test
+	void findThroughputByCouponAndSeconds는_9시간약수가아닌_7초버킷에서도_타임존과_무관하게_정확히_집계한다() {
+		LocalDateTime from = LocalDateTime.now().withNano(0).minusMinutes(1);
+		int bucketSeconds = 7;
+		LocalDateTime to = from.plusSeconds(35); // 7초 버킷 5개
+
+		// from + 3초 (1번째 버킷: [from, from+7s))
+		IssueMessage msg1 = IssueMessage.pending(coupon, 201L, 201L, "coupon-ts-7s-1", "{}");
+		// from + 10초 (2번째 버킷: [from+7s, from+14s))
+		IssueMessage msg2 = IssueMessage.pending(coupon, 202L, 202L, "coupon-ts-7s-2", "{}");
+		entityManager.persist(msg1);
+		entityManager.persist(msg2);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(msg1.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.updateStatus(msg2.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(3))
+				.setParameter("id", msg1.getMessageId())
+				.executeUpdate();
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(10))
+				.setParameter("id", msg2.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueThroughputBucket> buckets = issueMessageRepository.findThroughputByCouponAndSeconds(
+				coupon.getCouponId(), bucketSeconds, from, to
+		);
+
+		String bucket1Key = from.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		String bucket2Key = from.plusSeconds(7).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+		IssueThroughputBucket bucket1 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket1Key))
+				.findFirst()
+				.orElseThrow();
+		IssueThroughputBucket bucket2 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket2Key))
+				.findFirst()
+				.orElseThrow();
+
+		assertThat(bucket1.getIssuedCount()).isEqualTo(1L);
+		assertThat(bucket2.getIssuedCount()).isEqualTo(1L);
+	}
+
+	// [#200] 부하 테스트 현황의 published 계산 — SENT/CONSUMED는 무조건 세고, DLQ/ABANDONED는
+	// failureReason으로 갈린다(KAFKA_PUBLISH_FAILED=발행 자체가 안 됨, CONSUME_PROCESSING_FAILED=
+	// 발행은 됐는데 소비가 실패). PENDING과 failureReason이 null인 DLQ는 세지 않는다.
+	@Test
+	void countPublishedByCoupon은_발행에_성공한_건만_센다() {
+		IssueMessage sent = IssueMessage.pending(coupon, 301L, 301L, "published-sent", "{}");
+		IssueMessage consumed = IssueMessage.pending(coupon, 302L, 302L, "published-consumed", "{}");
+		IssueMessage dlqPublishFailed = IssueMessage.pending(coupon, 303L, 303L, "published-dlq-publish-failed", "{}");
+		IssueMessage dlqConsumeFailed = IssueMessage.pending(coupon, 304L, 304L, "published-dlq-consume-failed", "{}");
+		IssueMessage abandonedConsumeFailed = IssueMessage.pending(coupon, 305L, 305L, "published-abandoned", "{}");
+		IssueMessage dlqLegacyNullReason = IssueMessage.pending(coupon, 306L, 306L, "published-dlq-legacy", "{}");
+		IssueMessage pending = IssueMessage.pending(coupon, 307L, 307L, "published-pending", "{}");
+		List.of(sent, consumed, dlqPublishFailed, dlqConsumeFailed, abandonedConsumeFailed, dlqLegacyNullReason, pending)
+				.forEach(entityManager::persist);
+		entityManager.flush();
+
+		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(
+				dlqPublishFailed.getMessageId(), IssueMessageStatus.DLQ, "publish failed", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "published-dlq-consume-failed", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "published-abandoned", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		// failureReason 컬럼 도입 전(SEED 등)에 이미 DLQ였던 행을 흉내낸다 — 상태 갱신용
+		// 리포지토리 메서드가 없어 직접 SQL로 만든다.
+		entityManager.createNativeQuery(
+				"UPDATE issue_message SET status = 'DLQ', failure_reason = NULL WHERE message_id = :id"
+		).setParameter("id", dlqLegacyNullReason.getMessageId()).executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		// abandonedConsumeFailed를 DLQ -> ABANDONED로 포기 처리(claimForAbandon은 markDlq가
+		// 올린 retryCount=1을 기대한다).
+		int abandoned = issueMessageRepository.claimForAbandon(
+				abandonedConsumeFailed.getMessageId(), IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED
+		);
+		assertThat(abandoned).isEqualTo(1);
+
+		long published = issueMessageRepository.countPublishedByCoupon(coupon.getCouponId());
+
+		// SENT + CONSUMED + DLQ(consume-failed) + ABANDONED(consume-failed) = 4
+		// PENDING, DLQ(publish-failed), DLQ(사유 없음)는 제외
+		assertThat(published).isEqualTo(4L);
 	}
 }
