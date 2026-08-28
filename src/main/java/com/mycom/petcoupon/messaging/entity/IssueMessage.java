@@ -54,6 +54,15 @@ import lombok.NoArgsConstructor;
 		@Index(
 			name = "idx_issue_message_created_at",
 			columnList = "created_at"
+		),
+		// 실패 큐 목록 페이지네이션(#174, IssueMessageRepository.findByStatus)이
+		// status='DLQ'로 좁힌 뒤 created_at, message_id 순으로 정렬한다. 기존 인덱스는
+		// 전부 status 뒤에 created_at이 아닌 다른 컬럼(retry_count·coupon_id)이 와서
+		// 이 정렬엔 못 쓰이고 filesort가 붙었다(EXPLAIN으로 실측 확인). status, created_at,
+		// message_id 순으로 만들면 필터+정렬+tie-break를 인덱스 하나로 다 커버한다.
+		@Index(
+			name = "idx_issue_message_dlq_list",
+			columnList = "status, created_at, message_id"
 		)
 	},
 	uniqueConstraints = {
