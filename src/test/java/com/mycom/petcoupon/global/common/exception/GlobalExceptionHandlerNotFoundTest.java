@@ -2,6 +2,7 @@ package com.mycom.petcoupon.global.common.exception;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -59,6 +60,22 @@ class GlobalExceptionHandlerNotFoundTest {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{}"))
 				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("COMMON404-0"));
+	}
+
+	@Test
+	@DisplayName("SSE 클라이언트가 경로를 잘못 쳐도 404 JSON으로 응답한다")
+	void unmappedPathWithEventStreamAccept_returnsNotFoundJson() throws Exception {
+		/*
+		 * fetch 기반 SSE 클라이언트는 Accept: text/event-stream만 보낸다. 오류 응답의
+		 * Content-Type을 명시하지 않으면 이 헤더로 협상하다 실패해서, 404가 500으로 뭉개진다.
+		 * 이 경로는 컨트롤러에 매핑되지 않으므로 컨트롤러 단위 advice로는 막을 수 없다 —
+		 * GlobalExceptionHandler가 책임져야 하는 자리다.
+		 */
+		mockMvc.perform(get("/admin/monitorng/stream")
+						.accept(MediaType.TEXT_EVENT_STREAM))
+				.andExpect(status().isNotFound())
+				.andExpect(content().contentType(MediaType.APPLICATION_JSON))
 				.andExpect(jsonPath("$.code").value("COMMON404-0"));
 	}
 }
