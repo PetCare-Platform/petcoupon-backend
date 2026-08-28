@@ -16,8 +16,12 @@ import com.mycom.petcoupon.monitoring.config.MonitoringProperties;
 @EnableConfigurationProperties({CouponIssueStreamProperties.class, AdminAuthProperties.class, MonitoringProperties.class})
 public class PetCouponApplication {
 
+	@jakarta.annotation.PostConstruct
+	public void initTimezone() {
+		java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Seoul"));
+	}
+
 	public static void main(String[] args) {
 		SpringApplication.run(PetCouponApplication.class, args);
 	}
-
 }

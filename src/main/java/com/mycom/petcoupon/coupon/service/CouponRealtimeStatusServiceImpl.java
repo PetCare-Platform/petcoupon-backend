@@ -1,7 +1,6 @@
 package com.mycom.petcoupon.coupon.service;
 
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -91,13 +90,10 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
         }
 
         LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
-        long epochSecond = now.atZone(ZoneId.systemDefault()).toEpochSecond();
-        long remainder = Math.floorMod(epochSecond, (long) bucketSeconds);
-        LocalDateTime to = remainder == 0 ? now.plusSeconds(bucketSeconds) : now.plusSeconds(bucketSeconds - remainder);
-        LocalDateTime rawFrom = to.minusSeconds(windowSeconds);
-        long fromEpoch = rawFrom.atZone(ZoneId.systemDefault()).toEpochSecond();
-        long fromRemainder = Math.floorMod(fromEpoch, (long) bucketSeconds);
-        LocalDateTime from = fromRemainder == 0 ? rawFrom : rawFrom.minusSeconds(fromRemainder);
+        // created_at < to 경계이므로 현재 초까지 포함하기 위해 to를 now.plusSeconds(1)로 설정한다.
+        LocalDateTime to = now.plusSeconds(1);
+        int bucketCount = (int) Math.ceil((double) windowSeconds / bucketSeconds);
+        LocalDateTime from = to.minusSeconds((long) bucketCount * bucketSeconds);
 
         List<IssueThroughputBucketResponse> timeSeries = buildTimeSeries(couponId, bucketSeconds, from, to);
 

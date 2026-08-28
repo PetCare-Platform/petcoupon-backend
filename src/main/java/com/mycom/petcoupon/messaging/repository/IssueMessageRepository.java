@@ -246,9 +246,17 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 
 	// 쿠폰별 초 단위 발급 처리량 시계열 조회(#198)용 — 특정 쿠폰의 [from, to) 기간 동안
 	// bucketSeconds 단위로 발급 성공(CONSUMED)/최종 실패(DLQ·ABANDONED)/진행 중(PENDING·SENT·FAILED)
-	// 건수를 집계한다. DATE_FORMAT과 FROM_UNIXTIME/FLOOR/UNIX_TIMESTAMP를 사용해 N초 단위 버킷을 생성한다.
+	// 건수를 집계한다.
+	//
+	// [타임존 독립성 보장] UNIX_TIMESTAMP/FROM_UNIXTIME은 MySQL 세션 타임존에 의존하여
+	// JVM 타임존과 불일치 시 버킷이 어긋나는 문제가 있다. 기준 시각(:from)으로부터의
+	// 초 차이(TIMESTAMPDIFF)와 DATE_ADD를 사용해 순수 LocalDateTime 연산으로 버킷을 계산함으로써
+	// 타임존 설정과 bucketSeconds 값에 상관없이 자바의 버킷 슬롯과 항상 100% 일치하도록 보장한다.
 	@Query(value = """
-			SELECT DATE_FORMAT(FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(created_at) / :bucketSeconds) * :bucketSeconds), '%Y-%m-%d %H:%i:%s') AS bucket,
+			SELECT DATE_FORMAT(
+			           DATE_ADD(:from, INTERVAL FLOOR(TIMESTAMPDIFF(SECOND, :from, created_at) / :bucketSeconds) * :bucketSeconds SECOND),
+			           '%Y-%m-%d %H:%i:%s'
+			       ) AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
 			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
 			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount

@@ -469,4 +469,53 @@ class IssueMessageRepositoryTest {
 		assertThat(targetBucket.getFailedCount()).isEqualTo(1L);
 		assertThat(targetBucket.getInProgressCount()).isEqualTo(1L);
 	}
+
+	@Test
+	void findThroughputByCouponAndSeconds는_9시간약수가아닌_7초버킷에서도_타임존과_무관하게_정확히_집계한다() {
+		LocalDateTime from = LocalDateTime.now().withNano(0).minusMinutes(1);
+		int bucketSeconds = 7;
+		LocalDateTime to = from.plusSeconds(35); // 7초 버킷 5개
+
+		// from + 3초 (1번째 버킷: [from, from+7s))
+		IssueMessage msg1 = IssueMessage.pending(coupon, 201L, 201L, "coupon-ts-7s-1", "{}");
+		// from + 10초 (2번째 버킷: [from+7s, from+14s))
+		IssueMessage msg2 = IssueMessage.pending(coupon, 202L, 202L, "coupon-ts-7s-2", "{}");
+		entityManager.persist(msg1);
+		entityManager.persist(msg2);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(msg1.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.updateStatus(msg2.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(3))
+				.setParameter("id", msg1.getMessageId())
+				.executeUpdate();
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(10))
+				.setParameter("id", msg2.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueThroughputBucket> buckets = issueMessageRepository.findThroughputByCouponAndSeconds(
+				coupon.getCouponId(), bucketSeconds, from, to
+		);
+
+		String bucket1Key = from.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		String bucket2Key = from.plusSeconds(7).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+		IssueThroughputBucket bucket1 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket1Key))
+				.findFirst()
+				.orElseThrow();
+		IssueThroughputBucket bucket2 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket2Key))
+				.findFirst()
+				.orElseThrow();
+
+		assertThat(bucket1.getIssuedCount()).isEqualTo(1L);
+		assertThat(bucket2.getIssuedCount()).isEqualTo(1L);
+	}
 }
