@@ -11,6 +11,7 @@ import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.idempotency.service.IdempotencyRequestIdCodec;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -76,7 +77,8 @@ public class CouponIssueEventRecoverer implements ConsumerRecordRecoverer {
 
 	private void markDlq(CouponIssueEvent event, Exception exception) {
 		int updatedRows = issueMessageRepository.markDlq(
-			KafkaTopics.COUPON_ISSUE_EVENT, event.requestId(), IssueMessageStatus.DLQ, exception.getMessage()
+			KafkaTopics.COUPON_ISSUE_EVENT, event.requestId(), IssueMessageStatus.DLQ, exception.getMessage(),
+			IssueFailureReason.CONSUME_PROCESSING_FAILED
 		);
 
 		if (updatedRows == 0) {

@@ -31,6 +31,7 @@ import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.event.repository.EventRepository;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 import com.mycom.petcoupon.user.entity.AppUser;
@@ -127,7 +128,7 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 				IssueMessage.pending(coupon, user.getUserId(), 1L, requestId, "{}")
 		);
 		issueMessageRepository.markDlq(
-				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error"
+				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error", IssueFailureReason.CONSUME_PROCESSING_FAILED
 		);
 
 		// 서비스 메서드는 @Transactional이 아니므로, 여기서 실제로 세션이 닫힌 뒤 컨버터가 접근하는
@@ -173,7 +174,7 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 					IssueMessage.pending(coupon, user.getUserId(), 1L, requestId, "{}")
 			);
 			issueMessageRepository.markDlq(
-					KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error"
+					KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error", IssueFailureReason.CONSUME_PROCESSING_FAILED
 			);
 		}
 
@@ -236,7 +237,7 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 				IssueMessage.pending(coupon, user.getUserId(), luaResult.sequenceNo(), requestId, "{}")
 		);
 		issueMessageRepository.markDlq(
-				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error"
+				KafkaTopics.COUPON_ISSUE_EVENT, requestId, IssueMessageStatus.DLQ, "test error", IssueFailureReason.CONSUME_PROCESSING_FAILED
 		);
 
 		return issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();

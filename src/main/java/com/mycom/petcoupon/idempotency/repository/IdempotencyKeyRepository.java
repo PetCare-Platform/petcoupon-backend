@@ -53,4 +53,49 @@ public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, 
             @Param("provisional") boolean provisional,
             @Param("expectedStatus") IdempotencyStatus expectedStatus
     );
+
+    // 부하 테스트 현황 조회(#195)용 — "202를 돌려받았는가" 기준 접수 수. 행이 아니라 고유
+    // user_id 수를 센다(1인 1매라 같은 유저의 중복 신청은 한 건으로 잡아야 발급 건수와 비교가
+    // 맞는다). [PR #195 리뷰 반영] 처음엔 verify_issue_result.sql 1번 블록 조건(NOT(FAILED AND
+    // responseStatus IS NULL))을 그대로 썼는데, 그건 "부하가 끝난 뒤"(IN_PROGRESS가 안 남는다는
+    // 전제)에만 맞는 조건이라 도중 폴링하면 아직 202도 못 받은 IN_PROGRESS 행까지 잡혔다.
+    // responseStatus IS NOT NULL이면 "실제로 응답이 기록된 행"만 세서 이 문제와 무응답 실패
+    // (failWithoutBody) 제외를 한 조건으로 같이 푼다.
+    @Query("""
+            SELECT COUNT(DISTINCT ik.user.userId) FROM IdempotencyKey ik
+             WHERE ik.coupon.couponId = :couponId
+               AND ik.responseStatus IS NOT NULL
+            """)
+    long countAcceptedByCouponId(@Param("couponId") Long couponId);
+
+    // [PR #195 리뷰 반영] rejected를 accepted - passed로 빼서 구하면 두 가지가 깨진다 —
+    // (1) 부하 중엔 아직 pending/SENT인(파이프라인 처리 중) 요청까지 "거절"로 잡히고,
+    // (2) 초과발급처럼 passed가 accepted보다 크면 음수가 나온다(테스트 참고). 최종 FAILED
+    // 확정 건만 직접 세면 둘 다 자연히 해결된다 — 처리 중인 요청은 아직 FAILED가 아니라
+    // 안 잡히고, 뺄셈이 아니라 COUNT라 음수가 나올 수 없다.
+    long countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(Long couponId, IdempotencyStatus status);
+
+    // 응답을 못 받고 끊긴 요청 수(verify_issue_result.sql 13번 블록과 동일 기준).
+    long countByCoupon_CouponIdAndStatus(Long couponId, IdempotencyStatus status);
+
+    // 실패 사유 분류 집계(#195) — rejections. response_body가 GeneralException을 그대로 저장한
+    // CustomResponse.onFailure(errorCode) JSON이라 code 필드로 사유를 가른다(CouponController.issue,
+    // CouponIssueServiceImpl 참고). EVENT_NOT_OPEN/EVENT_CLOSED는 여기서 못 잡는다 — 그 두 사유는
+    // 컨트롤러가 멱등키 등록 전에 Fail-Fast로 끝내버려서 이 테이블에 행 자체가 없다.
+    // idx_idem_coupon_status(coupon_id, status)가 coupon_id+status 필터를 커버해서 JSON 파싱은
+    // 그 결과 행에만 실행된다.
+    @Query(value = """
+            SELECT
+                   COALESCE(SUM(CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code')) = :soldOutCode THEN 1 ELSE 0 END), 0) AS soldOut,
+                   COALESCE(SUM(CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code')) = :duplicateUserCode THEN 1 ELSE 0 END), 0) AS alreadyIssued
+              FROM idempotency_key
+             WHERE coupon_id = :couponId
+               AND status = 'FAILED'
+               AND response_body IS NOT NULL
+            """, nativeQuery = true)
+    IdempotencyRejectionCounts countRejectionsByCouponId(
+            @Param("couponId") Long couponId,
+            @Param("soldOutCode") String soldOutCode,
+            @Param("duplicateUserCode") String duplicateUserCode
+    );
 }
