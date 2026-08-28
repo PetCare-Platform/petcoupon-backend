@@ -64,9 +64,9 @@ public class CouponServiceImpl implements CouponService {
 	}
 
 	// resetIssueState는 신청자·순번 키와 재고 키를 지운 뒤 재고를 totalQuantity로 다시 세우고,
-	// 저장된 값을 되읽어 돌려준다. 새로 채번된 couponId라 지울 기존 상태가 없어 이 생성 경로에서
-	// 호출해도 안전하다(이미 발급이 진행 중인 쿠폰에 쓰면 상태가 날아가므로 생성 경로 전용).
-	// 되읽은 값이 없거나(null) 세팅한 값과 다르면 초기화가 끝나지 않은 것이므로 생성을 롤백한다.
+	// 저장된 값을 되읽어 돌려준다. 호출 시점에 이 쿠폰으로 확정 발급된 건이 없어야 안전하다 —
+	// 생성 직후(새 couponId)거나, 총수량 수정처럼 issuedQuantity == 0 이 보장되는 경로에서만 부른다.
+	// 되읽은 값이 없거나(null) 세팅한 값과 다르면 초기화가 끝나지 않은 것이므로 트랜잭션을 롤백한다.
 	private void initializeIssueStock(Long couponId, int totalQuantity) {
 		Integer redisStock = couponIssueLuaService.resetIssueState(couponId, totalQuantity);
 
@@ -116,7 +116,8 @@ public class CouponServiceImpl implements CouponService {
 		validateIssuePeriod(event, issueStartAt, issueEndAt);
 		validateDiscountPolicy(discountType, discountValue, maxDiscountAmount);
 
-		if (request.totalQuantity() != null) {
+		boolean totalQuantityUpdated = request.totalQuantity() != null;
+		if (totalQuantityUpdated) {
 			updateTotalQuantity(couponStock, request.totalQuantity());
 		}
 
@@ -135,6 +136,14 @@ public class CouponServiceImpl implements CouponService {
 		// 방금 수정한 건인데도 직전 updatedAt이 응답에 실린다. flush는 영속성 컨텍스트 전체를
 		// 대상으로 하므로 couponStock의 updatedAt도 함께 갱신된다.
 		couponRepository.flush();
+
+		// 총수량이 바뀌면 Redis 발급 재고도 새 수량으로 다시 세운다. 이 경로는 발급 시작 전 +
+		// issuedQuantity == 0(updateTotalQuantity·validateIssueNotStarted가 보장)에서만 도달하므로
+		// resetIssueState가 신청자·순번 키를 함께 지워도 잃을 상태가 없다. Redis 초기화가 실패하면
+		// 트랜잭션이 롤백돼 총수량 변경도 함께 되돌아간다.
+		if (totalQuantityUpdated) {
+			initializeIssueStock(couponId, request.totalQuantity());
+		}
 
 		return couponConverter.toUpdateResponse(coupon, couponStock);
 	}
