@@ -1,17 +1,11 @@
 package com.mycom.petcoupon.coupon.service;
 
-import java.time.LocalDateTime;
-
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
-import com.mycom.petcoupon.coupon.entity.Coupon;
-import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
-import com.mycom.petcoupon.coupon.repository.CouponRepository;
-import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,16 +13,15 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * 선착순 쿠폰 신청 오케스트레이션.
  * 확정된 파이프라인(API 요청 -> Redis Stream 대기열 -> Redis Lua -> Outbox -> Kafka -> 비동기 DB 저장)에서
- * 이 클래스가 담당하는 건 검증 + Stream 발행까지다. 재고 판정(Lua)은 API 요청 시점이 아니라
- * Stream을 소비하는 쪽(#57/#60)에서 비동기로 일어나므로, 여기서는 SUCCESS/SOLD_OUT을 알 수 없다 —
- * 그래서 응답은 항상 "WAITING"(접수됨)이다.
+ * 이 클래스가 담당하는 건 Stream 발행까지다.
+ * 쿠폰 존재 및 발급 가능 기간(issueStartAt ~ issueEndAt) 검증은 컨트롤러(CouponController)에서
+ * 멱등키 등록 전 Fail-Fast로 수행하므로 여기서는 중복 조회 없이 바로 Stream으로 발행한다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class CouponIssueServiceImpl implements CouponIssueService {
 
-    private final CouponRepository couponRepository;
     private final CouponIssueStreamProducer couponIssueStreamProducer;
     private final CouponIssueConverter couponIssueConverter;
 
@@ -36,18 +29,6 @@ public class CouponIssueServiceImpl implements CouponIssueService {
     public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request, String requestId) {
         // 선착순 순서 검증용: 도착 순서를 알 수 있는 유일한 지점이라 다른 검증보다 먼저 남긴다.
         log.info("[ISSUE] 접수 requestId={} couponId={} userId={}", requestId, couponId, request.userId());
-
-        // 존재하지 않는 쿠폰이거나 발급 기간(issueStartAt ~ issueEndAt) 외이면 Stream에 넣을 필요 없이 차단
-        Coupon coupon = couponRepository.findById(couponId)
-                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
-
-        LocalDateTime now = LocalDateTime.now();
-        if (now.isBefore(coupon.getIssueStartAt())) {
-            throw new GeneralException(CouponErrorCode.COUPON_NOT_OPEN_YET);
-        }
-        if (now.isAfter(coupon.getIssueEndAt())) {
-            throw new GeneralException(CouponErrorCode.COUPON_ISSUE_EXPIRED);
-        }
 
         couponIssueStreamProducer.publish(couponId, request.userId(), requestId);
 
