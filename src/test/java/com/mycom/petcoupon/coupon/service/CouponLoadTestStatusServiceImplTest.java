@@ -74,8 +74,10 @@ class CouponLoadTestStatusServiceImplTest {
             }
 
             @Override
-            public boolean getSequenceIntact() {
-                return sequenceIntact;
+            public Long getSequenceIntact() {
+                // [#200 버그 수정] 실제 MySQL은 IF(...)를 BIGINT(Long)로 내려준다 — 여기서도
+                // boolean이 아니라 Long을 반환해서 실제 프로덕션 타입과 맞춘다.
+                return sequenceIntact ? 1L : 0L;
             }
 
             @Override
@@ -98,6 +100,10 @@ class CouponLoadTestStatusServiceImplTest {
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
                 .thenReturn(2L);
+        // 발행 8건(consumed) 중 1건은 소비 실패로 DLQ까지 갔지만, 그것도 발행은 된 것이라
+        // countPublishedByCoupon()은 9(consumed 8 + dlq 1)를 돌려준다 — 계산 로직 자체는
+        // IssueMessageRepositoryTest에서 실제 쿼리로 검증한다.
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(9L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(8, 0, true, 12L));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
@@ -107,6 +113,7 @@ class CouponLoadTestStatusServiceImplTest {
         assertThat(response.rejected()).isEqualTo(2);
         assertThat(response.consumed()).isEqualTo(8);
         assertThat(response.dlq()).isEqualTo(1);
+        assertThat(response.published()).isEqualTo(9);
         assertThat(response.pending()).isZero();
         assertThat(response.overIssued()).isFalse();
         assertThat(response.sequenceIntact()).isTrue();
@@ -186,5 +193,25 @@ class CouponLoadTestStatusServiceImplTest {
         assertThat(response.sent()).isEqualTo(2);
         // accepted(10) - passed(0) = 10이었다면 처리 중인 7건까지 거절로 잘못 잡혔을 상황
         assertThat(response.rejected()).isZero();
+    }
+
+    // [#200 버그 수정] getSequenceIntact()가 Long(0)을 돌려주는 "끊김" 케이스가 boolean으로
+    // 제대로 변환되는지 확인한다 — 이전엔 인터페이스가 boolean이라 이 값 자체가 실제
+    // MySQL에서 절대 못 내려오고 UnsupportedOperationException으로 500이 났었다.
+    @Test
+    void getLoadTestStatus_marksSequenceNotIntact_whenSummaryReturnsZero() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, false, null));
+
+        CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
+
+        assertThat(response.sequenceIntact()).isFalse();
     }
 }
