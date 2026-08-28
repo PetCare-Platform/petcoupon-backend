@@ -103,19 +103,27 @@ class ReconciliationDetectionQueriesTest {
                 });
     }
 
+    /*
+     * created_at을 NOW(6)로 두면 안 된다. 탐지 쿼리는 created_at <= :asOfAt로 거르는데 asOfAt은
+     * JVM 시계(LocalDateTime.now())라, DB 시계가 JVM보다 조금이라도 앞서면 방금 넣은 행이 범위
+     * 밖으로 밀려 건수가 0으로 나온다. 실제로 두 시계는 서브밀리초 단위로 앞뒤가 뒤바뀌어서
+     * 같은 테스트가 실행할 때마다 붙었다 떨어졌다 했다. 삽입도 JVM 시계로 통일해 없앤다.
+     * (coupon_issue는 JPA auditing이라 이미 JVM 시계다.)
+     */
     private void insertIssueMessage(Long userId, String requestId, String status) {
         messageSequenceCounter++;
 
         entityManager.createNativeQuery("""
                 INSERT INTO issue_message
                     (coupon_id, user_id, sequence_no, message_key, topic, payload, status, retry_count, created_at)
-                VALUES (:couponId, :userId, :sequenceNo, :requestId, 'coupon-issue-events', '{}', :status, 1, NOW(6))
+                VALUES (:couponId, :userId, :sequenceNo, :requestId, 'coupon-issue-events', '{}', :status, 1, :createdAt)
                 """)
                 .setParameter("couponId", coupon.getCouponId())
                 .setParameter("userId", userId)
                 .setParameter("sequenceNo", messageSequenceCounter)
                 .setParameter("requestId", requestId)
                 .setParameter("status", status)
+                .setParameter("createdAt", LocalDateTime.now())
                 .executeUpdate();
     }
 
@@ -149,13 +157,14 @@ class ReconciliationDetectionQueriesTest {
         entityManager.createNativeQuery("""
                 INSERT INTO coupon_issue_history
                     (coupon_issue_id, coupon_id, user_id, from_status, to_status, actor_type, created_at)
-                VALUES (:issueId, :couponId, :userId, :from, :to, 'SYSTEM', NOW(6))
+                VALUES (:issueId, :couponId, :userId, :from, :to, 'SYSTEM', :createdAt)
                 """)
                 .setParameter("issueId", issue.getCouponIssueId())
                 .setParameter("couponId", coupon.getCouponId())
                 .setParameter("userId", issue.getUser().getUserId())
                 .setParameter("from", from)
                 .setParameter("to", to)
+                .setParameter("createdAt", LocalDateTime.now())
                 .executeUpdate();
     }
 }

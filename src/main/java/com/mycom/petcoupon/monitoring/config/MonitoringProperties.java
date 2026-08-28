@@ -15,6 +15,35 @@ import lombok.Setter;
 @ConfigurationProperties(prefix = "monitoring.sse")
 public class MonitoringProperties {
 
+    /**
+     * <b>구독 하나당</b> 버퍼링할 이벤트 수.
+     *
+     * <p>연결마다 큐를 따로 두므로 이 값은 전체 상한이 아니라 관리자 한 명분이다. 느린
+     * 클라이언트의 큐가 차면 그 연결만 이벤트를 놓치고 나머지는 영향받지 않는다.
+     */
     private int queueCapacity = 1_000;
     private Duration emitterTimeout = Duration.ofMinutes(30);
+
+    /**
+     * 동시에 열어 둘 수 있는 스트림 연결 수.
+     *
+     * <p>연결마다 큐 배열({@link #queueCapacity} 크기)과 가상 스레드를 하나씩 쓰므로 무제한이면
+     * 연결을 닫지 않는 프론트 버그 하나가 메모리를 계속 갉아먹는다. 실제로 이 화면을 동시에 보는
+     * 관리자는 한 자릿수라 넉넉히 잡아도 충분하다.
+     *
+     * <p>0 이하로 두면 제한하지 않는다.
+     */
+    private int maxSubscriptions = 50;
+
+    /**
+     * 이벤트가 없는 동안 연결을 살려 두기 위해 보내는 heartbeat 간격.
+     *
+     * <p>WARN/ERROR는 평시에 몇 분씩 발생하지 않는 게 정상이라, 아무것도 안 보내면 그 사이
+     * 리버스 프록시가 유휴 연결로 보고 끊는다. nginx {@code proxy_read_timeout}과 ALB idle
+     * timeout이 둘 다 기본 60초이므로 그보다 충분히 짧아야 한다.
+     *
+     * <p>0 이하로 두면 heartbeat를 보내지 않는다. 프록시가 없는 로컬 개발에서 불필요한
+     * 주기 작업을 끄는 용도다.
+     */
+    private Duration heartbeatInterval = Duration.ofSeconds(15);
 }

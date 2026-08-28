@@ -29,17 +29,19 @@ public class MonitoringLogAppenderConfiguration {
         LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
         rootLogger = loggerContext.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
 
-        MonitoringLogAppender.bind(monitoringSseService);
-        appender = new MonitoringLogAppender();
+        appender = new MonitoringLogAppender(monitoringSseService);
         appender.setName(MonitoringLogAppender.NAME);
         appender.setContext(loggerContext);
         appender.start();
         rootLogger.addAppender(appender);
     }
 
+    /*
+     * LoggerContext는 JVM 전역이라 컨텍스트가 닫힐 때 반드시 떼어내야 한다. 안 그러면 테스트처럼
+     * 컨텍스트가 여러 번 뜨고 닫히는 환경에서 죽은 appender가 root logger에 계속 쌓인다.
+     */
     @PreDestroy
     void detach() {
-        MonitoringLogAppender.unbind(monitoringSseService);
         if (rootLogger != null && appender != null) {
             rootLogger.detachAppender(appender);
             appender.stop();

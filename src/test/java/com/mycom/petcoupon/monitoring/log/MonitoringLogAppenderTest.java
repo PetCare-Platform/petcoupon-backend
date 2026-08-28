@@ -7,6 +7,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.mycom.petcoupon.monitoring.dto.res.MonitoringEventResponse;
@@ -16,21 +17,45 @@ import ch.qos.logback.classic.spi.LoggingEvent;
 
 class MonitoringLogAppenderTest {
 
-    private final List<MonitoringEventResponse> received = new ArrayList<>();
-    private final MonitoringLogEventSink sink = received::add;
+    private final RecordingSink sink = new RecordingSink();
+    private final List<MonitoringEventResponse> received = sink.received;
     private MonitoringLogAppender appender;
 
     @BeforeEach
     void setUp() {
-        MonitoringLogAppender.bind(sink);
-        appender = new MonitoringLogAppender();
+        appender = new MonitoringLogAppender(sink);
         appender.start();
     }
 
     @AfterEach
     void tearDown() {
         appender.stop();
-        MonitoringLogAppender.unbind(sink);
+    }
+
+    @Test
+    @DisplayName("구독자가 없으면 이벤트를 만들지도 않는다")
+    void skipsMappingWhenSinkIsNotAccepting() {
+        sink.accepting = false;
+
+        appender.doAppend(event(Level.ERROR, "password=very-secret"));
+
+        assertThat(received).isEmpty();
+    }
+
+    private static final class RecordingSink implements MonitoringLogEventSink {
+
+        private final List<MonitoringEventResponse> received = new ArrayList<>();
+        private volatile boolean accepting = true;
+
+        @Override
+        public boolean isAcceptingEvents() {
+            return accepting;
+        }
+
+        @Override
+        public void offer(MonitoringEventResponse event) {
+            received.add(event);
+        }
     }
 
     @Test

@@ -28,9 +28,8 @@ import lombok.RequiredArgsConstructor;
 // 결과를 한 응답으로 묶어 반환한다. 시간 단위를 사용자가 고를 수 있게 하는 대신 스코프를
 // 단순하게 유지하려고 timeSeries 범위는 최근 24시간으로 고정한다 — 파라미터를 안 받는다.
 //
-// [PR 리뷰 반영] 조회 전용이라 readOnly=true — 스냅샷/더티체킹 오버헤드를 끄고, 두 쿼리가
-// 같은 트랜잭션 안에서 실행되게 해 시점이 갈라지는 걸 줄인다. 같은 패키지의 다른 조회
-// 서비스(CouponQueryServiceImpl 등)도 전부 이 패턴을 쓴다.
+// [PR 리뷰 반영] 조회 전용이라 readOnly=true — 스냅샷/더티체킹 오버헤드를 끈다. 같은 패키지의
+// 다른 조회 서비스(CouponQueryServiceImpl 등)도 전부 이 패턴을 쓴다.
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)

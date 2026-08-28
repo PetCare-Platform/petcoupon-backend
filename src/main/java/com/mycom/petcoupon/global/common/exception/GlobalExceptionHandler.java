@@ -3,6 +3,7 @@ package com.mycom.petcoupon.global.common.exception;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -25,16 +26,24 @@ import lombok.extern.slf4j.Slf4j;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 	
-	// 커스텀 예외 처리 
+	// 커스텀 예외 처리
     @ExceptionHandler(GeneralException.class)
     public ResponseEntity<CustomResponse<Void>> handleCustomException(GeneralException ex) {
 
     	BaseErrorCode errorCode = ex.getErrorCode();
-    	
+
     	log.warn("[CustomException] {}", errorCode.getMessage());
-        
+
+        /*
+         * Content-Type을 명시하지 않으면 Spring이 요청의 Accept 헤더로 협상을 시도한다. SSE
+         * 스트림(/admin/monitoring/stream)처럼 클라이언트가 Accept: text/event-stream을 보내는
+         * 경로에서는 JSON 본문을 쓸 수 있는 converter를 못 찾아 HttpMediaTypeNotAcceptableException이
+         * 나고, 그러면 ExceptionHandlerExceptionResolver가 원래 예외를 그대로 다시 던져 401 대신
+         * 500이 나간다. 오류 응답은 협상 대상이 아니므로 JSON으로 못박는다.
+         */
         return ResponseEntity
                 .status(errorCode.getStatus())
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(errorCode.getErrorResponse());
     }
 
