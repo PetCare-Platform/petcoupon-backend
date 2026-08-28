@@ -524,14 +524,13 @@ TC-62 실행 결과가 `errorCount 0` · `verificationDetailCount 1` · `result 
 
 ### ⚠️ 측정 전에 정합성 자동 스케줄러를 꺼야 한다
 
-`#155` 로 들어온 `ReconciliationScheduler` 는 **기본값이 켜짐**이다(`matchIfMissing = true`, `application.properties` 에 항목 없음). 기동 30분 뒤부터 30분 간격으로 `ENDED` 쿠폰을 전부 순회하며 정합성 배치를 돌린다.
+`#155` 로 들어온 `ReconciliationScheduler` 는 **기본값이 켜짐**이다(`matchIfMissing = true`, `application.properties` 에도 활성화 설정이 명시되어 있다). 기동 30분 뒤부터 30분 간격으로 `ENDED` 쿠폰을 전부 순회하며 정합성 배치를 돌린다.
 
 현재 DB 의 `ENDED` 쿠폰은 이렇다.
 
 | 쿠폰 | 발급 건수 |
 | --- | --- |
-| SEED-쿠폰-1 ~ 5 | 각 500,000 |
-| SEED-쿠폰-6 | 0 |
+| SEED-쿠폰-1 ~ 6 | 각 500,000 |
 | 612 · 1101 | 각 1 |
 
 이번 로컬 실측 기준 50만 건 쿠폰 6개 순회는 약 30초다. 실행시간과 무관하게 측정 중 자동 배치가 끼어들면 응답 시간과 커넥션 풀이 영향을 받아 결과를 믿을 수 없다.
