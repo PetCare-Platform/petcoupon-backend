@@ -172,6 +172,17 @@ public class MonitoringSseService implements MonitoringLogEventSink {
         return new SseEmitter(properties.getEmitterTimeout().toMillis());
     }
 
+    /*
+     * 위와 같은 이유로 큐 생성 지점도 분리한다.
+     *
+     * drop-oldest는 "poll로 만든 자리를 다른 로깅 스레드가 먼저 채간다"는 경쟁을 전제로 재시도하는데,
+     * 그 경쟁은 스레드를 많이 띄운다고 결정적으로 재현되지 않는다. 테스트는 offer가 실패하는 큐를
+     * 끼워 넣어 그 순간만 정확히 흉내 낸다.
+     */
+    BlockingQueue<MonitoringEventResponse> createQueue(int capacity) {
+        return new ArrayBlockingQueue<>(capacity);
+    }
+
     int activeSubscriptionCount() {
         return subscriptions.size();
     }
@@ -201,7 +212,7 @@ public class MonitoringSseService implements MonitoringLogEventSink {
 
         private Subscription(SseEmitter emitter) {
             this.emitter = emitter;
-            this.queue = new ArrayBlockingQueue<>(Math.max(1, properties.getQueueCapacity()));
+            this.queue = createQueue(Math.max(1, properties.getQueueCapacity()));
             this.heartbeatMillis = heartbeatIntervalMillis();
         }
 
@@ -220,19 +231,34 @@ public class MonitoringSseService implements MonitoringLogEventSink {
          * backlog가 아니라 최신 상태다. 빠진 구간은 events-dropped 통지로 알린다.
          */
         private void offer(MonitoringEventResponse event) {
-            for (int attempt = 0; attempt < OFFER_ATTEMPTS; attempt++) {
-                if (queue.offer(event)) {
-                    return;
-                }
+            if (queue.offer(event)) {
+                return;
+            }
 
+            /*
+             * 큐가 찼다. 자리를 만들고(poll) 곧바로 넣는다(offer).
+             *
+             * 이 순서가 핵심이다. offer를 먼저 하고 실패하면 poll하는 구조로 두면, 루프의 마지막
+             * poll이 만든 자리에 아무도 넣지 않은 채 끝난다 — 오래된 이벤트를 버린 대가도 못 받고
+             * 최신 이벤트까지 잃으면서 큐에는 빈자리가 남는다. poll 뒤에 항상 offer가 오게 두면
+             * "비운 자리는 반드시 재시도한다"가 코드 모양으로 보장된다.
+             *
+             * 재시도가 필요한 이유는 poll로 만든 자리를 다른 로깅 스레드가 먼저 채울 수 있어서다.
+             * 다만 무한 재시도는 로그를 남긴 요청 스레드를 붙잡으므로 횟수를 묶는다.
+             */
+            for (int attempt = 0; attempt < OFFER_ATTEMPTS; attempt++) {
                 // poll()이 실제로 하나를 꺼냈을 때만 유실 1건이다. null이면 그 사이 송신
                 // 스레드가 비운 것이라 버린 게 없다 — 여기서 세면 집계가 부풀어 오른다.
                 if (queue.poll() != null) {
                     recordDropped();
                 }
+
+                if (queue.offer(event)) {
+                    return;
+                }
             }
 
-            // 자리를 만들어도 다른 로깅 스레드가 계속 채워 넣은 경우. 이번 이벤트를 버린다.
+            // 경쟁이 심해 끝내 자리를 못 잡았다. 이번 이벤트를 버린다.
             recordDropped();
         }
 
