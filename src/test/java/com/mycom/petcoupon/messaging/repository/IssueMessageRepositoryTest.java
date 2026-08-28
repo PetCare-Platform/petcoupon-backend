@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -102,6 +103,75 @@ class IssueMessageRepositoryTest {
 				.extracting(IssueMessage::getMessageKey)
 				.contains("pending-request")
 				.doesNotContain("dlq-request");
+	}
+
+	// 실패 큐 목록 페이지네이션(#174)용 — findByStatus가 Page를 반환하도록 바뀌면서 붙인
+	// countQuery가 실제로 도는지 확인한다. Spring Data JPA는 결과가 요청한 페이지 크기보다
+	// 작으면(=다음 페이지가 없다는 걸 content 크기만으로 알 수 있으면) countQuery 자체를
+	// 건너뛴다(CouponIssueDlqReprocessServiceIntegrationTest에서 실측 확인) — 그래서
+	// 페이지 크기를 1로 좁혀 결과가 꽉 차게(size=1) 만들어야 countQuery 경로가 실제로
+	// 실행된다. 이게 없으면 countQuery에 오타·문법 오류가 있어도 어떤 테스트도 못 잡는다.
+	@Test
+	void findByStatus는_페이지가_꽉_찰_때도_전체_건수를_정확히_센다() {
+		IssueMessage dlq1 = IssueMessage.pending(coupon, 70L, 70L, "dlq-page-1", "{}");
+		entityManager.persist(dlq1);
+		IssueMessage dlq2 = IssueMessage.pending(coupon, 71L, 71L, "dlq-page-2", "{}");
+		entityManager.persist(dlq2);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(dlq1.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(dlq2.getMessageId(), IssueMessageStatus.DLQ, "test");
+
+		entityManager.flush();
+		entityManager.clear();
+
+		Page<IssueMessage> firstPage = issueMessageRepository.findByStatus(IssueMessageStatus.DLQ, PageRequest.of(0, 1));
+
+		// 공유 DB에 다른 테스트가 남긴 DLQ 행이 섞여 있을 수 있어 절대값이 아니라 하한으로
+		// 검증한다 — 이 테스트가 방금 넣은 2건만으로도 "1페이지 요청 시 content는 1건, 그런데
+		// totalElements는 2건 이상"이 성립해야 countQuery가 실제로 동작한 것이다.
+		assertThat(firstPage.getContent()).hasSize(1);
+		assertThat(firstPage.getTotalElements()).isGreaterThanOrEqualTo(2L);
+		assertThat(firstPage.getTotalPages()).isGreaterThanOrEqualTo(2);
+	}
+
+	// [PR 리뷰 반영] createdAt만으로는 정렬 순서가 유일하게 안 정해진다 — datetime(6)이라
+	// 지금은 우연히 안 겹치지만, 여러 메시지가 같은 마이크로초에 DLQ로 처리되면 MySQL이 그
+	// 안의 순서를 임의로 정해서 페이지마다 순서가 흔들릴 수 있다(CouponRepository.findCouponPage()가
+	// createdAt+couponId로 유일성을 보장하는 것과 같은 문제). 두 메시지를 네이티브 UPDATE로
+	// 똑같은 created_at에 강제로 맞춰놓고, messageId(PK, 오름차순 auto_increment) 기준으로
+	// 순서가 고정되는지 확인한다.
+	@Test
+	void findByStatus는_createdAt이_같아도_messageId로_순서를_고정한다() {
+		IssueMessage tieOlder = IssueMessage.pending(coupon, 80L, 80L, "dlq-tie-a", "{}");
+		entityManager.persist(tieOlder);
+		IssueMessage tieNewer = IssueMessage.pending(coupon, 81L, 81L, "dlq-tie-b", "{}");
+		entityManager.persist(tieNewer);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(tieOlder.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(tieNewer.getMessageId(), IssueMessageStatus.DLQ, "test");
+
+		LocalDateTime sameInstant = LocalDateTime.now();
+		for (IssueMessage message : List.of(tieOlder, tieNewer)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+					.setParameter("time", sameInstant)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<Long> orderedIds = issueMessageRepository.findByStatus(IssueMessageStatus.DLQ, PageRequest.of(0, 1000))
+				.getContent().stream()
+				.map(IssueMessage::getMessageId)
+				.filter(id -> id.equals(tieOlder.getMessageId()) || id.equals(tieNewer.getMessageId()))
+				.toList();
+
+		// tieOlder가 먼저 persist돼서 PK(auto_increment)가 항상 tieOlder < tieNewer다 —
+		// createdAt이 완전히 같아도 이 순서가 매번 그대로 나와야 한다.
+		assertThat(orderedIds).containsExactly(tieOlder.getMessageId(), tieNewer.getMessageId());
 	}
 
 	// countGroupedByStatus()는 특정 쿠폰/시간대로 좁히지 않는 전체 집계라, 공유 DB에

@@ -1,15 +1,16 @@
 package com.mycom.petcoupon.coupon.service;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueDlqConverter;
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -35,17 +36,21 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 	private final CouponIssueEventProducer couponIssueEventProducer;
 	private final CouponIssueLuaService couponIssueLuaService;
 
-	// Outbox 발행 대상 조회(coupon.issue.outbox.batch-size)와 동일한 방식으로 목록 크기를 제한
-	@Value("${coupon.issue.dlq.list-size:100}")
-	private int listSize;
-
+	// [PR 리뷰 반영] 페이지네이션(#174) — page/size를 클라이언트가 지정할 수 있게 열면서
+	// 고정 listSize(@Value)는 필요 없어졌다. 검증(0 이상, size는 10/20/50/100)은
+	// CouponPageRequest 생성 시점에 이미 끝나 있어 여기서 다시 확인 안 한다.
+	//
+	// Page<T>.map()으로 content만 변환하고 페이지 메타(totalElements 등)는 그대로 들고
+	// 간다 — CouponQueryServiceImpl.getCoupons()와 같은 패턴.
 	@Override
-	public List<CouponIssueDlqResponse> listDlqMessages() {
-		Pageable pageable = PageRequest.of(0, listSize);
+	public CouponIssueDlqPageResponse listDlqMessages(CouponPageRequest pageRequest) {
+		Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
 
-		return issueMessageRepository.findByStatus(IssueMessageStatus.DLQ, pageable).stream()
-				.map(couponIssueDlqConverter::toDlqResponse)
-				.toList();
+		Page<CouponIssueDlqResponse> dlqPage = issueMessageRepository
+				.findByStatus(IssueMessageStatus.DLQ, pageable)
+				.map(couponIssueDlqConverter::toDlqResponse);
+
+		return CouponIssueDlqPageResponse.from(dlqPage);
 	}
 
 	@Override

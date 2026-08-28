@@ -1,14 +1,13 @@
 package com.mycom.petcoupon.coupon.service;
 
-import java.util.List;
-
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
-import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 
 public interface CouponIssueDlqReprocessService {
 
-	List<CouponIssueDlqResponse> listDlqMessages();
+	CouponIssueDlqPageResponse listDlqMessages(CouponPageRequest pageRequest);
 
 	CouponIssueDlqReprocessResponse reprocess(Long messageId);
 
