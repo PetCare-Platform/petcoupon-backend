@@ -32,11 +32,6 @@
 ![Awaitility](https://img.shields.io/badge/Awaitility-4B8BBE)
 ![k6](https://img.shields.io/badge/k6-7D64FF?logo=k6&logoColor=white)
 
-**Collaboration**
-
-![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)
-![Notion](https://img.shields.io/badge/Notion-000000?logo=notion&logoColor=white)
-
 ---
 
 ## 프로젝트 소개
@@ -211,6 +206,15 @@ docker exec petcoupon-mysql \
 
 에러 코드는 `{DOMAIN}{HTTP_STATUS}-{순번}` 규칙을 따릅니다. (`COUPON409-0`, `EVENT404-0`)
 
+목록 API의 페이징 파라미터는 공통 규칙을 따릅니다.
+
+| 파라미터   | 기본값 | 허용 값                      |
+| ------ | --- | ------------------------- |
+| `page` | `0` | 0 이상 (공개 이벤트 목록은 10,000까지) |
+| `size` | `20` | `10` · `20` · `50` · `100` |
+
+허용 범위를 벗어나면 도메인별 에러 코드로 응답합니다. (`COUPON400-11`, `EVENT400-3`)
+
 ### 사용자 API
 
 | Method | Endpoint                                       | 설명             |
@@ -219,8 +223,8 @@ docker exec petcoupon-mysql \
 | `GET`  | `/events/{eventId}`                            | 이벤트 상세 및 쿠폰 목록 |
 | `POST` | `/coupons/{couponId}/issues`                   | 쿠폰 선착순 발급 신청   |
 | `GET`  | `/coupons/{couponId}/status`                   | 쿠폰 실시간 발급 현황   |
-| `GET`  | `/users/{userId}/coupon-issue-requests/status` | 발급 신청 처리 결과 조회 |
-| `GET`  | `/users/{userId}/coupon-issue-requests`        | 사용자의 발급 신청 내역  |
+| `GET`  | `/users/{userId}/coupon-issue-requests/status?idempotencyKey={key}` | 발급 신청 처리 결과 폴링 (`idempotencyKey` **필수**) |
+| `GET`  | `/users/{userId}/coupon-issue-requests`        | 사용자의 발급 신청 내역 (`status` 필터, 미지정 시 전체) |
 | `GET`  | `/coupon-issues/{couponIssueId}`               | 발급 쿠폰 상세 조회    |
 | `GET`  | `/coupon-issues/{couponIssueId}/status`        | 발급 쿠폰 상태 조회    |
 | `POST` | `/coupon-issues/{couponIssueId}/use`           | 쿠폰 사용          |
@@ -260,7 +264,7 @@ docker exec petcoupon-mysql \
 
 | Method | Endpoint                                        | 설명                       |
 | ------ | ----------------------------------------------- | ------------------------ |
-| `GET`  | `/admin/coupon-issue/dlq`                       | DLQ 메시지 목록               |
+| `GET`  | `/admin/coupon-issue/dlq`                       | DLQ 메시지 목록 (`page`, `size`) |
 | `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | DLQ 메시지 재처리              |
 | `POST` | `/admin/coupon-issue/dlq/{messageId}/abandon`   | DLQ 메시지 폐기               |
 | `POST` | `/admin/coupons/{couponId}/reconcile`           | 쿠폰 정합성 검증 배치 실행          |
