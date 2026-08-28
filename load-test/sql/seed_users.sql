@@ -34,7 +34,7 @@
 --    느리거나 타임아웃이 나면 아래 WHERE 주석을 풀어 10만 건씩 나눠 실행한다.
 --      WHERE n BETWEEN 1 AND 100000    → 이후 100001~200000 ... 반복
 -- ---------------------------------------------------------------------
-INSERT INTO app_user (uuid, name, email, phone, role, status)
+INSERT INTO app_user (uuid, name, email, phone, role, status, created_at)
 WITH digits AS (
     SELECT 0 AS d UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
     UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9
@@ -62,7 +62,8 @@ SELECT
     -- 010-XXXX-XXXX. n 이 다르면 번호도 다르다.
     CONCAT('010-', LPAD(FLOOR(n / 10000), 4, '0'), '-', LPAD(n % 10000, 4, '0')),
     'ROLE_MEMBER',
-    'ACTIVE'
+    'ACTIVE',
+    NOW(6)
 FROM seq
 -- WHERE n BETWEEN 1 AND 100000   -- 나눠서 실행할 때 주석 해제
 ORDER BY n;
@@ -73,8 +74,8 @@ ORDER BY n;
 --    INTERNAL_SERVER_ERROR 로 실패한다 (EventServiceImpl.findActiveAdmin).
 --    이미 있으면 넣지 않는다. MySQL 은 FROM 없이 WHERE 를 못 쓰므로 FROM DUAL.
 -- ---------------------------------------------------------------------
-INSERT INTO app_user (uuid, name, email, phone, role, status)
-SELECT UUID(), 'SHARED_ADMIN', 'admin@test.com', '010-0000-0000', 'ROLE_ADMIN', 'ACTIVE'
+INSERT INTO app_user (uuid, name, email, phone, role, status, created_at)
+SELECT UUID(), 'SHARED_ADMIN', 'admin@test.com', '010-0000-0000', 'ROLE_ADMIN', 'ACTIVE', NOW(6)
 FROM DUAL
 WHERE NOT EXISTS (
     SELECT 1 FROM app_user WHERE role = 'ROLE_ADMIN'
