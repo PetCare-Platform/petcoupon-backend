@@ -135,6 +135,45 @@ class IssueMessageRepositoryTest {
 		assertThat(firstPage.getTotalPages()).isGreaterThanOrEqualTo(2);
 	}
 
+	// [PR 리뷰 반영] createdAt만으로는 정렬 순서가 유일하게 안 정해진다 — datetime(6)이라
+	// 지금은 우연히 안 겹치지만, 여러 메시지가 같은 마이크로초에 DLQ로 처리되면 MySQL이 그
+	// 안의 순서를 임의로 정해서 페이지마다 순서가 흔들릴 수 있다(CouponRepository.findCouponPage()가
+	// createdAt+couponId로 유일성을 보장하는 것과 같은 문제). 두 메시지를 네이티브 UPDATE로
+	// 똑같은 created_at에 강제로 맞춰놓고, messageId(PK, 오름차순 auto_increment) 기준으로
+	// 순서가 고정되는지 확인한다.
+	@Test
+	void findByStatus는_createdAt이_같아도_messageId로_순서를_고정한다() {
+		IssueMessage tieOlder = IssueMessage.pending(coupon, 80L, 80L, "dlq-tie-a", "{}");
+		entityManager.persist(tieOlder);
+		IssueMessage tieNewer = IssueMessage.pending(coupon, 81L, 81L, "dlq-tie-b", "{}");
+		entityManager.persist(tieNewer);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(tieOlder.getMessageId(), IssueMessageStatus.DLQ, "test");
+		issueMessageRepository.markPublishFailed(tieNewer.getMessageId(), IssueMessageStatus.DLQ, "test");
+
+		LocalDateTime sameInstant = LocalDateTime.now();
+		for (IssueMessage message : List.of(tieOlder, tieNewer)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+					.setParameter("time", sameInstant)
+					.setParameter("id", message.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<Long> orderedIds = issueMessageRepository.findByStatus(IssueMessageStatus.DLQ, PageRequest.of(0, 1000))
+				.getContent().stream()
+				.map(IssueMessage::getMessageId)
+				.filter(id -> id.equals(tieOlder.getMessageId()) || id.equals(tieNewer.getMessageId()))
+				.toList();
+
+		// tieOlder가 먼저 persist돼서 PK(auto_increment)가 항상 tieOlder < tieNewer다 —
+		// createdAt이 완전히 같아도 이 순서가 매번 그대로 나와야 한다.
+		assertThat(orderedIds).containsExactly(tieOlder.getMessageId(), tieNewer.getMessageId());
+	}
+
 	// countGroupedByStatus()는 특정 쿠폰/시간대로 좁히지 않는 전체 집계라, 공유 DB에
 	// 다른 테스트가 남긴 행이 섞여 있을 수 있다 — 절대값이 아니라 "이 테스트가 새로 넣은 만큼
 	// 늘었는지"(before/after 델타)로 검증해야 다른 테스트 데이터에 흔들리지 않는다.

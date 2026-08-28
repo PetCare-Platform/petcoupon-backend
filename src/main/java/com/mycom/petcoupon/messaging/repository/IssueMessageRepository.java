@@ -115,11 +115,19 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 자동으로 유도하게 두면 JOIN FETCH가 낀 쿼리에서 실패할 수 있어서, 직접 짠 count 쿼리를 쓴다.
 	// JOIN FETCH는 count 쿼리에 안 옮긴다 — 개수만 세면 되고, count(im)엔 fetch join이 의미 없다
 	// (오히려 JPA 스펙상 스칼라/집계 셀렉트에 fetch join을 못 쓴다).
+	//
+	// [PR 리뷰 반영] createdAt만으로 정렬하면 유일성이 보장 안 된다 — datetime(6)이라 지금은
+	// 우연히 안 겹치지만, 여러 메시지가 같은 마이크로초에 DLQ로 처리되면 페이지마다 순서가
+	// 흔들려 같은 행이 두 번 보이거나 빠질 수 있다. CouponRepository.findCouponPage()가
+	// createdAt+couponId로 유일성을 보장하는 것과 같은 이유로 messageId(PK)를 tie-breaker로
+	// 추가한다. idx_issue_message_dlq_list(status, created_at, message_id) 인덱스가 이
+	// 정렬 순서를 그대로 커버해서 filesort 없이 나간다(EXPLAIN으로 확인 — IssueMessage.java
+	// 참고).
 	@Query(value = """
 			SELECT im FROM IssueMessage im
 			JOIN FETCH im.coupon
 			WHERE im.status = :status
-			ORDER BY im.createdAt ASC
+			ORDER BY im.createdAt ASC, im.messageId ASC
 			""",
 			countQuery = """
 			SELECT count(im) FROM IssueMessage im
