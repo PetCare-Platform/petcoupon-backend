@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -163,5 +165,44 @@ class CouponIssueRepositoryTest {
         assertThat(results)
                 .extracting(CouponIssue::getCouponIssueId)
                 .containsExactly(firstIssue.getCouponIssueId());
+    }
+
+    // 대시보드 요약 집계(#172)용. countGroupedByStatus()는 다른 테스트/실행이 남긴 발급
+    // 건이 섞여 있을 수 있는 전체 집계라, 절대값이 아니라 델타로 검증한다
+    // (IssueMessageRepository.countGroupedByStatus 검증(#156)과 같은 이유).
+    @Test
+    @DisplayName("countGroupedByStatus는 발급 건 상태별 건수를 정확히 집계한다")
+    void countGroupedByStatus_aggregatesCorrectly() {
+        Map<IssueStatus, Long> before = couponIssueRepository.countGroupedByStatus().stream()
+                .collect(Collectors.toMap(CouponIssueStatusCount::getStatus, CouponIssueStatusCount::getCount));
+
+        AppUser extraUser = AppUser.builder()
+                .name("집계테스트회원")
+                .email("issue-repo-status-count@test.com")
+                .phone("010-8888-8888")
+                .role(UserRole.ROLE_MEMBER)
+                .build();
+        entityManager.persist(extraUser);
+
+        CouponIssue extraIssued = CouponIssue.builder()
+                .coupon(issued.getCoupon())
+                .user(extraUser)
+                .sequenceNo(20)
+                .couponCode("REPO-TEST-CODE-20")
+                .requestId("repo-test-request-20")
+                .status(IssueStatus.ISSUED)
+                .expiresAt(LocalDateTime.of(2026, 9, 30, 23, 59))
+                .build();
+        entityManager.persist(extraIssued);
+        entityManager.flush();
+        entityManager.clear();
+
+        Map<IssueStatus, Long> after = couponIssueRepository.countGroupedByStatus().stream()
+                .collect(Collectors.toMap(CouponIssueStatusCount::getStatus, CouponIssueStatusCount::getCount));
+
+        assertThat(after.getOrDefault(IssueStatus.ISSUED, 0L) - before.getOrDefault(IssueStatus.ISSUED, 0L))
+                .isEqualTo(1L);
+        assertThat(after.getOrDefault(IssueStatus.USED, 0L) - before.getOrDefault(IssueStatus.USED, 0L))
+                .isZero();
     }
 }

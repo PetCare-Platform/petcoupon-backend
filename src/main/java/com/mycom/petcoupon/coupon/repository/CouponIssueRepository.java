@@ -95,4 +95,10 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	        @Param("fromStatus") IssueStatus fromStatus,
 	        @Param("toStatus") IssueStatus toStatus
 	);
+
+	// 대시보드 요약 집계(#172)용 — 발급 건 상태(ISSUED/USED/EXPIRED) 별 건수. 시간 범위로
+	// 좁히지 않고 전체 대상이다. IssueMessageRepository.countGroupedByStatus()(#156)와
+	// 같은 패턴 — 상태 종류가 적어 GROUP BY만으로 충분하고 네이티브 쿼리가 필요 없다.
+	@Query("SELECT ci.status AS status, COUNT(ci) AS count FROM CouponIssue ci GROUP BY ci.status")
+	List<CouponIssueStatusCount> countGroupedByStatus();
 }
