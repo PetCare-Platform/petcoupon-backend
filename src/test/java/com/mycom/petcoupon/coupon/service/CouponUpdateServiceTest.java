@@ -29,6 +29,7 @@ import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
@@ -59,6 +60,9 @@ class CouponUpdateServiceTest {
 
 	@Mock
 	private CouponConverter couponConverter;
+
+	@Mock
+	private CouponIssueLuaService couponIssueLuaService;
 
 	@InjectMocks
 	private CouponServiceImpl couponService;
