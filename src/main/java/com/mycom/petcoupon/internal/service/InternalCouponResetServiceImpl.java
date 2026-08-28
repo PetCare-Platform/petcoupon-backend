@@ -75,6 +75,7 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				: stock.getTotalQuantity();
 
 		resetStock(couponId, totalQuantity);
+		resetCouponStatus(couponId);
 
 		// DB 를 비워도 Redis 에 이전 회차 기록이 남으면 다음 회차가 전부 ALREADY_APPLIED 로 튕긴다.
 		Integer redisStock = resetIssueState(couponId, totalQuantity);
@@ -244,9 +245,30 @@ public class InternalCouponResetServiceImpl implements InternalCouponResetServic
 				.setParameter("now", LocalDateTime.now())
 				.setParameter("couponId", couponId)
 				.executeUpdate();
+	}
+
+	/**
+	 * 품절(SOLD_OUT) 등으로 변경되었던 쿠폰 상태를 발급 기간에 맞게 되돌린다.
+	 * 발급 시작 전이면 READY, 진행 중이면 ACTIVE, 이미 종료되었으면 ENDED로 맞춘다.
+	 */
+	private void resetCouponStatus(Long couponId) {
+		LocalDateTime now = LocalDateTime.now();
+		entityManager.createQuery("""
+						UPDATE Coupon c
+						   SET c.status = CASE
+						           WHEN :now < c.issueStartAt THEN 'READY'
+						           WHEN :now >= c.issueStartAt AND :now < c.issueEndAt THEN 'ACTIVE'
+						           ELSE 'ENDED'
+						       END,
+						       c.updatedAt = :now
+						 WHERE c.couponId = :couponId
+						""")
+				.setParameter("now", now)
+				.setParameter("couponId", couponId)
+				.executeUpdate();
 
 		// 벌크 연산은 영속성 컨텍스트를 거치지 않는다.
-		// 위에서 조회해 둔 stock 엔티티가 낡은 값을 들고 있으므로 비운다.
+		// 위에서 조회해 둔 엔티티들이 낡은 값을 들고 있으므로 비운다.
 		entityManager.clear();
 	}
 }

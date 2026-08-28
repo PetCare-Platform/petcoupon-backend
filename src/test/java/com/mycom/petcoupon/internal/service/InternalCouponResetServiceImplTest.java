@@ -34,6 +34,7 @@ import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponIssueHistory;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.HistoryActorType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueHistoryStatus;
@@ -113,8 +114,8 @@ class InternalCouponResetServiceImplTest {
 				.createdBy(user)
 				.name("초기화 테스트 이벤트")
 				.description("reset")
-				.openAt(LocalDateTime.of(2026, 8, 20, 9, 0))
-				.closeAt(LocalDateTime.of(2026, 8, 31, 23, 59))
+				.openAt(LocalDateTime.now().minusDays(1))
+				.closeAt(LocalDateTime.now().plusDays(7))
 				.build();
 		entityManager.persist(event);
 
@@ -124,8 +125,8 @@ class InternalCouponResetServiceImplTest {
 				.discountType(DiscountType.FIXED_AMOUNT)
 				.discountValue(5_000)
 				.minOrderAmount(10_000)
-				.issueStartAt(LocalDateTime.of(2026, 8, 20, 9, 0))
-				.issueEndAt(LocalDateTime.of(2026, 8, 31, 23, 59))
+				.issueStartAt(LocalDateTime.now().minusDays(1))
+				.issueEndAt(LocalDateTime.now().plusDays(7))
 				.validDays(7)
 				.build();
 		entityManager.persist(coupon);
@@ -165,6 +166,24 @@ class InternalCouponResetServiceImplTest {
 		CouponStock stock = entityManager.find(CouponStock.class, coupon.getCouponId());
 		assertEquals(0, stock.getIssuedQuantity());
 		assertEquals(100, stock.getRemainingQuantity());
+	}
+
+	@Test
+	@DisplayName("SOLD_OUT 상태인 쿠폰을 초기화하면 발급 기간에 맞게 ACTIVE 상태로 복구된다")
+	void resetRestoresSoldOutCouponStatus() {
+		// 쿠폰을 SOLD_OUT 상태로 변경
+		entityManager.createQuery("UPDATE Coupon c SET c.status = 'SOLD_OUT' WHERE c.couponId = :couponId")
+				.setParameter("couponId", coupon.getCouponId())
+				.executeUpdate();
+		entityManager.clear();
+
+		Coupon beforeReset = entityManager.find(Coupon.class, coupon.getCouponId());
+		assertEquals(CouponStatus.SOLD_OUT, beforeReset.getStatus());
+
+		internalCouponResetService.reset(coupon.getCouponId(), new CouponResetRequest(null, null));
+
+		Coupon afterReset = entityManager.find(Coupon.class, coupon.getCouponId());
+		assertEquals(CouponStatus.ACTIVE, afterReset.getStatus());
 	}
 
 	@Test
@@ -427,7 +446,7 @@ class InternalCouponResetServiceImplTest {
 					.sequenceNo(i)
 					.couponCode("RESET-TEST-CODE-" + i)
 					.requestId("reset-test-request-" + i)
-					.expiresAt(LocalDateTime.of(2026, 9, 30, 23, 59))
+					.expiresAt(LocalDateTime.now().plusDays(30))
 					.build();
 			entityManager.persist(issue);
 
@@ -445,7 +464,7 @@ class InternalCouponResetServiceImplTest {
 					.coupon(coupon)
 					.idempotencyKey("reset-test-key-" + i)
 					.requestHash("hash-" + i)
-					.expiresAt(LocalDateTime.of(2026, 9, 30, 23, 59))
+					.expiresAt(LocalDateTime.now().plusDays(30))
 					.build());
 		}
 		entityManager.flush();
