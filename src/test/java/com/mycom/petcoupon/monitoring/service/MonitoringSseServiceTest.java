@@ -13,6 +13,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -198,10 +199,73 @@ class MonitoringSseServiceTest {
 
         await().atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(healthy.names()).contains(MONITORING_EVENT));
-        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
-            assertThat(broken.isCompleted()).isTrue();
-            assertThat(service.activeSubscriptionCount()).isEqualTo(1);
-        });
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isEqualTo(1));
+    }
+
+    @Test
+    @DisplayName("송신에 실패해도 emitter를 완료시키지 않는다")
+    void doesNotCompleteEmitterAfterSendFailure() {
+        start(properties());
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        emitter.failWith(new IOException("broken pipe"));
+        service.offer(event("발급 실패"));
+
+        // 구독은 정리되어야 한다.
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isZero());
+
+        /*
+         * 여기서 complete()를 부르면 이미 못 쓰는 응답을 flush하면서
+         * AsyncRequestNotUsableException이 나고, 그게 async dispatch로 GlobalExceptionHandler까지
+         * 올라가 JSON 500을 다시 쓰려다 HttpMessageNotWritableException으로 이어진다(#191).
+         * 송신 실패는 컨테이너가 이미 아는 사건이라 요청 정리도 컨테이너가 한다.
+         */
+        assertThat(emitter.isCompleted()).isFalse();
+        assertThat(emitter.completeCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("컨테이너 콜백으로 정리된 뒤에도 emitter를 완료시키지 않는다")
+    void doesNotCompleteEmitterOnContainerCallbacks() {
+        start(properties());
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        // 컨테이너가 연결 종료를 통보한 상황. 이때 complete()를 부르면 dispatch가 한 번 더 돈다.
+        emitter.fireCompletion();
+
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isZero());
+        assertThat(emitter.completeCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("서버 종료 시에는 살아 있는 연결만 한 번씩 완료시킨다")
+    void completesLiveEmittersOnlyOnShutdown() {
+        start(properties());
+        RecordingEmitter live = connect();
+        RecordingEmitter dead = connect();
+        awaitConnected(live);
+        awaitConnected(dead);
+
+        // dead는 송신 실패로 이미 정리된 구독이다.
+        dead.failWith(new IOException("broken pipe"));
+        service.offer(event("발급 실패"));
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isEqualTo(1));
+
+        service.shutdown();
+
+        // 살아 있던 연결은 정확히 한 번 완료되고, 이미 끝난 연결은 다시 완료되지 않는다.
+        assertThat(live.completeCount()).isEqualTo(1);
+        assertThat(dead.completeCount()).isZero();
+
+        // 두 번 내려도 중복 완료가 없어야 한다.
+        service.shutdown();
+        assertThat(live.completeCount()).isEqualTo(1);
     }
 
     @Test
@@ -218,8 +282,8 @@ class MonitoringSseServiceTest {
         emitter.failWith(new IOException("broken pipe"));
 
         await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
-            assertThat(emitter.isCompleted()).isTrue();
             assertThat(service.activeSubscriptionCount()).isZero();
+            assertThat(emitter.completeCount()).isZero();
         });
     }
 
@@ -362,6 +426,45 @@ class MonitoringSseServiceTest {
     }
 
     @Test
+    @DisplayName("큐가 가득 차면 오래된 이벤트를 버리고 최신 이벤트를 남긴다")
+    void keepsNewestEventsWhenQueueIsFull() {
+        MonitoringProperties properties = properties();
+        properties.setQueueCapacity(3);
+        start(properties);
+
+        RecordingEmitter emitter = connectBlockedOn(CONNECTED);
+        await().atMost(Duration.ofSeconds(2)).until(emitter::isBlocked);
+
+        for (int i = 0; i < 10; i++) {
+            service.offer(event("발급 실패 " + i));
+        }
+
+        emitter.unblock();
+
+        /*
+         * 부하 상황에서 관리자가 봐야 하는 건 지금 무슨 일이 나고 있는지다. 최신을 버리면
+         * 화면이 과거에 묶여 장애가 커질수록 현재 상태를 못 본다.
+         */
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(emitter.payloads())
+                        .anyMatch(payload -> payload.contains("발급 실패 9")));
+
+        List<String> delivered = emitter.payloads().stream()
+                .filter(payload -> payload.contains("발급 실패"))
+                .toList();
+
+        assertThat(delivered).hasSize(3);
+        assertThat(delivered).allMatch(payload ->
+                payload.contains("발급 실패 7")
+                        || payload.contains("발급 실패 8")
+                        || payload.contains("발급 실패 9"));
+
+        // 10건 중 3건만 남았으니 유실은 정확히 7건이다.
+        assertThat(droppedCount()).isEqualTo(7.0);
+        assertThat(emitter.payloads()).anyMatch(payload -> payload.contains("droppedCount=7"));
+    }
+
+    @Test
     @DisplayName("유실이 없으면 누락 통지를 보내지 않는다")
     void doesNotNotifyWhenNothingDropped() {
         start(properties());
@@ -459,8 +562,16 @@ class MonitoringSseServiceTest {
         private final List<String> names = new CopyOnWriteArrayList<>();
         private final List<String> payloads = new CopyOnWriteArrayList<>();
         private final CountDownLatch releaseGate = new CountDownLatch(1);
-        private final AtomicBoolean completed = new AtomicBoolean();
         private final AtomicBoolean blocked = new AtomicBoolean();
+
+        // 서블릿 컨테이너가 연결 종료를 통보하는 경로를 테스트에서 흉내 내기 위해 콜백을 붙잡아 둔다.
+        private final List<Runnable> completionCallbacks = new CopyOnWriteArrayList<>();
+
+        /*
+         * 완료 횟수를 센다. boolean이면 "complete를 아예 안 불렀다"와 "여러 번 불렀다"를
+         * 구분할 수 없는데, #191에서 문제가 된 게 정확히 그 구분이다.
+         */
+        private final AtomicInteger completeCount = new AtomicInteger();
 
         private volatile String blockOnEvent;
         private volatile IOException failure;
@@ -510,7 +621,13 @@ class MonitoringSseServiceTest {
 
         @Override
         public void complete() {
-            completed.set(true);
+            completeCount.incrementAndGet();
+        }
+
+        @Override
+        public void onCompletion(Runnable callback) {
+            completionCallbacks.add(callback);
+            super.onCompletion(callback);
         }
 
         private List<String> names() {
@@ -522,7 +639,16 @@ class MonitoringSseServiceTest {
         }
 
         private boolean isCompleted() {
-            return completed.get();
+            return completeCount.get() > 0;
+        }
+
+        private int completeCount() {
+            return completeCount.get();
+        }
+
+        // 컨테이너가 onCompletion을 통보한 상황을 재현한다.
+        private void fireCompletion() {
+            completionCallbacks.forEach(Runnable::run);
         }
 
         private boolean isBlocked() {

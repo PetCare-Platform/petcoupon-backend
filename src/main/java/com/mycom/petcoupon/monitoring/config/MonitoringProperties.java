@@ -21,8 +21,14 @@ public class MonitoringProperties {
      *
      * <p>연결마다 큐를 따로 두므로 이 값은 전체 상한이 아니라 관리자 한 명분이다. 느린
      * 클라이언트의 큐가 차면 그 연결만 이벤트를 놓치고 나머지는 영향받지 않는다.
+     *
+     * <p>큐가 가득 차면 가장 오래된 이벤트를 버리므로(drop-oldest), 이 값은 "얼마나 많이
+     * 보관하느냐"가 아니라 <b>"밀렸을 때 최신 상태까지 따라잡는 데 몇 건을 지나야 하느냐"</b>다.
+     * 크게 잡을수록 오히려 나쁘다 — 1000이면 부하 상황에서 관리자가 990건의 과거 로그를 다 본
+     * 뒤에야 현재 상태에 도달한다. 실시간 관측이 목적이므로 짧게 잡고, 빠진 구간은
+     * events-dropped 통지와 {@code monitoring.sse.events.dropped} 지표로 알린다.
      */
-    private int queueCapacity = 1_000;
+    private int queueCapacity = 50;
     private Duration emitterTimeout = Duration.ofMinutes(30);
 
     /**
@@ -46,9 +52,27 @@ public class MonitoringProperties {
      *
      * <p>기본값은 기동 시점에만 나오고 운영상 의미가 없는 것만 담는다. 실제 전체 테스트에서
      * WARN 1위(66건)가 BeanPostProcessorChecker였다.
+     *
+     * <p>뒤의 두 항목은 성격이 다르다 — <b>피드백 루프 차단</b>이다(#191).
+     *
+     * <p>{@code ExceptionHandlerExceptionResolver}는 해결된 예외마다 "Resolved [...]"를,
+     * 핸들러가 실패하면 "Failure in @ExceptionHandler"를 WARN으로 낸다. 후자가 나는 대표적인
+     * 상황이 <b>SSE 응답이 끊긴 뒤 오류 본문을 쓰려다 실패한 경우</b>라, 수집하면 SSE 오류가
+     * 모니터링 이벤트를 만들고 그 송신이 또 오류를 내는 순환이 된다. 전자도 어차피
+     * {@code GlobalExceptionHandler}가 남기는 로그와 중복이라 잃는 게 없다.
+     *
+     * <p>{@code com.mycom.petcoupon.monitoring}은 <b>모니터링 자신의 로그</b>다. 스트림이 아파서
+     * 남긴 WARN/ERROR가 다시 그 아픈 스트림으로 흘러들어가면, 장애일수록 이벤트가 불어나는
+     * 자기증폭이 된다. 관측 도구는 자기 자신을 관측 대상에 넣지 않는다 — 모니터링 자체의 상태는
+     * {@code monitoring.sse.*} 지표와 서버 로그로 본다.
+     *
+     * <p>실제 애플리케이션 500 오류는 {@code GlobalExceptionHandler}가 직접 남기는 ERROR로 계속
+     * 수집된다. 이 목록 어디에도 걸리지 않는다.
      */
     private List<String> excludedLoggers = List.of(
-            "org.springframework.context.support.PostProcessorRegistrationDelegate"
+            "org.springframework.context.support.PostProcessorRegistrationDelegate",
+            "org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver",
+            "com.mycom.petcoupon.monitoring"
     );
 
     /**

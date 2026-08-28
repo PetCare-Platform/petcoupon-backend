@@ -48,6 +48,13 @@ public class MonitoringSseService implements MonitoringLogEventSink {
     private static final String DROPPED_METRIC = "monitoring.sse.events.dropped";
     private static final String SUBSCRIPTIONS_METRIC = "monitoring.sse.subscriptions.active";
 
+    /*
+     * drop-oldest 재시도 횟수. poll()로 만든 자리를 다른 로깅 스레드가 먼저 가져갈 수 있어
+     * 한 번으로는 부족하지만, 무한 재시도는 로그를 남긴 요청 스레드를 붙잡는다. 몇 번 양보하고
+     * 그래도 안 되면 이번 이벤트를 버린다 — 어차피 버려야 할 만큼 밀린 상황이다.
+     */
+    private static final int OFFER_ATTEMPTS = 3;
+
     private final MonitoringProperties properties;
     private final Set<Subscription> subscriptions = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean streamEnabled = new AtomicBoolean(true);
@@ -113,10 +120,16 @@ public class MonitoringSseService implements MonitoringLogEventSink {
          */
         SseEmitter emitter = createEmitter();
 
+        /*
+         * 세 콜백 모두 "컨테이너가 이미 이 요청을 끝내고 있다"는 통보다. 여기서 할 일은 구독 정리뿐이고
+         * emitter.complete()를 불러선 안 된다 — 그건 응답을 flush하고 async dispatch를 한 번 더
+         * 일으키는데, 이미 끊긴 응답에서는 AsyncRequestNotUsableException으로 돌아온다(#191).
+         * ResponseBodyEmitter#complete javadoc도 컨테이너 이벤트 뒤에는 쓰지 말라고 명시한다.
+         */
         Subscription subscription = new Subscription(emitter);
-        emitter.onCompletion(subscription::close);
-        emitter.onTimeout(subscription::close);
-        emitter.onError(ignored -> subscription.close());
+        emitter.onCompletion(subscription::detach);
+        emitter.onTimeout(subscription::detach);
+        emitter.onError(ignored -> subscription.detach());
 
         subscriptions.add(subscription);
         subscription.start();
@@ -144,9 +157,14 @@ public class MonitoringSseService implements MonitoringLogEventSink {
         subscriptions.forEach(subscription -> subscription.onStreamStateChanged(enabled));
     }
 
+    /*
+     * 애플리케이션이 주도하는 유일한 정상 종료 경로다. 여기서만 emitter.complete()를 부른다 —
+     * 아직 살아 있는 연결에 "서버가 내려간다"고 알리고 async 요청을 정리해야 하기 때문이다.
+     * 나머지 종료 경로(송신 실패, 컨테이너 콜백)는 detach만 한다.
+     */
     @PreDestroy
     void shutdown() {
-        subscriptions.forEach(Subscription::close);
+        subscriptions.forEach(Subscription::complete);
     }
 
     // 테스트가 느린 클라이언트나 끊긴 연결을 흉내 낼 수 있도록 생성 지점만 분리한다.
@@ -193,12 +211,34 @@ public class MonitoringSseService implements MonitoringLogEventSink {
                     .start(this::run);
         }
 
+        /*
+         * 이 구독의 큐가 가득 차면 이 관리자만 이벤트를 놓친다. 다른 연결은 영향이 없다.
+         *
+         * 가득 찼을 때 <b>가장 오래된 이벤트를 버리고 최신 이벤트를 넣는다</b>(drop-oldest).
+         * 반대로 최신 것을 버리면, 밀릴수록 화면이 과거에 묶인다 — 장애가 커져 로그가 쏟아질수록
+         * 관리자는 정작 "지금" 무슨 일이 나는지 못 보게 된다. 모니터링에서 가치 있는 건 오래된
+         * backlog가 아니라 최신 상태다. 빠진 구간은 events-dropped 통지로 알린다.
+         */
         private void offer(MonitoringEventResponse event) {
-            // 이 구독의 큐가 가득 차면 이 관리자만 이벤트를 놓친다. 다른 연결은 영향이 없다.
-            if (!queue.offer(event)) {
-                droppedEvents.increment();
-                droppedSinceNotice.incrementAndGet();
+            for (int attempt = 0; attempt < OFFER_ATTEMPTS; attempt++) {
+                if (queue.offer(event)) {
+                    return;
+                }
+
+                // poll()이 실제로 하나를 꺼냈을 때만 유실 1건이다. null이면 그 사이 송신
+                // 스레드가 비운 것이라 버린 게 없다 — 여기서 세면 집계가 부풀어 오른다.
+                if (queue.poll() != null) {
+                    recordDropped();
+                }
             }
+
+            // 자리를 만들어도 다른 로깅 스레드가 계속 채워 넣은 경우. 이번 이벤트를 버린다.
+            recordDropped();
+        }
+
+        private void recordDropped() {
+            droppedEvents.increment();
+            droppedSinceNotice.incrementAndGet();
         }
 
         private void onStreamStateChanged(boolean enabled) {
@@ -280,19 +320,31 @@ public class MonitoringSseService implements MonitoringLogEventSink {
                         .data(payload, MediaType.APPLICATION_JSON));
                 return true;
             } catch (IOException | IllegalStateException exception) {
-                // 끊긴 연결. 이 구독만 정리하고 나머지는 그대로 둔다.
-                close();
+                /*
+                 * 끊긴 연결이다. 구독만 정리하고 emitter는 건드리지 않는다.
+                 *
+                 * 예전에는 여기서 emitter.complete()를 불렀는데, 그게 이미 못 쓰는 응답을
+                 * flush하면서 AsyncRequestNotUsableException을 만들고 → async dispatch로
+                 * GlobalExceptionHandler까지 올라가 → 다시 JSON 본문을 쓰려다
+                 * HttpMessageNotWritableException을 냈다(#191). 송신 실패는 컨테이너가 이미
+                 * 알고 있는 사건이라 요청 정리도 컨테이너가 한다.
+                 */
+                detach();
                 return false;
             }
         }
 
         /*
-         * emitter.complete()가 onCompletion 콜백을 통해 이 메서드를 다시 부르므로 재진입한다.
-         * compareAndSet으로 첫 호출만 실제 정리를 수행한다.
+         * 구독 정리만 한다 — 목록에서 빼고, 큐를 비우고, 송신 스레드를 깨운다. emitter는 손대지 않는다.
+         *
+         * 컨테이너 콜백(onCompletion/onTimeout/onError)과 송신 실패가 모두 이 메서드로 들어오고,
+         * 서로 겹쳐 들어올 수 있어 compareAndSet으로 첫 호출만 실제 정리를 수행한다.
+         *
+         * @return 이 호출이 실제로 정리를 수행했으면 true
          */
-        private void close() {
+        private boolean detach() {
             if (!active.compareAndSet(true, false)) {
-                return;
+                return false;
             }
 
             subscriptions.remove(this);
@@ -303,7 +355,19 @@ public class MonitoringSseService implements MonitoringLogEventSink {
                 currentSender.interrupt();
             }
 
-            emitter.complete();
+            return true;
+        }
+
+        /*
+         * 정리에 더해 emitter까지 닫는다. 서버 종료처럼 애플리케이션이 먼저 끝내는 경우에만 쓴다.
+         *
+         * detach가 false를 돌려주면 이미 다른 경로로 끝난 구독이라는 뜻이므로 complete()를
+         * 부르지 않는다. 이게 "송신 실패 후 complete 재호출"을 막는 지점이다.
+         */
+        private void complete() {
+            if (detach()) {
+                emitter.complete();
+            }
         }
     }
 

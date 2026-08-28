@@ -11,9 +11,13 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.web.util.DisconnectedClientHelper;
 
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 
 import com.mycom.petcoupon.global.common.CustomResponse;
@@ -26,13 +30,35 @@ import lombok.extern.slf4j.Slf4j;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 	
+	/*
+	 * [로그 레벨 정책 — #191]
+	 *
+	 * 기준은 "누가 고쳐야 하는가"다.
+	 *
+	 *  - 4xx는 클라이언트가 잘못 보냈고 서버는 설계대로 거절한 것이다. 예상 범위 안의 정상 동작이라
+	 *    DEBUG로 남긴다. WARN으로 두면 스캐너가 없는 경로를 훑거나 프론트가 검증에 걸릴 때마다
+	 *    관리자 화면이 채워져, 정작 봐야 할 장애가 묻힌다.
+	 *  - 5xx는 서버가 책임져야 하는 상태다. WARN/ERROR로 남겨 관리자 화면에 올린다.
+	 *
+	 * MonitoringLogAppender가 WARN/ERROR만 수집하므로, 이 구분이 곧 "관리자 화면에 무엇이 뜨는가"다.
+	 * 4xx도 콘솔에서 보려면 logging.level.com.mycom.petcoupon.global.common.exception=DEBUG로 켜면 된다.
+	 */
+
 	// 커스텀 예외 처리
     @ExceptionHandler(GeneralException.class)
     public ResponseEntity<CustomResponse<Void>> handleCustomException(GeneralException ex) {
 
     	BaseErrorCode errorCode = ex.getErrorCode();
 
-    	log.warn("[CustomException] {}", errorCode.getMessage());
+    	/*
+    	 * GeneralException은 4xx(쿠폰 소진·중복 발급 같은 업무 거절)와 5xx(스트림 연결 한도 등)를
+    	 * 모두 싣는다. 예외 타입이 같다고 한 레벨로 묶으면 둘 중 하나는 반드시 틀리므로 상태로 가른다.
+    	 */
+    	if (errorCode.getStatus().is5xxServerError()) {
+    		log.error("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
+    	} else {
+    		log.debug("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
+    	}
 
         return jsonError(errorCode);
     }
@@ -69,7 +95,7 @@ public class GlobalExceptionHandler {
 
         BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
 
-        log.warn("[ConstraintViolation] {}", ex.getMessage());
+        log.debug("[ConstraintViolation] {}", ex.getMessage());
 
         return jsonError(errorCode);
     }
@@ -80,7 +106,7 @@ public class GlobalExceptionHandler {
 
         BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
 
-        log.warn("[MissingHeader] {}", ex.getMessage());
+        log.debug("[MissingHeader] {}", ex.getMessage());
 
         return jsonError(errorCode);
     }
@@ -91,10 +117,17 @@ public class GlobalExceptionHandler {
 
         BaseErrorCode errorCode = CommonErrorCode.NOT_VALID_ERROR;
 
-        log.warn("[TypeMismatch] {}", ex.getMessage());
+        log.debug("[TypeMismatch] {}", ex.getMessage());
 
         return jsonError(errorCode);
     }
+
+    /*
+     * 아래 두 핸들러는 원래 아무 로그도 남기지 않았다. 관리자 화면에 보였던 건
+     * ExceptionHandlerExceptionResolver가 해결된 예외마다 남기는 "Resolved [...]" WARN 덕분이었는데,
+     * 그 로거를 수집 대상에서 빼면서(#191) 그 경로가 사라졌다. 다른 핸들러와 형식을 맞춰 직접
+     * 남기되, 둘 다 400·405라 위 정책대로 DEBUG다.
+     */
 
     // 잘못된 JSON 요청
     @ExceptionHandler(HttpMessageNotReadableException.class)
@@ -102,15 +135,19 @@ public class GlobalExceptionHandler {
 
         BaseErrorCode errorCode = CommonErrorCode.INVALID_JSON;
 
+        log.debug("[InvalidJson] {}", ex.getMessage());
+
         return jsonError(errorCode);
     }
-    
+
     // 지원하지 않는 HTTP 메서드
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public ResponseEntity<CustomResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
 
     	BaseErrorCode errorCode = CommonErrorCode.METHOD_NOT_ALLOWED;
-    	
+
+    	log.debug("[MethodNotAllowed] {}", ex.getMessage());
+
     	return jsonError(errorCode);
     }
     
@@ -122,22 +159,89 @@ public class GlobalExceptionHandler {
     public ResponseEntity<CustomResponse<Void>> handleNoResourceFound(NoResourceFoundException ex) {
 
     	// 스택 트레이스를 남기지 않는다. 잘못된 주소로 들어온 요청이라 서버 결함이 아니고,
-    	// 스캐너가 없는 경로를 훑으면 로그가 그것만으로 가득 찬다.
-    	log.warn("[NoResourceFound] 매칭되는 핸들러 없음: {} {}", ex.getHttpMethod(), ex.getResourcePath());
+    	// 스캐너가 없는 경로를 훑으면 로그가 그것만으로 가득 찬다. 같은 이유로 DEBUG다 —
+    	// 실제로 /actuator/prometheus 폴링 하나가 2초마다 이 WARN을 찍고 있었다.
+    	log.debug("[NoResourceFound] 매칭되는 핸들러 없음: {} {}", ex.getHttpMethod(), ex.getResourcePath());
 
     	BaseErrorCode errorCode = CommonErrorCode.NOT_FOUND;
 
     	return jsonError(errorCode);
     }
 
+    /*
+     * 비동기 응답(SSE)이 더 이상 쓸 수 없게 된 뒤의 write 시도 (#191).
+     *
+     * 관리자 모니터링 스트림(/admin/monitoring/stream)에서 클라이언트가 연결을 끊으면
+     * Spring이 응답 래퍼를 NOT_USABLE 상태로 바꾸고, 이후의 write·flush는 전부 이 예외가 된다.
+     * 그 예외는 async dispatch를 타고 여기까지 올라온다.
+     *
+     * 이걸 catch-all이 잡으면 두 가지가 연쇄로 터진다.
+     *  1. 클라이언트가 탭을 닫은 것뿐인데 ERROR + 스택 트레이스가 남는다. 서버 장애로 보인다.
+     *  2. 그 핸들러가 JSON 본문을 쓰려다 같은 이유로 실패해 HttpMessageNotWritableException이
+     *     나고, ExceptionHandlerExceptionResolver가 "Failure in @ExceptionHandler"를 WARN으로 남긴다.
+     * 재연결이 잦은 SSE에서는 이 쌍이 계속 반복된다.
+     *
+     * 그래서 본문을 쓰지 않는다. null을 반환하면 HttpEntityMethodProcessor가 요청을 처리 완료로
+     * 표시하고 아무것도 쓰지 않는다 — 어차피 쓸 수 없는 응답이라 이게 유일하게 맞는 동작이다.
+     * 로그도 DEBUG로 낮춘다. 그래야 MonitoringLogAppender(WARN/ERROR만 수집)에 다시 걸려
+     * "SSE 오류가 모니터링 이벤트를 만들고 그게 다시 SSE 오류를 부르는" 피드백 루프가 생기지 않는다.
+     */
+    @ExceptionHandler(AsyncRequestNotUsableException.class)
+    public ResponseEntity<CustomResponse<Void>> handleAsyncRequestNotUsable(AsyncRequestNotUsableException ex) {
+
+        log.debug("[ClientDisconnected] 비동기 응답에 더 이상 쓸 수 없다: {}", ex.getMessage());
+
+        return null;
+    }
+
+    /*
+     * 비동기 요청이 제한 시간을 넘긴 경우. SSE는 emitter-timeout(기본 30분)마다 반드시 여기를 지난다.
+     *
+     * 이미 스트리밍을 시작한 응답은 커밋된 상태라 JSON 본문을 덧붙일 수 없다. 억지로 쓰면 SSE
+     * 프레임 뒤에 JSON이 붙거나 위와 같은 write 실패 연쇄가 난다. 정상적인 수명 종료이므로
+     * 조용히 끝낸다.
+     *
+     * 아직 커밋되지 않은 비동기 요청(스트리밍이 아닌 async 엔드포인트)은 원래대로 503을 준다 —
+     * 클라이언트가 재시도할 수 있어야 한다.
+     */
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public ResponseEntity<CustomResponse<Void>> handleAsyncRequestTimeout(
+            AsyncRequestTimeoutException ex,
+            HttpServletResponse response
+    ) {
+
+        if (response.isCommitted()) {
+            log.debug("[AsyncTimeout] 이미 커밋된 비동기 응답이 만료됐다: {}", ex.getMessage());
+            return null;
+        }
+
+        log.warn("[AsyncTimeout] 비동기 요청이 제한 시간을 넘겼다: {}", ex.getMessage());
+
+        return jsonError(CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
     // 처리하지 않은 모든 예외 처리
     @ExceptionHandler(Exception.class)
     public ResponseEntity<CustomResponse<Void>> handleAllException(Exception ex) {
 
+        /*
+         * 클라이언트가 먼저 끊은 경우는 서버 결함이 아니다. Tomcat ClientAbortException,
+         * EOFException, "broken pipe"/"connection reset by peer" 같은 것들이 여기 해당한다.
+         * 위 AsyncRequestNotUsableException은 전용 핸들러가 잡지만, 같은 원인이 다른 타입으로
+         * 올라오는 경로가 남아 있어 catch-all에도 같은 판정을 둔다.
+         *
+         * 판정은 Spring의 DisconnectedClientHelper에 맡긴다. 예외 타입 이름과 메시지 문구
+         * 목록을 직접 들고 있으면 컨테이너를 바꿀 때마다 어긋난다.
+         */
+        if (DisconnectedClientHelper.isClientDisconnectedException(ex)) {
+            log.debug("[ClientDisconnected] 클라이언트가 먼저 연결을 끊었다: {}", ex.getMessage());
+            return null;
+        }
+
         log.error("[Unhandled Exception]", ex);
-        
+
         BaseErrorCode errorCode = CommonErrorCode.INTERNAL_SERVER_ERROR;
-        
+
         CustomResponse<Void> errorResponse = CustomResponse.onFailure(
         		errorCode.getCode(),
         		errorCode.getMessage()
