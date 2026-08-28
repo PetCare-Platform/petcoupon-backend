@@ -55,16 +55,25 @@ public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, 
     );
 
     // 부하 테스트 현황 조회(#195)용 — "202를 돌려받았는가" 기준 접수 수. 행이 아니라 고유
-    // user_id 수를 센다(1인 1매라 같은 유저의 중복 신청은 한 건으로 잡아야 발급 건수와
-    // 비교가 맞는다 — verify_issue_result.sql 1번 블록과 동일 기준). 접수 자체가 500으로
-    // 끝난 건(FAILED + response_status NULL)만 제외한다.
+    // user_id 수를 센다(1인 1매라 같은 유저의 중복 신청은 한 건으로 잡아야 발급 건수와 비교가
+    // 맞는다). [PR #195 리뷰 반영] 처음엔 verify_issue_result.sql 1번 블록 조건(NOT(FAILED AND
+    // responseStatus IS NULL))을 그대로 썼는데, 그건 "부하가 끝난 뒤"(IN_PROGRESS가 안 남는다는
+    // 전제)에만 맞는 조건이라 도중 폴링하면 아직 202도 못 받은 IN_PROGRESS 행까지 잡혔다.
+    // responseStatus IS NOT NULL이면 "실제로 응답이 기록된 행"만 세서 이 문제와 무응답 실패
+    // (failWithoutBody) 제외를 한 조건으로 같이 푼다.
     @Query("""
             SELECT COUNT(DISTINCT ik.user.userId) FROM IdempotencyKey ik
              WHERE ik.coupon.couponId = :couponId
-               AND NOT (ik.status = com.mycom.petcoupon.idempotency.entity.enums.IdempotencyStatus.FAILED
-                        AND ik.responseStatus IS NULL)
+               AND ik.responseStatus IS NOT NULL
             """)
     long countAcceptedByCouponId(@Param("couponId") Long couponId);
+
+    // [PR #195 리뷰 반영] rejected를 accepted - passed로 빼서 구하면 두 가지가 깨진다 —
+    // (1) 부하 중엔 아직 pending/SENT인(파이프라인 처리 중) 요청까지 "거절"로 잡히고,
+    // (2) 초과발급처럼 passed가 accepted보다 크면 음수가 나온다(테스트 참고). 최종 FAILED
+    // 확정 건만 직접 세면 둘 다 자연히 해결된다 — 처리 중인 요청은 아직 FAILED가 아니라
+    // 안 잡히고, 뺄셈이 아니라 COUNT라 음수가 나올 수 없다.
+    long countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(Long couponId, IdempotencyStatus status);
 
     // 응답을 못 받고 끊긴 요청 수(verify_issue_result.sql 13번 블록과 동일 기준).
     long countByCoupon_CouponIdAndStatus(Long couponId, IdempotencyStatus status);

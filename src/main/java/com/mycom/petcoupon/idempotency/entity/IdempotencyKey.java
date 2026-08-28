@@ -54,7 +54,13 @@ import lombok.NoArgsConstructor;
 		// 부하 테스트 현황 조회(#195)가 coupon_id로 좁혀 accepted/IN_PROGRESS 건수를 센다.
 		// coupon_id 선두 인덱스가 없으면(기존엔 user_id 선두인 uk_idem_user_key뿐) 매 폴링(5초)마다
 		// 테이블 전체 스캔이 된다 — status까지 커버해서 IN_PROGRESS 카운트도 이 인덱스로 처리한다.
-		@Index(name = "idx_idem_coupon_status", columnList = "coupon_id, status")
+		//
+		// [PR #195 리뷰 반영] response_status·user_id도 뒤에 붙였다 — countAcceptedByCouponId가
+		// 매 매칭 행마다 이 값들을 읽어야 해서, coupon_id·status만 있을 땐 클러스터드 인덱스로
+		// 되짚어가야 했다(EXPLAIN Using where). 인덱스에 포함시키니 인덱스만으로 끝난다(Using index
+		// 전환 실측 확인). countRejectionsByCouponId(JSON_EXTRACT)는 response_body가 JSON이라
+		// 애초에 인덱스에 담을 수 없어 이 확장으로도 그대로다.
+		@Index(name = "idx_idem_coupon_status", columnList = "coupon_id, status, response_status, user_id")
 	}
 )
 @EntityListeners(AuditingEntityListener.class)

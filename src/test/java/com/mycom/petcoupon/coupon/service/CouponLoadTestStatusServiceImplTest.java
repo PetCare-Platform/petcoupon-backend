@@ -96,6 +96,8 @@ class CouponLoadTestStatusServiceImplTest {
         ));
         when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(10L);
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(2L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(8, 0, true, 12L));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
@@ -129,6 +131,8 @@ class CouponLoadTestStatusServiceImplTest {
         when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
         when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
@@ -144,11 +148,43 @@ class CouponLoadTestStatusServiceImplTest {
         when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
         when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(5L);
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
         // 총재고(5)·접수(5) 모두 5인데 실제 발급이 6건 — 초과발급 상황
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(6, 0, true, 3L));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
         assertThat(response.overIssued()).isTrue();
+        // [PR #195 리뷰 반영] rejected를 accepted - passed(5 - 6)로 구했다면 -1이 나왔을 상황.
+        // 최종 FAILED 확정 건을 직접 세므로(이 테스트에선 0건) 초과발급이어도 음수가 나오지 않는다.
+        assertThat(response.rejected()).isZero();
+    }
+
+    // [PR #195 리뷰 반영] 부하 도중엔 아직 pending/SENT(파이프라인 처리 중)인 요청이 존재한다.
+    // rejected를 accepted - passed로 구하면 이런 처리 중 요청까지 거절로 잡혔다 — 최종 FAILED
+    // 확정 건만 직접 세면 처리 중 요청 수와 무관해야 한다.
+    @Test
+    void getLoadTestStatus_excludesInFlightRequests_fromRejected() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        // 접수 10건 중 아직 7건이 pending/SENT로 파이프라인 처리 중 — 확정된 건 없음
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of(
+                issueStatusCount(IssueMessageStatus.PENDING, 5),
+                issueStatusCount(IssueMessageStatus.SENT, 2)
+        ));
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(10L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+
+        CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
+
+        assertThat(response.pending()).isEqualTo(5);
+        assertThat(response.sent()).isEqualTo(2);
+        // accepted(10) - passed(0) = 10이었다면 처리 중인 7건까지 거절로 잘못 잡혔을 상황
+        assertThat(response.rejected()).isZero();
     }
 }
