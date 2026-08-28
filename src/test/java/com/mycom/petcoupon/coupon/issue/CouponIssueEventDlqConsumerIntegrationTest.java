@@ -33,7 +33,12 @@ import ch.qos.logback.core.read.ListAppender;
  * 시점에 원본 빈 인스턴스를 직접 참조해버려 스파이 대체 타이밍과 어긋날 수 있어(오탐 위험),
  * 실제 실행 결과(로그)를 직접 캡처하는 방식을 씀.
  */
-@SpringBootTest(properties = "spring.kafka.consumer.auto-offset-reset=earliest")
+import java.util.concurrent.TimeUnit;
+
+@SpringBootTest(properties = {
+		"coupon.issue.dlq.consumer.group-id=petcoupon-dlq-test",
+		"spring.kafka.consumer.auto-offset-reset=earliest"
+})
 class CouponIssueEventDlqConsumerIntegrationTest {
 
 	@Autowired
@@ -54,14 +59,17 @@ class CouponIssueEventDlqConsumerIntegrationTest {
 	}
 
 	@Test
-	void DLQ_토픽에_발행된_메시지를_기본_컨테이너_팩토리로_수신해서_로그를_남긴다() {
+	void DLQ_토픽에_발행된_메시지를_기본_컨테이너_팩토리로_수신해서_로그를_남긴다() throws Exception {
 		String requestId = "dlq-verify-" + System.currentTimeMillis();
 		CouponIssueEvent event = new CouponIssueEvent(
 			1L, 10L, requestId, 1L, "CODE", LocalDateTime.now().plusDays(7)
 		);
 
-		await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(500)).untilAsserted(() -> {
-			kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, requestId, event);
+		// 메시지는 루프 밖에서 1회만 발행하고 flush 완료를 대기한다.
+		kafkaTemplate.send(KafkaTopics.COUPON_ISSUE_EVENT_DLQ, requestId, event).get(5, TimeUnit.SECONDS);
+
+		// 비동기 컨슈머가 토픽에서 메시지를 수신하여 로그를 남길 때까지 대기
+		await().atMost(Duration.ofSeconds(15)).untilAsserted(() -> {
 			assertThat(logAppender.list)
 				.extracting(ILoggingEvent::getFormattedMessage)
 				.anyMatch(message -> message.contains(requestId));

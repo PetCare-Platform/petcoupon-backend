@@ -41,4 +41,13 @@ class WebConfigCorsTest {
 				.andExpect(header().exists(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS))
 				.andExpect(header().exists(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS));
 	}
+
+	@Test
+	@DisplayName("허용되지 않은 Origin에 대해 Preflight 요청 시 Allow-Origin 헤더가 반환되지 않는다")
+	void corsPreflight_disallowedOrigin_doesNotAllow() throws Exception {
+		mockMvc.perform(options("/events")
+						.header(HttpHeaders.ORIGIN, "http://malicious-site.com")
+						.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+				.andExpect(status().isForbidden());
+	}
 }

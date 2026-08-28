@@ -48,4 +48,25 @@ class CouponIssueConverterTest {
         assertThat(response.sequenceNo()).isEqualTo(1L);
         assertThat(response.status()).isEqualTo("ISSUED");
     }
+
+    @Test
+    void toCreateResponse_CouponIssue_status가_null이면_예외가_발생한다() {
+        Coupon coupon = Coupon.builder().build();
+        ReflectionTestUtils.setField(coupon, "couponId", 10L);
+
+        AppUser user = AppUser.builder().build();
+        ReflectionTestUtils.setField(user, "userId", 20L);
+
+        CouponIssue couponIssue = CouponIssue.builder()
+                .coupon(coupon)
+                .user(user)
+                .sequenceNo(1L)
+                .build();
+        ReflectionTestUtils.setField(couponIssue, "couponIssueId", 100L);
+        ReflectionTestUtils.setField(couponIssue, "status", null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> converter.toCreateResponse(couponIssue))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("쿠폰 발급 상태(status)는 필수입니다");
+    }
 }

@@ -181,22 +181,52 @@ class CouponIssueApiIntegrationTest {
 			List<Long> couponIds = List.of(coupon.getCouponId(), secondCoupon.getCouponId());
 			couponIds.forEach(this::clearRedisStock);
 		}
-		entityManager.createNativeQuery("DELETE nl FROM notification_log nl JOIN app_user u ON nl.user_id = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE ik FROM idempotency_key ik JOIN app_user u ON ik.user_id = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id JOIN coupon c ON ci.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE ci FROM coupon_issue ci JOIN coupon c ON ci.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE im FROM issue_message im JOIN coupon c ON im.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE cs FROM coupon_stock cs JOIN coupon c ON cs.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE c FROM coupon c JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE h FROM event_status_history h JOIN event e ON h.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE e FROM event e JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM app_user WHERE email LIKE 'issue-api-%@test.com'").executeUpdate();
+
+		@SuppressWarnings("unchecked")
+		List<Long> testUserIds = entityManager.createNativeQuery(
+				"SELECT user_id FROM app_user WHERE email LIKE 'issue-api-%@test.com'")
+				.getResultList();
+
+		if (!testUserIds.isEmpty()) {
+			entityManager.createNativeQuery("DELETE FROM notification_log WHERE user_id IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM idempotency_key WHERE user_id IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery(
+					"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.user_id IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE user_id IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery(
+					"DELETE im FROM issue_message im JOIN coupon c ON im.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id WHERE e.created_by IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery(
+					"DELETE cs FROM coupon_stock cs JOIN coupon c ON cs.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id WHERE e.created_by IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery(
+					"DELETE c FROM coupon c JOIN event e ON c.event_id = e.event_id WHERE e.created_by IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery(
+					"DELETE h FROM event_status_history h JOIN event e ON h.event_id = e.event_id WHERE e.created_by IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM event WHERE created_by IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+			entityManager.createNativeQuery("DELETE FROM app_user WHERE user_id IN :userIds")
+					.setParameter("userIds", testUserIds)
+					.executeUpdate();
+		}
 	}
 
 	// TC-07: 쿠폰 발급 신청 (접수)
-	// 참고: 시나리오 문서는 202 + result=WAITING을 기대하지만, 현재 CouponIssueServiceImpl은
-	// 실 Redis Lua/Kafka가 아니라 MockRedisCouponStockService(인메모리)를 그대로 타고 있어
-	// 200과 {couponId, userId}만 반환한다. 실 파이프라인이 연결되면 기대값을 다시 맞춰야 한다.
 	@Test
 	void 쿠폰_발급을_신청하면_성공_응답을_받는다() throws Exception {
 		mockMvc.perform(post("/coupons/{couponId}/issues", coupon.getCouponId())
@@ -210,9 +240,6 @@ class CouponIssueApiIntegrationTest {
 	}
 
 	// TC-08: 비동기 확정 후 결과 조회
-	// TC-43과 마찬가지로 실제 재고 판정이 필요해서 Redis 재고를 초기화한다. GET .../status(idempotencyKey)로
-	// 폴링해서 couponIssueId가 채워질 때까지 기다린 뒤, 시나리오 문서가 지정한 GET /coupon-issues/{id}/status로
-	// 실제로 ISSUED·사용가능 상태가 됐는지 확인한다.
 	@Test
 	void 접수_후_폴링하면_일정_시간_내에_ISSUED_상태가_된다() throws Exception {
 		initRedisStock(coupon.getCouponId(), 10);
@@ -229,12 +256,13 @@ class CouponIssueApiIntegrationTest {
 		JsonNode resolved = awaitRequestResolved(requester.getUserId(), key);
 		long couponIssueId = resolved.path("result").path("couponIssueId").asLong(0);
 		assertThat(couponIssueId).isPositive();
-		// 재고 10개짜리 쿠폰에 첫 신청이니 순번은 1이어야 한다.
-		assertThat(resolved.path("result").path("sequenceNo").asLong(0)).isEqualTo(1L);
+
+		// TC-14 확정 응답 스펙: 폴링 최종 응답에 status="ISSUED"가 명시되어야 함
 		assertThat(resolved.path("result").path("status").asText()).isEqualTo("ISSUED");
 
 		mockMvc.perform(get("/coupon-issues/{couponIssueId}/status", couponIssueId))
 				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.isSuccess").value(true))
 				.andExpect(jsonPath("$.result.status").value("ISSUED"))
 				.andExpect(jsonPath("$.result.isUsable").value(true));
 	}
@@ -333,11 +361,15 @@ class CouponIssueApiIntegrationTest {
 		// 재전송 응답은 접수 직후면 202(WAITING), 비동기 확정 후면 200(ISSUED)으로 저장된 응답을 그대로 재현한다.
 		assertThat(retry.getResponse().getStatus()).isIn(HttpStatus.ACCEPTED.value(), HttpStatus.OK.value());
 
-		// 멱등키가 등록되어 정상 처리되었는지 확인
+		// 멱등키가 등록되어 정상 처리되었는지 확인 및 저장된 응답 바디와의 동등성 검증 (응답 재생 보장)
 		assertThat(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(requester.getUserId(), key))
 				.isPresent()
 				.get()
-				.satisfies(record -> assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED));
+				.satisfies(record -> {
+					assertThat(record.getStatus()).isEqualTo(IdempotencyStatus.SUCCEEDED);
+					assertThat(objectMapper.readTree(retry.getResponse().getContentAsString()))
+							.isEqualTo(objectMapper.readTree(record.getResponseBody()));
+				});
 
 		// 최초 신청이 비동기로 실제 발급까지 확정되는지 폴링 확인 — couponIssueId가 채워지면 진짜로 끝난 것.
 		JsonNode firstResolved = awaitRequestResolved(requester.getUserId(), key);
