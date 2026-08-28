@@ -1,17 +1,20 @@
 package com.mycom.petcoupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mycom.petcoupon.coupon.config.CouponBatchSchedulerConfig;
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -19,8 +22,10 @@ import com.mycom.petcoupon.coupon.entity.CouponIssue;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.event.entity.Event;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.user.entity.AppUser;
 import com.mycom.petcoupon.user.entity.enums.UserRole;
 
@@ -96,9 +101,10 @@ class CouponExpireBatchServiceImplTest {
 		CouponIssue notYetExpiredIssue = createCouponIssue(IssueStatus.ISSUED, LocalDateTime.now().plusDays(1), "EXP-NOTYET");
 		CouponIssue usedButExpiredIssue = createCouponIssue(IssueStatus.USED, LocalDateTime.now().minusDays(1), "EXP-USED");
 
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
 		entityManager.clear();
 
+		assertThat(expiredCount).isEqualTo(1);
 		CouponIssue reloadedExpired = couponIssueRepository.findById(expiredIssue.getCouponIssueId()).orElseThrow();
 		CouponIssue reloadedNotYet = couponIssueRepository.findById(notYetExpiredIssue.getCouponIssueId()).orElseThrow();
 		CouponIssue reloadedUsed = couponIssueRepository.findById(usedButExpiredIssue.getCouponIssueId()).orElseThrow();
@@ -116,7 +122,8 @@ class CouponExpireBatchServiceImplTest {
 
 	@Test
 	void expireOverdueCoupons_succeedsWhenNothingToExpire() {
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
+		assertThat(expiredCount).isEqualTo(0);
 	}
 
 	@Test
@@ -126,12 +133,28 @@ class CouponExpireBatchServiceImplTest {
 				.mapToObj(i -> createCouponIssue(IssueStatus.ISSUED, LocalDateTime.now().minusDays(1), "EXP-CHUNK-" + i))
 				.toList();
 
-		couponExpireBatchService.expireOverdueCoupons();
+		int expiredCount = couponExpireBatchService.expireOverdueCoupons();
 		entityManager.clear();
 
+		assertThat(expiredCount).isEqualTo(7);
 		for (CouponIssue issue : issues) {
 			CouponIssue reloaded = couponIssueRepository.findById(issue.getCouponIssueId()).orElseThrow();
 			assertThat(reloaded.getStatus()).isEqualTo(IssueStatus.EXPIRED);
+		}
+	}
+
+	@Test
+	void expireOverdueCoupons_throwsExceptionWhenAlreadyRunning() {
+		AtomicBoolean running = (AtomicBoolean) ReflectionTestUtils.getField(couponExpireBatchService, "running");
+		running.set(true);
+
+		try {
+			assertThatThrownBy(() -> couponExpireBatchService.expireOverdueCoupons())
+					.isInstanceOf(GeneralException.class)
+					.satisfies(ex -> assertThat(((GeneralException) ex).getErrorCode())
+							.isEqualTo(CouponErrorCode.REQUEST_IN_PROGRESS));
+		} finally {
+			running.set(false);
 		}
 	}
 
