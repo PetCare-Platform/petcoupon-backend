@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mycom.petcoupon.coupon.converter.CouponConverter;
+import com.mycom.petcoupon.coupon.converter.IssueStatisticsConverter;
 import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -26,6 +28,7 @@ import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
 @ExtendWith(MockitoExtension.class)
 class CouponRealtimeStatusServiceImplTest {
@@ -44,6 +47,12 @@ class CouponRealtimeStatusServiceImplTest {
 
     @Mock
     private CouponConverter couponConverter;
+
+    @Mock
+    private IssueMessageRepository issueMessageRepository;
+
+    @Mock
+    private IssueStatisticsConverter issueStatisticsConverter;
 
     @InjectMocks
     private CouponRealtimeStatusServiceImpl couponRealtimeStatusService;
@@ -176,5 +185,103 @@ class CouponRealtimeStatusServiceImplTest {
                 .isInstanceOf(GeneralException.class)
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
+    }
+
+    @Test
+    void getIssueTimeSeries_returnsTimeSeriesWithZeroFilling_whenCouponExists() {
+        Long couponId = 1L;
+        int windowSeconds = 90;
+        int bucketSeconds = 5;
+
+        when(couponRepository.existsById(couponId)).thenReturn(true);
+
+        com.mycom.petcoupon.messaging.repository.IssueThroughputBucket mockBucket =
+                org.mockito.Mockito.mock(com.mycom.petcoupon.messaging.repository.IssueThroughputBucket.class);
+
+        java.util.concurrent.atomic.AtomicReference<java.time.LocalDateTime> capturedFrom = new java.util.concurrent.atomic.AtomicReference<>();
+        when(issueMessageRepository.findThroughputByCouponAndSeconds(
+                org.mockito.ArgumentMatchers.eq(couponId),
+                org.mockito.ArgumentMatchers.eq(bucketSeconds),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        )).thenAnswer(invocation -> {
+            capturedFrom.set(invocation.getArgument(2));
+            return List.of(mockBucket);
+        });
+
+        java.time.format.DateTimeFormatter formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        when(issueStatisticsConverter.toBucketResponse(mockBucket)).thenAnswer(invocation ->
+                com.mycom.petcoupon.coupon.dto.res.IssueThroughputBucketResponse.builder()
+                        .bucket(capturedFrom.get().format(formatter))
+                        .issuedCount(10L)
+                        .failedCount(1L)
+                        .inProgressCount(2L)
+                        .build()
+        );
+
+        com.mycom.petcoupon.coupon.dto.res.CouponIssueTimeSeriesResponse response =
+                couponRealtimeStatusService.getIssueTimeSeries(couponId, windowSeconds, bucketSeconds);
+
+        assertThat(response.couponId()).isEqualTo(couponId);
+        assertThat(response.windowSeconds()).isEqualTo(windowSeconds);
+        assertThat(response.bucketSeconds()).isEqualTo(bucketSeconds);
+        assertThat(response.timeSeries()).isNotEmpty();
+
+        var firstBucket = response.timeSeries().get(0);
+        assertThat(firstBucket.bucket()).isEqualTo(capturedFrom.get().format(formatter));
+        assertThat(firstBucket.issuedCount()).isEqualTo(10L);
+        assertThat(firstBucket.failedCount()).isEqualTo(1L);
+        assertThat(firstBucket.inProgressCount()).isEqualTo(2L);
+
+        // 첫 번째 버킷을 제외한 나머지 버킷들은 0건으로 zero-filling 되어야 함
+        assertThat(response.timeSeries().subList(1, response.timeSeries().size())).allSatisfy(bucket -> {
+            assertThat(bucket.issuedCount()).isZero();
+            assertThat(bucket.failedCount()).isZero();
+            assertThat(bucket.inProgressCount()).isZero();
+        });
+    }
+
+    @Test
+    void getIssueTimeSeries_throwsException_whenCouponNotFound() {
+        when(couponRepository.existsById(999L)).thenReturn(false);
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(999L, 90, 5))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
+    }
+
+    @Test
+    void getIssueTimeSeries_throwsException_whenWindowSecondsIsZeroOrNegative() {
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, 0, 5))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, -10, 5))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
+    }
+
+    @Test
+    void getIssueTimeSeries_throwsException_whenBucketSecondsIsZeroOrNegative() {
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, 90, 0))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, 90, -5))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
+    }
+
+    @Test
+    void getIssueTimeSeries_throwsException_whenBucketSecondsExceedsWindowSeconds() {
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, 30, 60))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
     }
 }

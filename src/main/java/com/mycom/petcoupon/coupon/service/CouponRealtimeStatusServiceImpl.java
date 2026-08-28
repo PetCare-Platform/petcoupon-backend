@@ -1,11 +1,24 @@
 package com.mycom.petcoupon.coupon.service;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.converter.CouponConverter;
+import com.mycom.petcoupon.coupon.converter.IssueStatisticsConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueTimeSeriesResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
+import com.mycom.petcoupon.coupon.dto.res.IssueThroughputBucketResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -15,7 +28,9 @@ import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
 import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
+import com.mycom.petcoupon.global.common.code.CommonErrorCode;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -23,11 +38,15 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusService {
 
+    private static final DateTimeFormatter TIME_SERIES_BUCKET_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
     private final CouponRepository couponRepository;
     private final CouponStockRepository couponStockRepository;
     private final CouponIssueLuaService couponIssueLuaService;
     private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
     private final CouponConverter couponConverter;
+    private final IssueMessageRepository issueMessageRepository;
+    private final IssueStatisticsConverter issueStatisticsConverter;
 
     @Override
     @Transactional(readOnly = true)
@@ -58,6 +77,65 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
         PipelineDrainStatus drainStatus = pipelineDrainChecker.check(couponId);
 
         return couponConverter.toPipelineDrainStatusResponse(coupon, drainStatus);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CouponIssueTimeSeriesResponse getIssueTimeSeries(Long couponId, int windowSeconds, int bucketSeconds) {
+        if (windowSeconds <= 0 || bucketSeconds <= 0 || bucketSeconds > windowSeconds) {
+            throw new GeneralException(CommonErrorCode.NOT_VALID_ERROR);
+        }
+
+        if (!couponRepository.existsById(couponId)) {
+            throw new GeneralException(CouponErrorCode.COUPON_NOT_FOUND);
+        }
+
+        LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
+        long epochSecond = now.atZone(ZoneId.systemDefault()).toEpochSecond();
+        long remainder = Math.floorMod(epochSecond, (long) bucketSeconds);
+        LocalDateTime to = remainder == 0 ? now.plusSeconds(bucketSeconds) : now.plusSeconds(bucketSeconds - remainder);
+        LocalDateTime rawFrom = to.minusSeconds(windowSeconds);
+        long fromEpoch = rawFrom.atZone(ZoneId.systemDefault()).toEpochSecond();
+        long fromRemainder = Math.floorMod(fromEpoch, (long) bucketSeconds);
+        LocalDateTime from = fromRemainder == 0 ? rawFrom : rawFrom.minusSeconds(fromRemainder);
+
+        List<IssueThroughputBucketResponse> timeSeries = buildTimeSeries(couponId, bucketSeconds, from, to);
+
+        return CouponIssueTimeSeriesResponse.builder()
+                .couponId(couponId)
+                .windowSeconds(windowSeconds)
+                .bucketSeconds(bucketSeconds)
+                .timeSeries(timeSeries)
+                .build();
+    }
+
+    private List<IssueThroughputBucketResponse> buildTimeSeries(
+            Long couponId, int bucketSeconds, LocalDateTime from, LocalDateTime to
+    ) {
+        Map<String, IssueThroughputBucketResponse> bucketsByKey = issueMessageRepository
+                .findThroughputByCouponAndSeconds(couponId, bucketSeconds, from, to)
+                .stream()
+                .map(issueStatisticsConverter::toBucketResponse)
+                .collect(Collectors.toMap(IssueThroughputBucketResponse::bucket, Function.identity(), (a, b) -> a));
+
+        List<IssueThroughputBucketResponse> result = new ArrayList<>();
+        LocalDateTime current = from;
+        while (current.isBefore(to)) {
+            String bucketKey = current.format(TIME_SERIES_BUCKET_FORMATTER);
+            IssueThroughputBucketResponse existing = bucketsByKey.get(bucketKey);
+            result.add(existing != null ? existing : emptyBucket(bucketKey));
+            current = current.plusSeconds(bucketSeconds);
+        }
+        return result;
+    }
+
+    private IssueThroughputBucketResponse emptyBucket(String bucketKey) {
+        return IssueThroughputBucketResponse.builder()
+                .bucket(bucketKey)
+                .issuedCount(0L)
+                .failedCount(0L)
+                .inProgressCount(0L)
+                .build();
     }
 
     // Redis 값이 정상적인 Lua 실행 경로로만 바뀐다면 항상 0 <= remainingStock <= totalQuantity지만,

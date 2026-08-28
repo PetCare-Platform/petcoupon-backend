@@ -243,4 +243,26 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
 	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
 	List<IssueStatusCount> countGroupedByStatus();
+
+	// 쿠폰별 초 단위 발급 처리량 시계열 조회(#198)용 — 특정 쿠폰의 [from, to) 기간 동안
+	// bucketSeconds 단위로 발급 성공(CONSUMED)/최종 실패(DLQ·ABANDONED)/진행 중(PENDING·SENT·FAILED)
+	// 건수를 집계한다. DATE_FORMAT과 FROM_UNIXTIME/FLOOR/UNIX_TIMESTAMP를 사용해 N초 단위 버킷을 생성한다.
+	@Query(value = """
+			SELECT DATE_FORMAT(FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(created_at) / :bucketSeconds) * :bucketSeconds), '%Y-%m-%d %H:%i:%s') AS bucket,
+			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			  FROM issue_message
+			 WHERE coupon_id = :couponId
+			   AND created_at >= :from
+			   AND created_at < :to
+			 GROUP BY bucket
+			 ORDER BY bucket ASC
+			""", nativeQuery = true)
+	List<IssueThroughputBucket> findThroughputByCouponAndSeconds(
+			@Param("couponId") Long couponId,
+			@Param("bucketSeconds") int bucketSeconds,
+			@Param("from") LocalDateTime from,
+			@Param("to") LocalDateTime to
+	);
 }
