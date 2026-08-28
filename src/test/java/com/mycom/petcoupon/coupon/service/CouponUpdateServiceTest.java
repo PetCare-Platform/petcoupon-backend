@@ -29,6 +29,7 @@ import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
@@ -59,6 +60,9 @@ class CouponUpdateServiceTest {
 
 	@Mock
 	private CouponConverter couponConverter;
+
+	@Mock
+	private CouponIssueLuaService couponIssueLuaService;
 
 	@InjectMocks
 	private CouponServiceImpl couponService;
@@ -103,6 +107,7 @@ class CouponUpdateServiceTest {
 
 		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
 		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponIssueLuaService.resetIssueState(COUPON_ID, 200)).thenReturn(200);
 		when(couponConverter.toUpdateResponse(coupon, couponStock))
 				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
 
@@ -110,6 +115,65 @@ class CouponUpdateServiceTest {
 
 		assertEquals(200, couponStock.getTotalQuantity());
 		assertEquals(200, couponStock.getRemainingQuantity());
+		verify(couponIssueLuaService).resetIssueState(COUPON_ID, 200);
+	}
+
+	// 총수량이 바뀌면 DB 재고뿐 아니라 Redis 발급 재고 키도 새 수량으로 다시 세워야
+	// GET /admin/coupons/{couponId}/status의 실시간 잔여가 어긋나지 않는다.
+	@Test
+	void updateCouponResetsRedisIssueStockWhenTotalQuantityChanges() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyRateCoupon(event);
+		CouponStock couponStock = couponStock(coupon, 100);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().totalQuantity(200).build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponIssueLuaService.resetIssueState(COUPON_ID, 200)).thenReturn(200);
+		when(couponConverter.toUpdateResponse(coupon, couponStock))
+				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
+
+		couponService.updateCoupon(EVENT_ID, COUPON_ID, request);
+
+		verify(couponIssueLuaService).resetIssueState(COUPON_ID, 200);
+	}
+
+	// 총수량을 건드리지 않는 수정은 Redis 재고에 손대지 않는다.
+	@Test
+	void updateCouponDoesNotTouchRedisWhenTotalQuantityIsUnchanged() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyRateCoupon(event);
+		CouponStock couponStock = couponStock(coupon, 100);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponConverter.toUpdateResponse(coupon, couponStock))
+				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
+
+		couponService.updateCoupon(EVENT_ID, COUPON_ID, request);
+
+		verifyNoInteractions(couponIssueLuaService);
+	}
+
+	// Redis에 세팅한 재고가 되읽히지 않으면(null) 초기화가 끝나지 않은 것이므로 수정을 롤백한다.
+	@Test
+	void updateCouponThrowsWhenRedisIssueStockIsNotReadBack() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyRateCoupon(event);
+		CouponStock couponStock = couponStock(coupon, 100);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().totalQuantity(200).build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponIssueLuaService.resetIssueState(COUPON_ID, 200)).thenReturn(null);
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED, exception.getErrorCode());
 	}
 
 	@Test
@@ -130,7 +194,7 @@ class CouponUpdateServiceTest {
 
 		assertSame(CouponErrorCode.TOTAL_QUANTITY_UPDATE_NOT_ALLOWED, exception.getErrorCode());
 		verify(couponStock, never()).updateTotalQuantity(any(Integer.class));
-		verifyNoInteractions(couponConverter);
+		verifyNoInteractions(couponConverter, couponIssueLuaService);
 	}
 
 	@Test

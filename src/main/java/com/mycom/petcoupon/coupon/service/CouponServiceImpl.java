@@ -15,6 +15,7 @@ import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.event.entity.Event;
@@ -32,6 +33,7 @@ public class CouponServiceImpl implements CouponService {
 	private final CouponRepository couponRepository;
 	private final CouponStockRepository couponStockRepository;
 	private final CouponConverter couponConverter;
+	private final CouponIssueLuaService couponIssueLuaService;
 
 	@Override
 	@Transactional
@@ -48,7 +50,29 @@ public class CouponServiceImpl implements CouponService {
 		CouponStock couponStock = couponConverter.toCouponStock(savedCoupon, request);
 		CouponStock savedCouponStock = couponStockRepository.save(couponStock);
 
+		// DB에 쿠폰·재고가 저장된 뒤, 발급에 쓰는 Redis 재고 키까지 여기서 함께 세운다.
+		// 관리자가 생성 API 한 번으로 발급 준비를 끝내게 하고, DB에는 쿠폰이 있는데 Redis 재고 키가
+		// 없어 발급이 STOCK_NOT_INITIALIZED로 튕기는 반쪽 상태를 원천 차단한다(별도 초기화 호출 제거).
+		//
+		// 트랜잭션 안에서 호출하므로 Redis 초기화가 실패하면 방금 만든 coupon·coupon_stock도 함께
+		// 롤백된다 — 관리자는 같은 생성 요청을 다시 보내기만 하면 된다. Redis는 DB 트랜잭션에
+		// 참여하지 않으므로, SET이 성공한 직후 DB 커밋이 깨지는 드문 경우엔 존재하지 않을 couponId의
+		// 재고 키가 Redis에 남을 수 있으나, 그 키를 읽는 경로(발급·현황 조회) 자체가 없어 무해하다.
+		initializeIssueStock(savedCoupon.getCouponId(), savedCouponStock.getTotalQuantity());
+
 		return couponConverter.toCreateResponse(savedCoupon, savedCouponStock);
+	}
+
+	// resetIssueState는 신청자·순번 키와 재고 키를 지운 뒤 재고를 totalQuantity로 다시 세우고,
+	// 저장된 값을 되읽어 돌려준다. 호출 시점에 이 쿠폰으로 확정 발급된 건이 없어야 안전하다 —
+	// 생성 직후(새 couponId)거나, 총수량 수정처럼 issuedQuantity == 0 이 보장되는 경로에서만 부른다.
+	// 되읽은 값이 없거나(null) 세팅한 값과 다르면 초기화가 끝나지 않은 것이므로 트랜잭션을 롤백한다.
+	private void initializeIssueStock(Long couponId, int totalQuantity) {
+		Integer redisStock = couponIssueLuaService.resetIssueState(couponId, totalQuantity);
+
+		if (redisStock == null || redisStock != totalQuantity) {
+			throw new GeneralException(CouponErrorCode.ISSUE_REDIS_STATE_CLEAR_FAILED);
+		}
 	}
 
 	@Override
@@ -92,7 +116,8 @@ public class CouponServiceImpl implements CouponService {
 		validateIssuePeriod(event, issueStartAt, issueEndAt);
 		validateDiscountPolicy(discountType, discountValue, maxDiscountAmount);
 
-		if (request.totalQuantity() != null) {
+		boolean totalQuantityUpdated = request.totalQuantity() != null;
+		if (totalQuantityUpdated) {
 			updateTotalQuantity(couponStock, request.totalQuantity());
 		}
 
@@ -111,6 +136,14 @@ public class CouponServiceImpl implements CouponService {
 		// 방금 수정한 건인데도 직전 updatedAt이 응답에 실린다. flush는 영속성 컨텍스트 전체를
 		// 대상으로 하므로 couponStock의 updatedAt도 함께 갱신된다.
 		couponRepository.flush();
+
+		// 총수량이 바뀌면 Redis 발급 재고도 새 수량으로 다시 세운다. 이 경로는 발급 시작 전 +
+		// issuedQuantity == 0(updateTotalQuantity·validateIssueNotStarted가 보장)에서만 도달하므로
+		// resetIssueState가 신청자·순번 키를 함께 지워도 잃을 상태가 없다. Redis 초기화가 실패하면
+		// 트랜잭션이 롤백돼 총수량 변경도 함께 되돌아간다.
+		if (totalQuantityUpdated) {
+			initializeIssueStock(couponId, request.totalQuantity());
+		}
 
 		return couponConverter.toUpdateResponse(coupon, couponStock);
 	}
