@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponFailureReasonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.service.CouponFailureReasonService;
 import com.mycom.petcoupon.coupon.service.CouponLoadTestStatusService;
@@ -52,6 +53,15 @@ public class AdminCouponStatusController {
             @PathVariable("couponId") @Positive Long couponId
     ) {
         CouponFailureReasonResponse response = couponFailureReasonService.getFailureReasons(couponId);
+
+        return CustomResponse.onSuccess(response);
+    }
+
+    @GetMapping("/{couponId}/pipeline-drain-status")
+    public CustomResponse<CouponPipelineDrainStatusResponse> getPipelineDrainStatus(
+            @PathVariable("couponId") @Positive Long couponId
+    ) {
+        CouponPipelineDrainStatusResponse response = couponRealtimeStatusService.getPipelineDrainStatus(couponId);
 
         return CustomResponse.onSuccess(response);
     }

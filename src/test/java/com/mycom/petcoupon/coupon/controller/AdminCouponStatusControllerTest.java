@@ -24,7 +24,9 @@ import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponFailureReasonResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.service.CouponFailureReasonService;
 import com.mycom.petcoupon.coupon.service.CouponLoadTestStatusService;
@@ -302,6 +304,81 @@ class AdminCouponStatusControllerTest {
                 .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
         mockMvc.perform(get("/admin/coupons/{couponId}/failure-reasons", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
+    }
+
+    @Test
+    void getPipelineDrainStatusReturnsDrainStatusWhenAdminTokenIsValid() throws Exception {
+        CouponPipelineDrainStatusResponse response = CouponPipelineDrainStatusResponse.builder()
+                .couponStatus(CouponStatus.ENDED)
+                .outboxUnconsumed(0L)
+                .streamUndelivered(0L)
+                .streamActivePending(0L)
+                .checkFailed(false)
+                .build();
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getPipelineDrainStatus(COUPON_ID)).thenReturn(response);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/pipeline-drain-status", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.code").value("200"))
+                .andExpect(jsonPath("$.result.couponStatus").value("ENDED"))
+                .andExpect(jsonPath("$.result.outboxUnconsumed").value(0))
+                .andExpect(jsonPath("$.result.streamUndelivered").value(0))
+                .andExpect(jsonPath("$.result.streamActivePending").value(0))
+                .andExpect(jsonPath("$.result.checkFailed").value(false));
+
+        verify(couponRealtimeStatusService).getPipelineDrainStatus(COUPON_ID);
+    }
+
+    @Test
+    void getPipelineDrainStatusReturnsDrainStatusWithCheckFailedTrueWhenRedisCheckFails() throws Exception {
+        CouponPipelineDrainStatusResponse response = CouponPipelineDrainStatusResponse.builder()
+                .couponStatus(CouponStatus.ACTIVE)
+                .outboxUnconsumed(2L)
+                .streamUndelivered(0L)
+                .streamActivePending(0L)
+                .checkFailed(true)
+                .build();
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getPipelineDrainStatus(COUPON_ID)).thenReturn(response);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/pipeline-drain-status", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.code").value("200"))
+                .andExpect(jsonPath("$.result.couponStatus").value("ACTIVE"))
+                .andExpect(jsonPath("$.result.outboxUnconsumed").value(2))
+                .andExpect(jsonPath("$.result.streamUndelivered").value(0))
+                .andExpect(jsonPath("$.result.streamActivePending").value(0))
+                .andExpect(jsonPath("$.result.checkFailed").value(true));
+
+        verify(couponRealtimeStatusService).getPipelineDrainStatus(COUPON_ID);
+    }
+
+    @Test
+    void getPipelineDrainStatusReturnsUnauthorizedWhenAdminTokenIsMissing() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/pipeline-drain-status", COUPON_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON401-0"));
+
+        verifyNoInteractions(couponRealtimeStatusService);
+    }
+
+    @Test
+    void getPipelineDrainStatusReturnsNotFoundWhenCouponDoesNotExist() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getPipelineDrainStatus(COUPON_ID))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/pipeline-drain-status", COUPON_ID)
                         .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.isSuccess").value(false))

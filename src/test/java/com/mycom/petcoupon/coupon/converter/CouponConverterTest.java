@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -18,6 +19,7 @@ import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.event.entity.Event;
 
 class CouponConverterTest {
@@ -201,6 +203,22 @@ class CouponConverterTest {
 		assertEquals(100, response.remainingQuantity());
 		assertEquals(0, response.issuedQuantity());
 		assertEquals(false, response.initialized());
+	}
+
+	@Test
+	void toPipelineDrainStatusResponseMapsCouponAndDrainStatusFields() {
+		Coupon coupon = mock(Coupon.class);
+		PipelineDrainStatus drainStatus = new PipelineDrainStatus(3L, 1L, 2L, true);
+
+		when(coupon.getStatus()).thenReturn(CouponStatus.ENDED);
+
+		CouponPipelineDrainStatusResponse response = couponConverter.toPipelineDrainStatusResponse(coupon, drainStatus);
+
+		assertSame(CouponStatus.ENDED, response.couponStatus());
+		assertEquals(3L, response.outboxUnconsumed());
+		assertEquals(1L, response.streamUndelivered());
+		assertEquals(2L, response.streamActivePending());
+		assertEquals(true, response.checkFailed());
 	}
 
 	private Coupon couponWithUpdatedAt(LocalDateTime updatedAt) {
