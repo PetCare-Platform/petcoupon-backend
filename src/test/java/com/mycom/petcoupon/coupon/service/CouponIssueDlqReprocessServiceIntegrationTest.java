@@ -16,7 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
@@ -116,9 +118,11 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 
 		// 서비스 메서드는 @Transactional이 아니므로, 여기서 실제로 세션이 닫힌 뒤 컨버터가 접근하는
 		// 흐름이 그대로 재현됨 — JOIN FETCH가 없으면 여기서 LazyInitializationException이 터짐
-		List<CouponIssueDlqResponse> result = couponIssueDlqReprocessService.listDlqMessages();
+		CouponIssueDlqPageResponse pageResponse = couponIssueDlqReprocessService.listDlqMessages(
+				CouponPageRequest.from(CouponPageRequest.DEFAULT_PAGE, CouponPageRequest.DEFAULT_SIZE)
+		);
 
-		CouponIssueDlqResponse found = result.stream()
+		CouponIssueDlqResponse found = pageResponse.content().stream()
 				.filter(r -> r.messageId().equals(issueMessage.getMessageId()))
 				.findFirst()
 				.orElseThrow();
@@ -162,14 +166,24 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 		Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
 		statistics.clear();
 
-		List<CouponIssueDlqResponse> result = couponIssueDlqReprocessService.listDlqMessages();
+		CouponIssueDlqPageResponse pageResponse = couponIssueDlqReprocessService.listDlqMessages(
+				CouponPageRequest.from(CouponPageRequest.DEFAULT_PAGE, CouponPageRequest.DEFAULT_SIZE)
+		);
 
 		long queryCount = statistics.getQueryExecutionCount();
 
-		assertThat(result).hasSizeGreaterThanOrEqualTo(3);
-		// JOIN FETCH로 한 방에 가져오면 1건, 없으면 목록조회 1 + 쿠폰별 지연로딩 3 = 4건 이상이어야 함
+		assertThat(pageResponse.content()).hasSizeGreaterThanOrEqualTo(3);
+		// [PR 리뷰 반영] 페이지네이션(#174) — findByStatus가 Page<>를 반환하도록 바뀌면서
+		// countQuery가 추가됐지만, 실측해보니 여전히 쿼리 1건이다. Spring Data JPA가
+		// PageableExecutionUtils로 count 쿼리 실행 자체를 건너뛰기 때문이다 — offset이 0(첫
+		// 페이지)이고 content 크기(3)가 요청한 size(기본 20)보다 작으면, "더 볼 페이지가 없다"는
+		// 걸 content 크기만으로 알 수 있어 count 쿼리를 아예 안 던진다. 이 페이지가 꽉 차는
+		// 경우(content 크기 == size)에는 다음 페이지 존재 여부를 알 수 없어 count 쿼리가
+		// 실제로 추가된다 — 그 케이스까지 이 테스트가 검증하진 않는다.
+		// JOIN FETCH가 없었다면 목록 1 + 쿠폰별 지연로딩 3 = 4건 이상이었을 거라 N+1 여부는
+		// 여전히 이 숫자로 구분된다 — 이 테스트가 원래 검증하려던 것은 그대로 유효하다.
 		assertThat(queryCount)
-				.as("listDlqMessages 호출 시 실행된 쿼리 수 (JOIN FETCH 있으면 1이어야 함)")
+				.as("listDlqMessages 호출 시 실행된 쿼리 수 (JOIN FETCH 있으면 1, 없으면 4 이상)")
 				.isEqualTo(1);
 	}
 

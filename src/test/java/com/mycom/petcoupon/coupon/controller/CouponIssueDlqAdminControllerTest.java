@@ -1,5 +1,9 @@
 package com.mycom.petcoupon.coupon.controller;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -16,7 +20,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
@@ -50,13 +56,72 @@ class CouponIssueDlqAdminControllerTest {
 				.retryCount(3)
 				.build();
 
-		when(couponIssueDlqReprocessService.listDlqMessages()).thenReturn(List.of(response));
+		when(couponIssueDlqReprocessService.listDlqMessages(any(CouponPageRequest.class)))
+				.thenReturn(CouponIssueDlqPageResponse.builder()
+						.content(List.of(response))
+						.page(0).size(20).totalElements(1).totalPages(1)
+						.first(true).last(true)
+						.build());
 
 		mockMvc.perform(get("/admin/coupon-issue/dlq"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.isSuccess").value(true))
-				.andExpect(jsonPath("$.result[0].messageId").value(1L))
-				.andExpect(jsonPath("$.result[0].requestId").value("request-1"));
+				.andExpect(jsonPath("$.result.content[0].messageId").value(1L))
+				.andExpect(jsonPath("$.result.content[0].requestId").value("request-1"))
+				.andExpect(jsonPath("$.result.totalElements").value(1))
+				.andExpect(jsonPath("$.result.page").value(0))
+				.andExpect(jsonPath("$.result.size").value(20));
+	}
+
+	// [PR 리뷰 반영] 페이지네이션(#174) — page/size 쿼리 파라미터가 CouponPageRequest로
+	// 파싱돼 서비스에 그대로 전달되는지 확인한다. 생략하면 CouponPageRequest의 기본값
+	// (0, 20)이 쓰이는 것까지 같이 검증한다.
+	@Test
+	void listDlqMessages는_page_size_파라미터를_CouponPageRequest로_변환해_서비스에_전달한다() throws Exception {
+		when(couponIssueDlqReprocessService.listDlqMessages(any(CouponPageRequest.class)))
+				.thenReturn(CouponIssueDlqPageResponse.builder()
+						.content(List.of())
+						.page(0).size(20).totalElements(0).totalPages(0)
+						.first(true).last(true)
+						.build());
+
+		mockMvc.perform(get("/admin/coupon-issue/dlq")
+						.param("page", "2")
+						.param("size", "50"))
+				.andExpect(status().isOk());
+
+		verify(couponIssueDlqReprocessService).listDlqMessages(eq(new CouponPageRequest(2, 50)));
+	}
+
+	@Test
+	void listDlqMessages는_page_size가_없으면_기본값을_사용한다() throws Exception {
+		when(couponIssueDlqReprocessService.listDlqMessages(any(CouponPageRequest.class)))
+				.thenReturn(CouponIssueDlqPageResponse.builder()
+						.content(List.of())
+						.page(0).size(20).totalElements(0).totalPages(0)
+						.first(true).last(true)
+						.build());
+
+		mockMvc.perform(get("/admin/coupon-issue/dlq"))
+				.andExpect(status().isOk());
+
+		verify(couponIssueDlqReprocessService).listDlqMessages(eq(new CouponPageRequest(0, 20)));
+	}
+
+	// AdminCouponQueryControllerTest가 이미 CouponPageRequest 자체의 검증 규칙(음수 page,
+	// 지원 안 하는 size 등)을 충분히 검증한다 — 여기서 또 반복 안 한다. 이 컨트롤러에서
+	// 새로 확인할 건 "잘못된 값이면 여기서도 똑같이 400·COUPON400-11로 막히는지"뿐이다.
+	@Test
+	void listDlqMessages는_잘못된_size면_400을_반환한다() throws Exception {
+		mockMvc.perform(get("/admin/coupon-issue/dlq")
+						.param("size", "25"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.isSuccess").value(false))
+				.andExpect(jsonPath("$.code").value("COUPON400-11"));
+
+		// CouponPageRequest.from()이 컨트롤러 메서드 진입 즉시 던지므로, 서비스까지
+		// 아예 안 내려가야 한다.
+		verifyNoInteractions(couponIssueDlqReprocessService);
 	}
 
 	@Test

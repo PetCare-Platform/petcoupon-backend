@@ -12,17 +12,20 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.Optional;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueDlqConverter;
+import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqPageResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqReprocessResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
@@ -54,24 +57,46 @@ class CouponIssueDlqReprocessServiceImplTest {
 	@InjectMocks
 	private CouponIssueDlqReprocessServiceImpl couponIssueDlqReprocessService;
 
-	@BeforeEach
-	void setUp() {
-		// @Value 필드는 순수 Mockito 단위 테스트에서 주입되지 않아 직접 세팅
-		ReflectionTestUtils.setField(couponIssueDlqReprocessService, "listSize", 100);
-	}
-
+	// [PR 리뷰 반영] 응답 구조(#174) — Page<CouponIssueDlqResponse>.getContent()가 아니라
+	// CouponIssueDlqPageResponse로 감싸서 나가므로, content와 totalElements 등 페이지 메타를
+	// 같이 검증한다.
 	@Test
-	void listDlqMessages는_DLQ_상태인_메시지만_변환해서_반환한다() {
+	void listDlqMessages는_DLQ_상태인_메시지만_변환해서_페이지_응답으로_반환한다() {
 		IssueMessage issueMessage = mock(IssueMessage.class);
 		CouponIssueDlqResponse response = CouponIssueDlqResponse.builder().messageId(1L).build();
 
+		CouponPageRequest pageRequest = CouponPageRequest.from(
+				CouponPageRequest.DEFAULT_PAGE, CouponPageRequest.DEFAULT_SIZE);
+		Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
+
 		when(issueMessageRepository.findByStatus(eq(IssueMessageStatus.DLQ), any(Pageable.class)))
-				.thenReturn(List.of(issueMessage));
+				.thenReturn(new PageImpl<>(List.of(issueMessage), pageable, 1));
 		when(couponIssueDlqConverter.toDlqResponse(issueMessage)).thenReturn(response);
 
-		List<CouponIssueDlqResponse> result = couponIssueDlqReprocessService.listDlqMessages();
+		CouponIssueDlqPageResponse result = couponIssueDlqReprocessService.listDlqMessages(pageRequest);
 
-		assertThat(result).containsExactly(response);
+		assertThat(result.content()).containsExactly(response);
+		assertThat(result.totalElements()).isEqualTo(1L);
+		assertThat(result.page()).isZero();
+		assertThat(result.size()).isEqualTo(20);
+	}
+
+	// [PR 리뷰 반영] 페이지네이션(#174) — page/size가 실제로 Pageable에 그대로 전달되는지 확인한다.
+	@Test
+	void listDlqMessages는_요청받은_page_size를_그대로_Pageable에_반영한다() {
+		CouponPageRequest pageRequest = new CouponPageRequest(2, 50);
+		Pageable pageable = PageRequest.of(pageRequest.page(), pageRequest.size());
+
+		when(issueMessageRepository.findByStatus(eq(IssueMessageStatus.DLQ), any(Pageable.class)))
+				.thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+		couponIssueDlqReprocessService.listDlqMessages(pageRequest);
+
+		ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+		verify(issueMessageRepository).findByStatus(eq(IssueMessageStatus.DLQ), pageableCaptor.capture());
+
+		assertThat(pageableCaptor.getValue().getPageNumber()).isEqualTo(2);
+		assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(50);
 	}
 
 	@Test
