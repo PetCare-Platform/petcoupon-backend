@@ -53,6 +53,7 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
                 couponId, IdempotencyStatus.FAILED
         );
         long inProgress = idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(couponId, IdempotencyStatus.IN_PROGRESS);
+        long published = issueMessageRepository.countPublishedByCoupon(couponId);
 
         CouponIssueLoadTestSummary summary = couponIssueRepository.summarizeForLoadTest(couponId);
         long passed = summary.getPassedCount();
@@ -67,10 +68,13 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
                 .consumed(countOf(pipelineCounts, IssueMessageStatus.CONSUMED))
                 .failed(countOf(pipelineCounts, IssueMessageStatus.FAILED))
                 .dlq(countOf(pipelineCounts, IssueMessageStatus.DLQ))
+                .published(published)
                 .inProgressIdempotencyKeys(inProgress)
                 .overIssued(passed > expectedPassed)
                 .duplicateUsers(summary.getDuplicateUserCount())
-                .sequenceIntact(summary.getSequenceIntact())
+                // [#200 버그 수정] getSequenceIntact()가 이제 Long(BIGINT)을 그대로 받는다 —
+                // CouponIssueLoadTestSummary 주석 참고. 0이 아니면 정상(연속)이다.
+                .sequenceIntact(summary.getSequenceIntact() != 0)
                 .elapsedSeconds(summary.getElapsedSeconds() == null ? 0 : summary.getElapsedSeconds())
                 .build();
     }

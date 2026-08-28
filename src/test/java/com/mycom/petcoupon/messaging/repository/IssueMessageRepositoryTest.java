@@ -18,6 +18,7 @@ import org.springframework.data.domain.PageRequest;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
+import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.event.entity.Event;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
 import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
@@ -561,5 +562,57 @@ class IssueMessageRepositoryTest {
 
 		assertThat(bucket1.getIssuedCount()).isEqualTo(1L);
 		assertThat(bucket2.getIssuedCount()).isEqualTo(1L);
+	}
+
+	// [#200] 부하 테스트 현황의 published 계산 — SENT/CONSUMED는 무조건 세고, DLQ/ABANDONED는
+	// failureReason으로 갈린다(KAFKA_PUBLISH_FAILED=발행 자체가 안 됨, CONSUME_PROCESSING_FAILED=
+	// 발행은 됐는데 소비가 실패). PENDING과 failureReason이 null인 DLQ는 세지 않는다.
+	@Test
+	void countPublishedByCoupon은_발행에_성공한_건만_센다() {
+		IssueMessage sent = IssueMessage.pending(coupon, 301L, 301L, "published-sent", "{}");
+		IssueMessage consumed = IssueMessage.pending(coupon, 302L, 302L, "published-consumed", "{}");
+		IssueMessage dlqPublishFailed = IssueMessage.pending(coupon, 303L, 303L, "published-dlq-publish-failed", "{}");
+		IssueMessage dlqConsumeFailed = IssueMessage.pending(coupon, 304L, 304L, "published-dlq-consume-failed", "{}");
+		IssueMessage abandonedConsumeFailed = IssueMessage.pending(coupon, 305L, 305L, "published-abandoned", "{}");
+		IssueMessage dlqLegacyNullReason = IssueMessage.pending(coupon, 306L, 306L, "published-dlq-legacy", "{}");
+		IssueMessage pending = IssueMessage.pending(coupon, 307L, 307L, "published-pending", "{}");
+		List.of(sent, consumed, dlqPublishFailed, dlqConsumeFailed, abandonedConsumeFailed, dlqLegacyNullReason, pending)
+				.forEach(entityManager::persist);
+		entityManager.flush();
+
+		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(
+				dlqPublishFailed.getMessageId(), IssueMessageStatus.DLQ, "publish failed", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "published-dlq-consume-failed", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "published-abandoned", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		// failureReason 컬럼 도입 전(SEED 등)에 이미 DLQ였던 행을 흉내낸다 — 상태 갱신용
+		// 리포지토리 메서드가 없어 직접 SQL로 만든다.
+		entityManager.createNativeQuery(
+				"UPDATE issue_message SET status = 'DLQ', failure_reason = NULL WHERE message_id = :id"
+		).setParameter("id", dlqLegacyNullReason.getMessageId()).executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		// abandonedConsumeFailed를 DLQ -> ABANDONED로 포기 처리(claimForAbandon은 markDlq가
+		// 올린 retryCount=1을 기대한다).
+		int abandoned = issueMessageRepository.claimForAbandon(
+				abandonedConsumeFailed.getMessageId(), IssueMessageStatus.DLQ, 1, IssueMessageStatus.ABANDONED
+		);
+		assertThat(abandoned).isEqualTo(1);
+
+		long published = issueMessageRepository.countPublishedByCoupon(coupon.getCouponId());
+
+		// SENT + CONSUMED + DLQ(consume-failed) + ABANDONED(consume-failed) = 4
+		// PENDING, DLQ(publish-failed), DLQ(사유 없음)는 제외
+		assertThat(published).isEqualTo(4L);
 	}
 }

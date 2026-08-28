@@ -266,6 +266,25 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			""")
 	List<IssueFailureReasonCount> countDlqGroupedByFailureReasonForCoupon(@Param("couponId") Long couponId);
 
+	// 부하 테스트 현황 조회(#195/#200)용 — Kafka 발행에 실제로 성공한 건수. SENT/CONSUMED는
+	// 무조건 발행된 것이고, DLQ/ABANDONED는 failureReason으로 갈린다 — KAFKA_PUBLISH_FAILED는
+	// 발행 자체가 실패한 것(CouponIssueEventProducer.markFailed), CONSUME_PROCESSING_FAILED는
+	// 발행엔 성공했는데 Consumer 처리가 실패한 것(CouponIssueEventRecoverer.markDlq)이다.
+	// FAILED는 발행 실패(KAFKA_PUBLISH_FAILED) 전용 상태라 항상 제외한다 — Consumer 처리 실패는
+	// 재시도 없이 곧장 DLQ로 가서 FAILED를 거치지 않는다(CouponIssueEventRecoverer가 상태를
+	// 무조건 DLQ로 세팅). failureReason이 null인 옛 DLQ 행(컬럼 도입 전)은 발행 여부를 알 수
+	// 없어 제외한다.
+	@Query("""
+			SELECT COUNT(im) FROM IssueMessage im
+			 WHERE im.coupon.couponId = :couponId
+			   AND (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.SENT,
+			                       com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED)
+			        OR (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ,
+			                           com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED)
+			            AND im.failureReason = com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason.CONSUME_PROCESSING_FAILED))
+			""")
+	long countPublishedByCoupon(@Param("couponId") Long couponId);
+
 	// 쿠폰별 초 단위 발급 처리량 시계열 조회(#198)용 — 특정 쿠폰의 [from, to) 기간 동안
 	// bucketSeconds 단위로 발급 성공(CONSUMED)/최종 실패(DLQ·ABANDONED)/진행 중(PENDING·SENT·FAILED)
 	// 건수를 집계한다.
