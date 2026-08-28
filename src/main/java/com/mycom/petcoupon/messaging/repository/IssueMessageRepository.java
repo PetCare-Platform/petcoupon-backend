@@ -243,4 +243,34 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
 	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
 	List<IssueStatusCount> countGroupedByStatus();
+
+	// 쿠폰별 초 단위 발급 처리량 시계열 조회(#198)용 — 특정 쿠폰의 [from, to) 기간 동안
+	// bucketSeconds 단위로 발급 성공(CONSUMED)/최종 실패(DLQ·ABANDONED)/진행 중(PENDING·SENT·FAILED)
+	// 건수를 집계한다.
+	//
+	// [타임존 독립성 보장] UNIX_TIMESTAMP/FROM_UNIXTIME은 MySQL 세션 타임존에 의존하여
+	// JVM 타임존과 불일치 시 버킷이 어긋나는 문제가 있다. 기준 시각(:from)으로부터의
+	// 초 차이(TIMESTAMPDIFF)와 DATE_ADD를 사용해 순수 LocalDateTime 연산으로 버킷을 계산함으로써
+	// 타임존 설정과 bucketSeconds 값에 상관없이 자바의 버킷 슬롯과 항상 100% 일치하도록 보장한다.
+	@Query(value = """
+			SELECT DATE_FORMAT(
+			           DATE_ADD(:from, INTERVAL FLOOR(TIMESTAMPDIFF(SECOND, :from, created_at) / :bucketSeconds) * :bucketSeconds SECOND),
+			           '%Y-%m-%d %H:%i:%s'
+			       ) AS bucket,
+			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
+			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			  FROM issue_message
+			 WHERE coupon_id = :couponId
+			   AND created_at >= :from
+			   AND created_at < :to
+			 GROUP BY bucket
+			 ORDER BY bucket ASC
+			""", nativeQuery = true)
+	List<IssueThroughputBucket> findThroughputByCouponAndSeconds(
+			@Param("couponId") Long couponId,
+			@Param("bucketSeconds") int bucketSeconds,
+			@Param("from") LocalDateTime from,
+			@Param("to") LocalDateTime to
+	);
 }
