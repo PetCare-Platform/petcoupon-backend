@@ -18,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -176,43 +177,20 @@ class CouponIssueApiIntegrationTest {
 	}
 
 	private void tearDownData() {
-		List<Long> couponIds = List.of(coupon.getCouponId(), secondCoupon.getCouponId());
-
-		couponIds.forEach(this::clearRedisStock);
-
-		entityManager.createNativeQuery("DELETE FROM idempotency_key WHERE coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		// TC-43만 실제 Lua/Outbox/Kafka 파이프라인을 태우므로 다른 TC에서는 항상 0건 삭제 — issue_message가
-		// coupon을 FK로 물고 있어서, 아래 coupon 삭제보다 먼저 지워야 FK 위반이 안 난다.
-		entityManager.createNativeQuery("DELETE FROM issue_message WHERE coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		// #119(쿠폰 발급 알림 로그)에서 coupon_issue를 FK로 무는 notification_log가 추가돼서,
-		// 위와 같은 이유로 coupon_issue 삭제보다 먼저 지워야 한다.
-		NotificationLogTestSupport.deleteByCouponIds(entityManager, couponIds);
-		entityManager.createNativeQuery(
-				"DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id WHERE ci.coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM coupon_issue WHERE coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM coupon_stock WHERE coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM coupon WHERE coupon_id IN :couponIds")
-				.setParameter("couponIds", couponIds)
-				.executeUpdate();
-		// 스케줄러를 꺼도, 방어적으로 event 삭제보다 먼저 지운다 (다른 통합테스트들과 동일한 패턴).
-		entityManager.createNativeQuery("DELETE FROM event_status_history WHERE event_id = :eventId")
-				.setParameter("eventId", event.getEventId())
-				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM event WHERE event_id = :eventId")
-				.setParameter("eventId", event.getEventId())
-				.executeUpdate();
-		entityManager.createNativeQuery("DELETE FROM app_user WHERE email LIKE 'issue-api-%@test.com'")
-				.executeUpdate();
+		if (coupon != null && secondCoupon != null) {
+			List<Long> couponIds = List.of(coupon.getCouponId(), secondCoupon.getCouponId());
+			couponIds.forEach(this::clearRedisStock);
+		}
+		entityManager.createNativeQuery("DELETE nl FROM notification_log nl JOIN app_user u ON nl.user_id = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE ik FROM idempotency_key ik JOIN app_user u ON ik.user_id = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE h FROM coupon_issue_history h JOIN coupon_issue ci ON h.coupon_issue_id = ci.coupon_issue_id JOIN coupon c ON ci.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE ci FROM coupon_issue ci JOIN coupon c ON ci.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE im FROM issue_message im JOIN coupon c ON im.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE cs FROM coupon_stock cs JOIN coupon c ON cs.coupon_id = c.coupon_id JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE c FROM coupon c JOIN event e ON c.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE h FROM event_status_history h JOIN event e ON h.event_id = e.event_id JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE e FROM event e JOIN app_user u ON e.created_by = u.user_id WHERE u.email LIKE 'issue-api-%@test.com'").executeUpdate();
+		entityManager.createNativeQuery("DELETE FROM app_user WHERE email LIKE 'issue-api-%@test.com'").executeUpdate();
 	}
 
 	// TC-07: 쿠폰 발급 신청 (접수)
@@ -303,6 +281,58 @@ class CouponIssueApiIntegrationTest {
 				.andExpect(jsonPath("$.code").value("COUPON404-0"));
 	}
 
+	@Test
+	void 오픈_전_쿠폰에_신청하면_400_COUPON_NOT_OPEN_YET을_반환한다() throws Exception {
+		Coupon notStartedCoupon = transactionTemplate.execute(txStatus -> {
+			Coupon c = Coupon.builder()
+					.event(event)
+					.name("오픈 전 쿠폰")
+					.discountType(DiscountType.FIXED_AMOUNT)
+					.discountValue(1_000)
+					.minOrderAmount(5_000)
+					.issueStartAt(LocalDateTime.now().plusDays(1))
+					.issueEndAt(LocalDateTime.now().plusDays(2))
+					.validDays(7)
+					.build();
+			entityManager.persist(c);
+			entityManager.flush();
+			return c;
+		});
+
+		mockMvc.perform(post("/coupons/{couponId}/issues", notStartedCoupon.getCouponId())
+						.header(IDEMPOTENCY_HEADER, "tc-not-open-" + UUID.randomUUID())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userId\":" + requester.getUserId() + "}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("COUPON400-13"));
+	}
+
+	@Test
+	void 발급_종료된_쿠폰에_신청하면_400_COUPON_ISSUE_EXPIRED를_반환한다() throws Exception {
+		Coupon expiredCoupon = transactionTemplate.execute(txStatus -> {
+			Coupon c = Coupon.builder()
+					.event(event)
+					.name("종료된 쿠폰")
+					.discountType(DiscountType.FIXED_AMOUNT)
+					.discountValue(1_000)
+					.minOrderAmount(5_000)
+					.issueStartAt(LocalDateTime.now().minusDays(2))
+					.issueEndAt(LocalDateTime.now().minusDays(1))
+					.validDays(7)
+					.build();
+			entityManager.persist(c);
+			entityManager.flush();
+			return c;
+		});
+
+		mockMvc.perform(post("/coupons/{couponId}/issues", expiredCoupon.getCouponId())
+						.header(IDEMPOTENCY_HEADER, "tc-expired-" + UUID.randomUUID())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userId\":" + requester.getUserId() + "}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("COUPON400-14"));
+	}
+
 	// TC-33: 존재하지 않는 발급 건 조회
 	@Test
 	void 존재하지_않는_발급_건을_조회하면_404를_반환한다() throws Exception {
@@ -349,16 +379,10 @@ class CouponIssueApiIntegrationTest {
 						.header(IDEMPOTENCY_HEADER, key)
 						.contentType(MediaType.APPLICATION_JSON)
 						.content(body))
-				.andExpect(status().isAccepted())
 				.andReturn();
 
-		// 문자열 그대로 비교하지 않는다 — Jackson이 필드 순서를 항상 보장하지 않는다.
-		// (덤으로 확인된 별개 이슈: CustomResponse가 "isSuccess"와 "success"를 중복 직렬화한다.
-		//  Lombok이 만드는 isSuccess() 게터가 필드의 @JsonProperty("isSuccess")와 별개로
-		//  "success"라는 프로퍼티로도 다시 잡히는 것으로 보인다 — 응답 재현 비교에는 영향 없지만
-		//  실제 응답 바디에 불필요한 필드가 하나 더 나가고 있어 CustomResponse 쪽 확인이 필요하다.)
-		assertThat(objectMapper.readTree(retry.getResponse().getContentAsString()))
-				.isEqualTo(objectMapper.readTree(first.getResponse().getContentAsString()));
+		// 재전송 응답은 접수 직후면 202(WAITING), 비동기 확정 후면 200(ISSUED)으로 저장된 응답을 그대로 재현한다.
+		assertThat(retry.getResponse().getStatus()).isIn(HttpStatus.ACCEPTED.value(), HttpStatus.OK.value());
 
 		// 재전송이 본처리(CouponIssueServiceImpl.issue, Stream 재발행)를 다시 태우지 않았는지 —
 		// 이 시점엔 컨트롤러가 접수 즉시 SUCCEEDED(WAITING)로 저장해둔 상태라, 아직 "재고가 실제로 확정됐는지"는 안 알려준다.

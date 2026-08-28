@@ -1,10 +1,13 @@
 package com.mycom.petcoupon.coupon.service;
 
+import java.time.LocalDateTime;
+
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
@@ -34,9 +37,16 @@ public class CouponIssueServiceImpl implements CouponIssueService {
         // 선착순 순서 검증용: 도착 순서를 알 수 있는 유일한 지점이라 다른 검증보다 먼저 남긴다.
         log.info("[ISSUE] 접수 requestId={} couponId={} userId={}", requestId, couponId, request.userId());
 
-        // 존재하지 않는 쿠폰이면 Stream에 넣을 필요 없이 여기서 바로 차단
-        if (!couponRepository.existsById(couponId)) {
-            throw new GeneralException(CouponErrorCode.COUPON_NOT_FOUND);
+        // 존재하지 않는 쿠폰이거나 발급 기간(issueStartAt ~ issueEndAt) 외이면 Stream에 넣을 필요 없이 차단
+        Coupon coupon = couponRepository.findById(couponId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        LocalDateTime now = LocalDateTime.now();
+        if (now.isBefore(coupon.getIssueStartAt())) {
+            throw new GeneralException(CouponErrorCode.COUPON_NOT_OPEN_YET);
+        }
+        if (now.isAfter(coupon.getIssueEndAt())) {
+            throw new GeneralException(CouponErrorCode.COUPON_ISSUE_EXPIRED);
         }
 
         couponIssueStreamProducer.publish(couponId, request.userId(), requestId);

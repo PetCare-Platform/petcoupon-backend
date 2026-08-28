@@ -8,12 +8,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.LocalDateTime;
+import java.util.Optional;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.mycom.petcoupon.coupon.converter.CouponIssueConverter;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
+import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueStreamProducer;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
@@ -39,9 +44,20 @@ class CouponIssueServiceImplTest {
         .userId(USER_ID)
         .build();
 
+    private Coupon validCoupon;
+
     @BeforeEach
     void setUp() {
-        when(couponRepository.existsById(COUPON_ID)).thenReturn(true);
+        validCoupon = Coupon.builder()
+            .name("유효한 쿠폰")
+            .discountType(DiscountType.FIXED_AMOUNT)
+            .discountValue(1000)
+            .minOrderAmount(5000)
+            .issueStartAt(LocalDateTime.now().minusDays(1))
+            .issueEndAt(LocalDateTime.now().plusDays(1))
+            .validDays(7)
+            .build();
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(validCoupon));
     }
 
     @Test
@@ -62,10 +78,51 @@ class CouponIssueServiceImplTest {
 
     @Test
     void 존재하지_않는_쿠폰이면_발행_없이_예외를_던진다() {
-        when(couponRepository.existsById(COUPON_ID)).thenReturn(false);
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.issue(COUPON_ID, request, IDEMPOTENCY_KEY))
-            .isInstanceOf(GeneralException.class);
+            .isInstanceOf(GeneralException.class)
+            .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.COUPON_NOT_FOUND);
+
+        verifyNoInteractions(couponIssueStreamProducer);
+    }
+
+    @Test
+    void 오픈_전_쿠폰이면_발행_없이_예외를_던진다() {
+        Coupon notStartedCoupon = Coupon.builder()
+            .name("오픈 전 쿠폰")
+            .discountType(DiscountType.FIXED_AMOUNT)
+            .discountValue(1000)
+            .minOrderAmount(5000)
+            .issueStartAt(LocalDateTime.now().plusDays(1))
+            .issueEndAt(LocalDateTime.now().plusDays(2))
+            .validDays(7)
+            .build();
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(notStartedCoupon));
+
+        assertThatThrownBy(() -> service.issue(COUPON_ID, request, IDEMPOTENCY_KEY))
+            .isInstanceOf(GeneralException.class)
+            .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.COUPON_NOT_OPEN_YET);
+
+        verifyNoInteractions(couponIssueStreamProducer);
+    }
+
+    @Test
+    void 발급_종료된_쿠폰이면_발행_없이_예외를_던진다() {
+        Coupon expiredCoupon = Coupon.builder()
+            .name("종료된 쿠폰")
+            .discountType(DiscountType.FIXED_AMOUNT)
+            .discountValue(1000)
+            .minOrderAmount(5000)
+            .issueStartAt(LocalDateTime.now().minusDays(2))
+            .issueEndAt(LocalDateTime.now().minusDays(1))
+            .validDays(7)
+            .build();
+        when(couponRepository.findById(COUPON_ID)).thenReturn(Optional.of(expiredCoupon));
+
+        assertThatThrownBy(() -> service.issue(COUPON_ID, request, IDEMPOTENCY_KEY))
+            .isInstanceOf(GeneralException.class)
+            .hasFieldOrPropertyWithValue("errorCode", CouponErrorCode.COUPON_ISSUE_EXPIRED);
 
         verifyNoInteractions(couponIssueStreamProducer);
     }
