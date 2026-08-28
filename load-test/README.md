@@ -8,8 +8,13 @@ load-test/
 │   ├── config.js          공통 설정 (환경변수로 대상 · 규모를 받음)
 │   ├── issue-coupon.js    발급 API 부하 스크립트
 │   └── members.csv        회원 ID 목록 (DB 에서 만들어 씀, 커밋하지 않음)
+├── scripts/
+│   ├── setup-demo-coupon.sh        시연·부하 테스트용 이벤트 4개 + 쿠폰 4개 생성
+│   ├── measure-confirm-delay.sh    부하 종료 후 전건 확정까지 걸린 시간 측정
+│   └── init_seed_coupon_redis.ps1  SEED 쿠폰의 Redis 재고 키 세팅
 └── sql/
     ├── seed_users.sql              더미 회원 100만 명 생성
+    ├── seed_coupon_issues.sql      더미 발급 이력 300만 건 생성
     ├── verify_issue_result.sql     부하 종료 후 정합성 검증
     └── verify_order_inversion.sql  선착순 순서 역전율 (TC-91 · TC-93)
 ```
@@ -86,9 +91,35 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -N -B -e "SELECT user_
 
 ### 5. 대상 쿠폰 준비
 
-관리자 API로 쿠폰을 하나 만들어 두고 그 ID를 `COUPON_ID`로 넘깁니다. 재고 규모는 초기화 API가 회차마다 바꿔주므로, 쿠폰을 여러 개 만들 필요는 없습니다.
+앱을 띄운 뒤 스크립트를 실행하면 이벤트 4개와 쿠폰 4개가 만들어지고, **부하 테스트 대상 `COUPON_ID`가 출력됩니다.**
 
-**아래 실행 예시의 `COUPON_ID=1`은 자리표시자입니다.** 각자 만든 쿠폰 ID로 바꿔야 하고, 안 바꾸면 전부 404가 납니다. 만들어 둔 쿠폰이 뭔지 모르겠으면 이렇게 확인합니다.
+```bash
+./gradlew bootRun
+./load-test/scripts/setup-demo-coupon.sh
+```
+
+```
+① 선착순 반려견 무료 검진 이벤트
+  eventId=1135  couponId=1186  재고=10000     ← 부하 테스트 대상
+② 검진 할인 쿠폰 이벤트
+  eventId=1136  couponId=1187  재고=50000
+...
+======================================================
+  부하 테스트 대상  COUPON_ID = 1186
+======================================================
+```
+
+재고 규모는 초기화 API가 회차마다 바꿔주므로 쿠폰을 여러 개 만들 필요는 없습니다. 규모를 바꾸려면 `MAIN_TOTAL_QUANTITY`를 주면 됩니다.
+
+```bash
+MAIN_TOTAL_QUANTITY=1000 ./load-test/scripts/setup-demo-coupon.sh
+```
+
+> ⚠️ **만든 직후에는 발급이 안 됩니다.** 이벤트가 `SCHEDULED` 상태로 생성되고, 상태 스케줄러가 `OPEN`(쿠폰은 `ACTIVE`)으로 바꾼 뒤부터 유효합니다. 기본 `OPEN_DELAY_MIN=3`이라 **3분 뒤에 시작**하면 됩니다. 그 전에는 공개 목록(`GET /events`)에도 안 나옵니다.
+>
+> 왜 바로 열지 않는가 — 쿠폰 생성은 이벤트가 `SCHEDULED`일 때만 허용되는데(`CouponServiceImpl.validateEventStatus`), 상태 스케줄러가 매분 돌면서 `openAt`이 지난 이벤트를 `OPEN`으로 바꿉니다. 오픈 시각을 현재로 잡으면 쿠폰을 만들기도 전에 `OPEN`이 되어 `COUPON400-1`로 막힐 수 있습니다.
+
+**아래 실행 예시의 `COUPON_ID=1`은 자리표시자입니다.** 스크립트가 출력한 ID로 바꿔야 하고, 안 바꾸면 전부 404가 납니다. 만들어 둔 쿠폰이 뭔지 모르겠으면 이렇게 확인합니다.
 
 ```bash
 docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "SELECT c.coupon_id, c.name, c.status, s.total_quantity FROM coupon c JOIN coupon_stock s ON s.coupon_id = c.coupon_id"

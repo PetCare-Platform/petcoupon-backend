@@ -91,7 +91,10 @@ send_json() {
 	local method="$1" url="$2" body="$3" file="$WORK_DIR/req.json"
 	shift 3
 	printf '%s' "$body" > "$file"
-	curl -s -X "$method" "$url" \
+	# -sS 로 둔다. -s 만 쓰면 진행률뿐 아니라 에러 메시지까지 사라져서, 앱이 안 떠 있거나
+	# 포트가 다를 때 응답이 빈 문자열로만 돌아온다 — 아래 die() 가 "응답:" 뒤에 아무것도
+	# 못 찍어 원인을 알 수 없다. -S 를 붙이면 연결 실패가 stderr 로 그대로 보인다.
+	curl -sS -X "$method" "$url" \
 		-H "Content-Type: application/json; charset=UTF-8" \
 		"$@" \
 		--data-binary "@$file"
@@ -170,7 +173,7 @@ EOF
 	# #180 이후 createCoupon() 이 Redis 재고 키까지 세우므로 따로 초기화하지 않는다.
 	# 대신 실제로 채워졌는지 확인한다 — initialized 가 false 면 쿠폰은 있는데 발급이 전건
 	# 실패하는 상태이고, remainingQuantity 는 총재고로 나와 "재고 가득"으로 보인다(TC-17).
-	res="$(curl -s "$BASE_URL/coupons/$coupon_id/status")"
+	res="$(curl -sS "$BASE_URL/coupons/$coupon_id/status")"
 	initialized="$(json_value initialized "$res")"
 	remaining="$(json_value remainingQuantity "$res")"
 
