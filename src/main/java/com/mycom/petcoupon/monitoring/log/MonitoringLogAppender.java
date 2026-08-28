@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.monitoring.log;
 
+import java.util.List;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
@@ -18,9 +20,13 @@ public class MonitoringLogAppender extends AppenderBase<ILoggingEvent> {
     public static final String NAME = "MONITORING";
 
     private final MonitoringLogEventSink sink;
+    private final List<String> excludedLoggerPrefixes;
 
-    public MonitoringLogAppender(MonitoringLogEventSink sink) {
+    public MonitoringLogAppender(MonitoringLogEventSink sink, List<String> excludedLoggerPrefixes) {
         this.sink = sink;
+        this.excludedLoggerPrefixes = excludedLoggerPrefixes == null
+                ? List.of()
+                : List.copyOf(excludedLoggerPrefixes);
     }
 
     @Override
@@ -36,6 +42,29 @@ public class MonitoringLogAppender extends AppenderBase<ILoggingEvent> {
             return;
         }
 
+        if (isExcluded(event.getLoggerName())) {
+            return;
+        }
+
         sink.offer(MonitoringLogEventMapper.from(event));
+    }
+
+    /*
+     * root logger에 붙는 이상 프레임워크 내부 로그도 전부 지나간다. 여기서 거르는 건 "관리자가 볼
+     * 이유가 없는 것"뿐이고, 라이브러리라는 이유로 거르지는 않는다 — DB/Redis/Kafka 장애는 대부분
+     * 라이브러리 로거에서 나오기 때문이다(MonitoringProperties#excludedLoggers 참고).
+     */
+    private boolean isExcluded(String loggerName) {
+        if (loggerName == null || excludedLoggerPrefixes.isEmpty()) {
+            return false;
+        }
+
+        for (String prefix : excludedLoggerPrefixes) {
+            if (loggerName.startsWith(prefix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

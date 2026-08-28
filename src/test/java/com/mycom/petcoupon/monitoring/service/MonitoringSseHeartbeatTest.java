@@ -87,18 +87,24 @@ class MonitoringSseHeartbeatTest {
     }
 
     @Test
-    @DisplayName("스트림이 꺼져 있으면 heartbeat 없이 연결이 종료된다")
-    void doesNotHeartbeatWhenStreamDisabled() throws Exception {
+    @DisplayName("스트림이 꺼져 있어도 heartbeat는 계속 보내 연결을 유지한다")
+    void keepsHeartbeatingWhileStreamDisabled() throws Exception {
         startWith(Duration.ofMillis(100));
         service.setStreamEnabled(false);
 
         MvcResult stream = connect();
 
-        // heartbeat 주기 여러 번에 걸쳐 계속 나타나지 않아야 한다.
-        await().during(Duration.ofMillis(500))
-                .atMost(Duration.ofSeconds(2))
-                .untilAsserted(() -> assertThat(bodyOf(stream)).doesNotContain(HEARTBEAT_FRAME));
+        /*
+         * OFF여도 연결을 닫지 않으므로(재연결 폭주 방지) heartbeat도 계속 나가야 한다.
+         * 안 보내면 프록시가 유휴 연결로 보고 끊고, 그러면 결국 재연결이 다시 시작된다.
+         */
+        await().atMost(Duration.ofSeconds(3))
+                .untilAsserted(() -> assertThat(occurrences(bodyOf(stream), HEARTBEAT_FRAME))
+                        .isGreaterThanOrEqualTo(2));
+
+        // 꺼진 상태이므로 connected는 false로 알리고, 실제 이벤트는 나가지 않는다.
         assertThat(bodyOf(stream)).contains("event:connected");
+        assertThat(bodyOf(stream)).doesNotContain(MONITORING_FRAME);
     }
 
     private void startWith(Duration heartbeatInterval) {

@@ -103,12 +103,15 @@ public class MonitoringSseService implements MonitoringLogEventSink {
             throw new GeneralException(MonitoringErrorCode.TOO_MANY_STREAM_CONNECTIONS);
         }
 
+        /*
+         * 스트림이 꺼져 있어도 연결은 연다.
+         *
+         * 예전에는 connected(false)를 보내고 바로 닫았는데, EventSource 계열 클라이언트는 끊기면
+         * 기본 3초 간격으로 자동 재연결한다. 즉 설정을 꺼두는 내내 관리자 화면마다 3초에 한 번씩
+         * 이 엔드포인트를 두드리고, 그때마다 세션 검증(Redis 조회)까지 돌았다. 연결을 유지하면
+         * 재연결 자체가 사라지고, 설정을 다시 켤 때 재접속 없이 곧바로 이벤트가 흐른다.
+         */
         SseEmitter emitter = createEmitter();
-
-        if (!streamEnabled.get()) {
-            sendConnectedAndClose(emitter);
-            return emitter;
-        }
 
         Subscription subscription = new Subscription(emitter);
         emitter.onCompletion(subscription::close);
@@ -117,15 +120,6 @@ public class MonitoringSseService implements MonitoringLogEventSink {
 
         subscriptions.add(subscription);
         subscription.start();
-
-        /*
-         * add()와 OFF 전환이 겹치면 "이미 emitters를 순회해 닫은 뒤"에 등록되어 꺼진 상태인데
-         * 살아있는 연결이 남는다. 등록 후 한 번 더 확인하면 둘 중 하나는 반드시 닫는다 —
-         * 전환 쪽이 우리를 보거나(집합에 이미 있으므로), 우리가 꺼진 플래그를 보거나.
-         */
-        if (!streamEnabled.get()) {
-            subscription.close();
-        }
 
         return emitter;
     }
@@ -139,9 +133,15 @@ public class MonitoringSseService implements MonitoringLogEventSink {
             return;
         }
 
-        if (!enabled) {
-            subscriptions.forEach(Subscription::close);
-        }
+        /*
+         * 연결은 닫지 않는다(위 connect 주석 참고). 대신 두 가지를 한다.
+         *
+         * 1. 끄는 경우 큐에 남은 이벤트를 버린다. 다시 켰을 때 전환 이전 이벤트가 뒤늦게 나가면
+         *    관리자가 보는 시각과 실제 발생 시각이 어긋난다. 버린 뒤에도 offer가 끼어들 수 있어서
+         *    송신 직전에 한 번 더 streamEnabled를 확인한다(Subscription#run).
+         * 2. 바뀐 상태를 각 연결에 알린다. 다른 관리자가 끈 경우에도 화면이 최신 상태를 반영해야 한다.
+         */
+        subscriptions.forEach(subscription -> subscription.onStreamStateChanged(enabled));
     }
 
     @PreDestroy
@@ -156,18 +156,6 @@ public class MonitoringSseService implements MonitoringLogEventSink {
 
     int activeSubscriptionCount() {
         return subscriptions.size();
-    }
-
-    private void sendConnectedAndClose(SseEmitter emitter) {
-        try {
-            emitter.send(SseEmitter.event()
-                    .name(CONNECTED_EVENT)
-                    .data(new ConnectedResponse(false), MediaType.APPLICATION_JSON));
-        } catch (IOException | IllegalStateException ignored) {
-            // 연결 자체가 이미 끊긴 경우에도 monitoring 기능이 요청 처리에 영향을 주지 않는다.
-        } finally {
-            emitter.complete();
-        }
     }
 
     private long heartbeatIntervalMillis() {
@@ -187,6 +175,9 @@ public class MonitoringSseService implements MonitoringLogEventSink {
 
         // 이 연결이 놓친 건수. 다음 송신 기회에 클라이언트로 알리고 0으로 되돌린다.
         private final AtomicLong droppedSinceNotice = new AtomicLong();
+
+        // ON/OFF가 바뀌었다는 표시. 역시 다음 송신 기회에 알린다.
+        private final AtomicBoolean streamStateChanged = new AtomicBoolean();
 
         private volatile Thread sender;
 
@@ -210,13 +201,25 @@ public class MonitoringSseService implements MonitoringLogEventSink {
             }
         }
 
+        private void onStreamStateChanged(boolean enabled) {
+            if (!enabled) {
+                // 전환 이전 이벤트가 다시 켰을 때 뒤늦게 나가지 않도록 버린다.
+                queue.clear();
+                // 유실 통지도 의미가 없어졌다 — 어차피 못 보낼 이벤트였다.
+                droppedSinceNotice.set(0);
+            }
+
+            streamStateChanged.set(true);
+        }
+
         /*
          * 송신은 전부 이 스레드에서만 한다. SseEmitter는 동시 송신에 안전하지 않아서 heartbeat를
          * 별도 스케줄러로 보내면 이벤트 송신과 겹칠 때 SSE 프레임이 깨진다. take() 대신
          * poll(timeout)을 쓰면 스레드를 더 늘리지 않고도 "이 연결이 유휴하면 heartbeat"가 된다.
          */
         private void run() {
-            if (!send(CONNECTED_EVENT, new ConnectedResponse(true))) {
+            // 꺼져 있는 상태로 접속했으면 그 사실을 알려준다. 연결은 그대로 유지된다.
+            if (!send(CONNECTED_EVENT, new ConnectedResponse(streamEnabled.get()))) {
                 return;
             }
 
@@ -226,13 +229,26 @@ public class MonitoringSseService implements MonitoringLogEventSink {
                             ? queue.poll(heartbeatMillis, TimeUnit.MILLISECONDS)
                             : queue.take();
 
+                    if (!notifyStreamStateIfChanged()) {
+                        return;
+                    }
+
                     // 밀린 게 풀린 지금이 유실을 알릴 첫 기회다. 이벤트보다 먼저 보내야
                     // 화면에서 "여기서 N건이 빠졌다"는 순서가 맞는다.
                     if (!notifyDroppedIfAny()) {
                         return;
                     }
 
+                    /*
+                     * queue.clear()와 offer가 겹치면 전환 직후 이벤트가 큐에 남을 수 있다.
+                     * 송신 직전에 한 번 더 확인해서 꺼진 상태로는 내보내지 않는다.
+                     */
+                    if (event != null && !streamEnabled.get()) {
+                        continue;
+                    }
+
                     // poll 타임아웃이면 null이다 — 이 연결이 heartbeat 간격만큼 유휴했다는 뜻.
+                    // 꺼져 있어도 heartbeat는 계속 보내야 프록시가 연결을 끊지 않는다.
                     boolean delivered = event != null
                             ? send(MONITORING_EVENT, event)
                             : send(HEARTBEAT_EVENT, new HeartbeatResponse(LocalDateTime.now()));
@@ -245,6 +261,11 @@ public class MonitoringSseService implements MonitoringLogEventSink {
                     return;
                 }
             }
+        }
+
+        private boolean notifyStreamStateIfChanged() {
+            return !streamStateChanged.compareAndSet(true, false)
+                    || send(CONNECTED_EVENT, new ConnectedResponse(streamEnabled.get()));
         }
 
         private boolean notifyDroppedIfAny() {

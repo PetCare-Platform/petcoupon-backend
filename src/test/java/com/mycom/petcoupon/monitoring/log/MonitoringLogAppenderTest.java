@@ -23,7 +23,7 @@ class MonitoringLogAppenderTest {
 
     @BeforeEach
     void setUp() {
-        appender = new MonitoringLogAppender(sink);
+        appender = new MonitoringLogAppender(sink, List.of("org.springframework.context.support"));
         appender.start();
     }
 
@@ -40,6 +40,28 @@ class MonitoringLogAppenderTest {
         appender.doAppend(event(Level.ERROR, "password=very-secret"));
 
         assertThat(received).isEmpty();
+    }
+
+    @Test
+    @DisplayName("제외 목록에 걸린 로거는 올리지 않는다")
+    void skipsExcludedLoggers() {
+        // 기동 시점에만 나오고 관리자에겐 의미가 없는 잡음. 전체 스위트 WARN 1위였다.
+        appender.doAppend(event(Level.WARN, "not eligible for auto-proxying",
+                "org.springframework.context.support.PostProcessorRegistrationDelegate$BeanPostProcessorChecker"));
+
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    @DisplayName("제외 목록에 없으면 라이브러리 로거라도 올린다")
+    void keepsInfrastructureLoggers() {
+        // DB/Redis 장애는 대부분 라이브러리 로거에서 나온다 — 패키지가 남이라고 버리면 안 된다.
+        appender.doAppend(event(Level.ERROR, "connection pool exhausted", "org.hibernate.orm.jdbc.error"));
+        appender.doAppend(event(Level.WARN, "reconnect failed", "io.lettuce.core.protocol.ConnectionWatchdog"));
+
+        assertThat(received).hasSize(2);
+        assertThat(received).extracting(MonitoringEventResponse::source)
+                .containsExactly("error", "ConnectionWatchdog");
     }
 
     private static final class RecordingSink implements MonitoringLogEventSink {
@@ -82,9 +104,13 @@ class MonitoringLogAppenderTest {
     }
 
     private LoggingEvent event(Level level, String message) {
+        return event(level, message, "com.mycom.petcoupon.coupon.config.CouponStatusScheduler");
+    }
+
+    private LoggingEvent event(Level level, String message, String loggerName) {
         LoggingEvent event = new LoggingEvent();
         event.setLevel(level);
-        event.setLoggerName("com.mycom.petcoupon.coupon.config.CouponStatusScheduler");
+        event.setLoggerName(loggerName);
         event.setMessage(message);
         event.setTimeStamp(System.currentTimeMillis());
         return event;

@@ -34,17 +34,7 @@ public class GlobalExceptionHandler {
 
     	log.warn("[CustomException] {}", errorCode.getMessage());
 
-        /*
-         * Content-Type을 명시하지 않으면 Spring이 요청의 Accept 헤더로 협상을 시도한다. SSE
-         * 스트림(/admin/monitoring/stream)처럼 클라이언트가 Accept: text/event-stream을 보내는
-         * 경로에서는 JSON 본문을 쓸 수 있는 converter를 못 찾아 HttpMediaTypeNotAcceptableException이
-         * 나고, 그러면 ExceptionHandlerExceptionResolver가 원래 예외를 그대로 다시 던져 401 대신
-         * 500이 나간다. 오류 응답은 협상 대상이 아니므로 JSON으로 못박는다.
-         */
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(errorCode.getErrorResponse());
+        return jsonError(errorCode);
     }
 
     // @Valid 검증 예외 처리
@@ -70,9 +60,7 @@ public class GlobalExceptionHandler {
                 errors
         );
         
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorResponse);
+        return jsonError(errorCode, errorResponse);
     }
 
     // @PathVariable / @RequestParam 검증 예외 처리 (컨트롤러 클래스에 @Validated 필요)
@@ -83,9 +71,7 @@ public class GlobalExceptionHandler {
 
         log.warn("[ConstraintViolation] {}", ex.getMessage());
 
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+        return jsonError(errorCode);
     }
 
     // 필수 요청 헤더 누락 (예: 쿠폰 신청 API의 Idempotency-Key, 이슈 #16) — 없으면 400으로 응답
@@ -96,9 +82,7 @@ public class GlobalExceptionHandler {
 
         log.warn("[MissingHeader] {}", ex.getMessage());
 
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+        return jsonError(errorCode);
     }
 
     // 쿼리 파라미터·경로 변수 타입 변환 실패 (예: status=INVALID처럼 enum에 없는 값)
@@ -109,9 +93,7 @@ public class GlobalExceptionHandler {
 
         log.warn("[TypeMismatch] {}", ex.getMessage());
 
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+        return jsonError(errorCode);
     }
 
     // 잘못된 JSON 요청
@@ -120,9 +102,7 @@ public class GlobalExceptionHandler {
 
         BaseErrorCode errorCode = CommonErrorCode.INVALID_JSON;
 
-        return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+        return jsonError(errorCode);
     }
     
     // 지원하지 않는 HTTP 메서드
@@ -131,9 +111,7 @@ public class GlobalExceptionHandler {
 
     	BaseErrorCode errorCode = CommonErrorCode.METHOD_NOT_ALLOWED;
     	
-    	return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+    	return jsonError(errorCode);
     }
     
     // 매칭되는 핸들러가 없는 경로
@@ -149,9 +127,7 @@ public class GlobalExceptionHandler {
 
     	BaseErrorCode errorCode = CommonErrorCode.NOT_FOUND;
 
-    	return ResponseEntity
-                .status(errorCode.getStatus())
-                .body(errorCode.getErrorResponse());
+    	return jsonError(errorCode);
     }
 
     // 처리하지 않은 모든 예외 처리
@@ -166,9 +142,34 @@ public class GlobalExceptionHandler {
         		errorCode.getCode(),
         		errorCode.getMessage()
         );
-        
+
+        return jsonError(errorCode, errorResponse);
+    }
+
+    private ResponseEntity<CustomResponse<Void>> jsonError(BaseErrorCode errorCode) {
+        return jsonError(errorCode, errorCode.getErrorResponse());
+    }
+
+    /*
+     * 모든 오류 응답이 이 한 곳을 거친다. Content-Type을 여기서만 박아두려는 것이다.
+     *
+     * 명시하지 않으면 Spring이 요청의 Accept 헤더로 협상을 시도한다. 대부분의 클라이언트는 JSON을
+     * 받아들이니 문제가 없지만, SSE 스트림(/admin/monitoring/stream)을 부르는 fetch 기반 클라이언트는
+     * Accept: text/event-stream만 보낸다. 그러면 JSON 본문을 쓸 수 있는 converter를 찾지 못해
+     * HttpMediaTypeNotAcceptableException이 나고, ExceptionHandlerExceptionResolver는 그때
+     * 원래 예외를 그대로 다시 던진다 — 401/404/405가 전부 500으로 뭉개진다.
+     *
+     * 이건 GeneralException만의 문제가 아니다. 그 엔드포인트에 경로 오타(NoResourceFound),
+     * 잘못된 메서드(HttpRequestMethodNotSupported), 예기치 못한 예외(catch-all)가 나도 똑같이
+     * 재현된다. 특히 catch-all은 "무슨 일이 나든 깔끔한 JSON 500을 준다"는 안전망인데 같은 이유로
+     * 실패할 수 있어서, 핸들러 하나씩 고치는 대신 응답 생성 지점을 여기로 모았다.
+     *
+     * 오류 응답은 협상 대상이 아니다. 클라이언트가 뭘 받아들이든 서버는 무슨 일이 났는지 말해야 한다.
+     */
+    private <T> ResponseEntity<CustomResponse<T>> jsonError(BaseErrorCode errorCode, CustomResponse<T> body) {
         return ResponseEntity
                 .status(errorCode.getStatus())
-                .body(errorResponse);
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 }

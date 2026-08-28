@@ -74,30 +74,34 @@ class MonitoringSseServiceTest {
     }
 
     @Test
-    @DisplayName("스트림이 꺼져 있으면 connected(false)를 보내고 바로 종료한다")
-    void sendsConnectedFalseAndClosesWhenDisabled() {
+    @DisplayName("스트림이 꺼져 있어도 연결을 닫지 않고 connected(false)만 보낸다")
+    void keepsConnectionOpenWhenDisabled() {
         start(properties());
         service.setStreamEnabled(false);
 
         RecordingEmitter emitter = connect();
 
-        assertThat(emitter.names()).containsExactly(CONNECTED);
+        /*
+         * 닫으면 EventSource가 기본 3초 간격으로 재연결을 반복한다 — 꺼둔 내내 폭주한다.
+         * 연결을 유지해야 재연결 자체가 없어진다.
+         */
+        awaitConnected(emitter);
         assertThat(emitter.payloads()).anyMatch(payload -> payload.contains("streamEnabled=false"));
-        assertThat(emitter.isCompleted()).isTrue();
-        assertThat(service.activeSubscriptionCount()).isZero();
+        assertThat(emitter.isCompleted()).isFalse();
+        assertThat(service.activeSubscriptionCount()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("스트림을 끄면 기존 연결이 종료되고 이후 이벤트는 전달되지 않는다")
-    void closesExistingSubscriptionsWhenDisabled() {
+    @DisplayName("스트림을 꺼도 연결은 유지되고 이후 이벤트만 전달되지 않는다")
+    void keepsSubscriptionsButStopsEventsWhenDisabled() {
         start(properties());
         RecordingEmitter emitter = connect();
         awaitConnected(emitter);
 
         service.setStreamEnabled(false);
 
-        assertThat(emitter.isCompleted()).isTrue();
-        assertThat(service.activeSubscriptionCount()).isZero();
+        assertThat(emitter.isCompleted()).isFalse();
+        assertThat(service.activeSubscriptionCount()).isEqualTo(1);
 
         service.offer(event("전환 이후 이벤트"));
 
@@ -107,9 +111,46 @@ class MonitoringSseServiceTest {
     }
 
     @Test
-    @DisplayName("connect와 OFF 전환이 동시에 일어나도 살아있는 연결이 남지 않는다")
-    void leavesNoSubscriptionWhenConnectRacesWithDisable() throws Exception {
-        // 등록 시점과 전환 시점이 어느 쪽으로 엇갈리든 한쪽은 반드시 닫아야 한다.
+    @DisplayName("ON/OFF가 바뀌면 열려 있는 연결에 바뀐 상태를 알린다")
+    void notifiesOpenSubscriptionsWhenStreamStateChanges() {
+        MonitoringProperties properties = properties();
+        properties.setHeartbeatInterval(Duration.ofMillis(100));
+        start(properties);
+
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        // 다른 관리자가 껐을 때도 내 화면이 최신 상태를 반영해야 한다.
+        service.setStreamEnabled(false);
+
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                assertThat(emitter.payloads()).anyMatch(payload -> payload.contains("streamEnabled=false")));
+    }
+
+    @Test
+    @DisplayName("다시 켜면 재접속 없이 이벤트가 이어진다")
+    void resumesEventsAfterReEnableWithoutReconnect() {
+        start(properties());
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        service.setStreamEnabled(false);
+        service.offer(event("꺼진 동안 발생"));
+        service.setStreamEnabled(true);
+        service.offer(event("다시 켠 뒤 발생"));
+
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(emitter.names()).contains(MONITORING_EVENT));
+
+        // 꺼져 있던 동안의 이벤트가 뒤늦게 섞여 나오면 안 된다.
+        assertThat(emitter.payloads().stream().filter(p -> p.contains("발생")).toList())
+                .noneMatch(payload -> payload.contains("꺼진 동안 발생"));
+        assertThat(emitter.isCompleted()).isFalse();
+    }
+
+    @Test
+    @DisplayName("connect와 OFF 전환이 동시에 일어나도 꺼진 상태의 이벤트는 나가지 않는다")
+    void deliversNoEventsWhenConnectRacesWithDisable() throws Exception {
         for (int attempt = 0; attempt < 100; attempt++) {
             start(properties());
 
@@ -129,10 +170,15 @@ class MonitoringSseServiceTest {
             connector.join();
             toggler.join();
 
+            // 연결은 남아도 된다(이제 닫지 않는다). 꺼진 상태에서 이벤트가 새지 않는 게 핵심이다.
             assertThat(service.isStreamEnabled()).isFalse();
-            assertThat(service.activeSubscriptionCount())
-                    .as("시도 %d에서 꺼진 상태인데 연결이 남았다", attempt)
-                    .isZero();
+            service.offer(event("꺼진 상태 이벤트"));
+
+            for (RecordingEmitter emitter : created) {
+                assertThat(emitter.names())
+                        .as("시도 %d에서 꺼진 상태인데 이벤트가 나갔다", attempt)
+                        .doesNotContain(MONITORING_EVENT);
+            }
 
             tearDown();
         }

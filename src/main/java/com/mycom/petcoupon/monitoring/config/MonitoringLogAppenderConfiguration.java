@@ -20,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 public class MonitoringLogAppenderConfiguration {
 
     private final MonitoringSseService monitoringSseService;
+    private final MonitoringProperties properties;
 
     private MonitoringLogAppender appender;
     private Logger rootLogger;
@@ -29,7 +30,7 @@ public class MonitoringLogAppenderConfiguration {
         LoggerContext loggerContext = (LoggerContext) LoggerFactory.getILoggerFactory();
         rootLogger = loggerContext.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
 
-        appender = new MonitoringLogAppender(monitoringSseService);
+        appender = new MonitoringLogAppender(monitoringSseService, properties.getExcludedLoggers());
         appender.setName(MonitoringLogAppender.NAME);
         appender.setContext(loggerContext);
         appender.start();
