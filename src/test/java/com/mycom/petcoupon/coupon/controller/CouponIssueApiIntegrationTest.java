@@ -181,7 +181,6 @@ class CouponIssueApiIntegrationTest {
 			List<Long> couponIds = List.of(coupon.getCouponId(), secondCoupon.getCouponId());
 			couponIds.forEach(this::clearRedisStock);
 		}
-
 		@SuppressWarnings("unchecked")
 		List<Long> testUserIds = entityManager.createNativeQuery(
 				"SELECT user_id FROM app_user WHERE email LIKE 'issue-api-%@test.com'")
@@ -308,6 +307,58 @@ class CouponIssueApiIntegrationTest {
 						.content("{\"userId\":" + requester.getUserId() + "}"))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("COUPON404-0"));
+	}
+
+	@Test
+	void 오픈_전_쿠폰에_신청하면_400_COUPON_NOT_OPEN_YET을_반환한다() throws Exception {
+		Coupon notStartedCoupon = transactionTemplate.execute(txStatus -> {
+			Coupon c = Coupon.builder()
+					.event(event)
+					.name("오픈 전 쿠폰")
+					.discountType(DiscountType.FIXED_AMOUNT)
+					.discountValue(1_000)
+					.minOrderAmount(5_000)
+					.issueStartAt(LocalDateTime.now().plusDays(1))
+					.issueEndAt(LocalDateTime.now().plusDays(2))
+					.validDays(7)
+					.build();
+			entityManager.persist(c);
+			entityManager.flush();
+			return c;
+		});
+
+		mockMvc.perform(post("/coupons/{couponId}/issues", notStartedCoupon.getCouponId())
+						.header(IDEMPOTENCY_HEADER, "tc-not-open-" + UUID.randomUUID())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userId\":" + requester.getUserId() + "}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("COUPON400-13"));
+	}
+
+	@Test
+	void 발급_종료된_쿠폰에_신청하면_400_COUPON_ISSUE_EXPIRED를_반환한다() throws Exception {
+		Coupon expiredCoupon = transactionTemplate.execute(txStatus -> {
+			Coupon c = Coupon.builder()
+					.event(event)
+					.name("종료된 쿠폰")
+					.discountType(DiscountType.FIXED_AMOUNT)
+					.discountValue(1_000)
+					.minOrderAmount(5_000)
+					.issueStartAt(LocalDateTime.now().minusDays(2))
+					.issueEndAt(LocalDateTime.now().minusDays(1))
+					.validDays(7)
+					.build();
+			entityManager.persist(c);
+			entityManager.flush();
+			return c;
+		});
+
+		mockMvc.perform(post("/coupons/{couponId}/issues", expiredCoupon.getCouponId())
+						.header(IDEMPOTENCY_HEADER, "tc-expired-" + UUID.randomUUID())
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userId\":" + requester.getUserId() + "}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("COUPON400-14"));
 	}
 
 	// TC-33: 존재하지 않는 발급 건 조회
