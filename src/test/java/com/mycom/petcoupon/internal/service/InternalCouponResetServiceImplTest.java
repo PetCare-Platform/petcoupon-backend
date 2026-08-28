@@ -114,8 +114,8 @@ class InternalCouponResetServiceImplTest {
 				.createdBy(user)
 				.name("초기화 테스트 이벤트")
 				.description("reset")
-				.openAt(LocalDateTime.of(2026, 8, 20, 9, 0))
-				.closeAt(LocalDateTime.of(2026, 8, 31, 23, 59))
+				.openAt(LocalDateTime.now().minusDays(1))
+				.closeAt(LocalDateTime.now().plusDays(7))
 				.build();
 		entityManager.persist(event);
 
@@ -125,8 +125,8 @@ class InternalCouponResetServiceImplTest {
 				.discountType(DiscountType.FIXED_AMOUNT)
 				.discountValue(5_000)
 				.minOrderAmount(10_000)
-				.issueStartAt(LocalDateTime.of(2026, 8, 20, 9, 0))
-				.issueEndAt(LocalDateTime.of(2026, 8, 31, 23, 59))
+				.issueStartAt(LocalDateTime.now().minusDays(1))
+				.issueEndAt(LocalDateTime.now().plusDays(7))
 				.validDays(7)
 				.build();
 		entityManager.persist(coupon);
@@ -446,7 +446,7 @@ class InternalCouponResetServiceImplTest {
 					.sequenceNo(i)
 					.couponCode("RESET-TEST-CODE-" + i)
 					.requestId("reset-test-request-" + i)
-					.expiresAt(LocalDateTime.of(2026, 9, 30, 23, 59))
+					.expiresAt(LocalDateTime.now().plusDays(30))
 					.build();
 			entityManager.persist(issue);
 
@@ -464,7 +464,7 @@ class InternalCouponResetServiceImplTest {
 					.coupon(coupon)
 					.idempotencyKey("reset-test-key-" + i)
 					.requestHash("hash-" + i)
-					.expiresAt(LocalDateTime.of(2026, 9, 30, 23, 59))
+					.expiresAt(LocalDateTime.now().plusDays(30))
 					.build());
 		}
 		entityManager.flush();
