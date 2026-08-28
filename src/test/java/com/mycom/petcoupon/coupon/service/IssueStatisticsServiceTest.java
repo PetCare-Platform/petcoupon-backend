@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
@@ -103,6 +104,19 @@ class IssueStatisticsServiceTest {
         IssueStatisticsResponse response = issueStatisticsService.getStatistics();
 
         assertThat(response.distribution()).containsExactly(distributionResponse);
+    }
+
+    @Test
+    void getStatistics는_캐시_TTL_안에서는_상태분포_전체_집계를_한번만_수행한다() {
+        when(issueMessageRepository.findThroughputByHour(any(), any())).thenReturn(List.of());
+        when(issueMessageRepository.countGroupedByStatus()).thenReturn(List.of());
+
+        issueStatisticsService.getStatistics();
+        issueStatisticsService.getStatistics();
+
+        verify(issueMessageRepository, times(1)).countGroupedByStatus();
+        // 시간대별 추이는 캐시 대상이 아니므로 호출마다 최신 24시간 범위를 다시 읽는다.
+        verify(issueMessageRepository, times(2)).findThroughputByHour(any(), any());
     }
 
     // [PR 리뷰 반영] GROUP BY 쿼리 특성상 요청이 0건인 시간대는 결과에서 통째로 빠진다.

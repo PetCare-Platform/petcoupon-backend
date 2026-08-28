@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -9,11 +11,13 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.converter.IssueStatisticsConverter;
 import com.mycom.petcoupon.coupon.dto.res.IssueStatisticsResponse;
+import com.mycom.petcoupon.coupon.dto.res.IssueStatusDistributionResponse;
 import com.mycom.petcoupon.coupon.dto.res.IssueThroughputBucketResponse;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -42,6 +46,13 @@ public class IssueStatisticsService {
     private final IssueMessageRepository issueMessageRepository;
     private final IssueStatisticsConverter issueStatisticsConverter;
 
+    // 전체 issue_message를 GROUP BY 하는 상태 분포만 짧게 캐시한다. 시간대별 추이는 매 요청마다
+    // 최신 24시간 범위로 계산해야 하므로 캐시하지 않는다. 운영 환경에서는 30~60초 범위로 둔다.
+    @Value("${coupon.issue.statistics.distribution-cache-ttl:PT30S}")
+    private Duration distributionCacheTtl = Duration.ofSeconds(30);
+
+    private volatile CachedDistribution cachedDistribution;
+
     public IssueStatisticsResponse getStatistics() {
         // [PR 리뷰 반영] now()를 그대로 24시간 빼면 정각에 안 맞아서 맨 앞 버킷이 부분치만
         // 담긴다(예: 21:30에 조회하면 첫 버킷은 21:30~22:00 30분치뿐인데, 나머지는 온전한
@@ -55,13 +66,32 @@ public class IssueStatisticsService {
 
         return IssueStatisticsResponse.builder()
                 .timeSeries(buildTimeSeries(from))
-                .distribution(issueMessageRepository.countGroupedByStatus().stream()
-                        .map(issueStatisticsConverter::toDistributionResponse)
-                        .toList())
+                .distribution(getCachedStatusDistribution())
                 .build();
     }
 
-    // [PR 리뷰 반영] GROUP BY 쿼리 특성상 발급 요청이 0건인 시간대는 결과에서 통째로 빠진다.
+    private List<IssueStatusDistributionResponse> getCachedStatusDistribution() {
+        Instant now = Instant.now();
+        CachedDistribution cached = cachedDistribution;
+        if (cached != null && now.isBefore(cached.expiresAt())) {
+            return cached.distribution();
+        }
+
+        synchronized (this) {
+            cached = cachedDistribution;
+            if (cached != null && now.isBefore(cached.expiresAt())) {
+                return cached.distribution();
+            }
+
+            List<IssueStatusDistributionResponse> distribution = issueMessageRepository
+                    .countGroupedByStatus().stream()
+                    .map(issueStatisticsConverter::toDistributionResponse)
+                    .toList();
+            cachedDistribution = new CachedDistribution(distribution, now.plus(distributionCacheTtl));
+            return distribution;
+        }
+    }
+
     // 프론트가 24개 연속 배열을 기대하고 그리는 차트(막대·라인)라면 빈 시간대가 사라진 채로
     // 넘어가면 x축 간격이 어긋난다 — 그래서 여기서 정각 단위 24슬롯을 전부 만들고, 쿼리
     // 결과가 있는 슬롯만 채운 뒤 나머지는 0건으로 채워 넣는다(zero-filling).
@@ -91,5 +121,11 @@ public class IssueStatisticsService {
                 .failedCount(0L)
                 .inProgressCount(0L)
                 .build();
+    }
+
+    private record CachedDistribution(
+            List<IssueStatusDistributionResponse> distribution,
+            Instant expiresAt
+    ) {
     }
 }
