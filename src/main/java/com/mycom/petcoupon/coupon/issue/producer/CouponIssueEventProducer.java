@@ -126,16 +126,37 @@ public class CouponIssueEventProducer {
 	// CouponIssueDlqAdminController의 abandon API로 "포기"를 명시적으로 선택했을 때만 실행된다.
 
 	private String errorMessage(Throwable throwable) {
-	    String message = throwable.getMessage();
+		if (throwable == null) {
+			return "Unknown error";
+		}
 
-	    if (message == null || message.isBlank()) {
-	        message = throwable.getClass().getSimpleName();
-	    }
+		Throwable rootCause = throwable;
+		while (rootCause.getCause() != null && rootCause.getCause() != rootCause) {
+			rootCause = rootCause.getCause();
+		}
 
-	    if (message.length() <= LAST_ERROR_MAX_LENGTH) {
-	        return message;
-	    }
+		String topMessage = throwable.getMessage();
+		String rootMessage = rootCause.getMessage();
 
-	    return message.substring(0, LAST_ERROR_MAX_LENGTH);
+		String result;
+		if (rootCause == throwable || rootMessage == null || rootMessage.isBlank()) {
+			result = (topMessage != null && !topMessage.isBlank())
+					? topMessage
+					: throwable.getClass().getSimpleName();
+		} else if (topMessage == null || topMessage.isBlank() || topMessage.equals(rootMessage)) {
+			result = String.format("%s: %s", rootCause.getClass().getSimpleName(), rootMessage);
+		} else {
+			result = String.format("%s: %s (Caused by: %s: %s)",
+					throwable.getClass().getSimpleName(),
+					topMessage,
+					rootCause.getClass().getSimpleName(),
+					rootMessage);
+		}
+
+		if (result.length() <= LAST_ERROR_MAX_LENGTH) {
+			return result;
+		}
+
+		return result.substring(0, LAST_ERROR_MAX_LENGTH);
 	}
 }
