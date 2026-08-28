@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -107,13 +108,24 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// coupon은 LAZY라 findAllByUserIdOrderByCreatedAtDesc와 같은 이유로 JOIN FETCH를 붙임.
 	// (컨버터가 couponId만 읽어서 실측해보니 이 케이스는 지연로딩이어도 추가 쿼리/예외가 없었지만,
 	// 나중에 컨버터가 coupon의 다른 필드를 읽게 되면 그때는 N+1/예외가 실제로 날 수 있어 방어적으로 유지)
-	@Query("""
+	//
+	// [PR 리뷰 반영] 실패 큐 목록 페이지네이션(#174) — 프론트가 전체 건수를 알아야 페이지 버튼을
+	// 그릴 수 있어서 List 대신 Page를 반환한다. countQuery를 명시하는 이유는
+	// CouponRepository.findCouponPage()와 같다 — Spring Data가 SELECT 쿼리에서 count 쿼리를
+	// 자동으로 유도하게 두면 JOIN FETCH가 낀 쿼리에서 실패할 수 있어서, 직접 짠 count 쿼리를 쓴다.
+	// JOIN FETCH는 count 쿼리에 안 옮긴다 — 개수만 세면 되고, count(im)엔 fetch join이 의미 없다
+	// (오히려 JPA 스펙상 스칼라/집계 셀렉트에 fetch join을 못 쓴다).
+	@Query(value = """
 			SELECT im FROM IssueMessage im
 			JOIN FETCH im.coupon
 			WHERE im.status = :status
 			ORDER BY im.createdAt ASC
+			""",
+			countQuery = """
+			SELECT count(im) FROM IssueMessage im
+			WHERE im.status = :status
 			""")
-	List<IssueMessage> findByStatus(@Param("status") IssueMessageStatus status, Pageable pageable);
+	Page<IssueMessage> findByStatus(@Param("status") IssueMessageStatus status, Pageable pageable);
 
 	// 관리자가 동시에(또는 중복 클릭으로) 같은 메시지를 재처리 요청해도 한 번만 Kafka로 재발행되도록,
 	// retryCount를 낙관적 락처럼 사용해 선점함 — status는 DLQ로 그대로 둬서 Outbox 발행 poller
