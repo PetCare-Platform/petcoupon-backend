@@ -13,12 +13,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mycom.petcoupon.coupon.converter.CouponConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -34,6 +38,9 @@ class CouponRealtimeStatusServiceImplTest {
 
     @Mock
     private CouponIssueLuaService couponIssueLuaService;
+
+    @Mock
+    private CouponIssuePipelineDrainChecker pipelineDrainChecker;
 
     @Mock
     private CouponConverter couponConverter;
@@ -138,5 +145,37 @@ class CouponRealtimeStatusServiceImplTest {
         CouponRealtimeStatusResponse response = couponRealtimeStatusService.getRealtimeStatus(1L);
 
         assertThat(response).isEqualTo(expected);
+    }
+
+    @Test
+    void getPipelineDrainStatus_returnsResponse_whenCouponExists() {
+        Coupon coupon = Coupon.builder().build();
+        PipelineDrainStatus drainStatus = new PipelineDrainStatus(0L, 0L, 0L, false);
+        CouponPipelineDrainStatusResponse expected = CouponPipelineDrainStatusResponse.builder()
+                .couponStatus(CouponStatus.ENDED)
+                .blocked(false)
+                .outboxUnconsumed(0L)
+                .streamUndelivered(0L)
+                .streamActivePending(0L)
+                .checkFailed(false)
+                .build();
+
+        when(couponRepository.findById(1L)).thenReturn(Optional.of(coupon));
+        when(pipelineDrainChecker.check(1L)).thenReturn(drainStatus);
+        when(couponConverter.toPipelineDrainStatusResponse(coupon, drainStatus)).thenReturn(expected);
+
+        CouponPipelineDrainStatusResponse response = couponRealtimeStatusService.getPipelineDrainStatus(1L);
+
+        assertThat(response).isEqualTo(expected);
+    }
+
+    @Test
+    void getPipelineDrainStatus_throwsException_whenCouponNotFound() {
+        when(couponRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> couponRealtimeStatusService.getPipelineDrainStatus(999L))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.COUPON_NOT_FOUND);
     }
 }

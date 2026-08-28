@@ -4,12 +4,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.coupon.converter.CouponConverter;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
 import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssuePipelineDrainChecker;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
 import com.mycom.petcoupon.global.common.exception.GeneralException;
@@ -23,6 +26,7 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
     private final CouponRepository couponRepository;
     private final CouponStockRepository couponStockRepository;
     private final CouponIssueLuaService couponIssueLuaService;
+    private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
     private final CouponConverter couponConverter;
 
     @Override
@@ -43,6 +47,17 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
         validateRealtimeStock(realtimeStock, couponStock.getTotalQuantity());
 
         return couponConverter.toRealtimeStatusResponse(coupon, couponStock, realtimeStock);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CouponPipelineDrainStatusResponse getPipelineDrainStatus(Long couponId) {
+        Coupon coupon = couponRepository.findById(couponId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        PipelineDrainStatus drainStatus = pipelineDrainChecker.check(couponId);
+
+        return couponConverter.toPipelineDrainStatusResponse(coupon, drainStatus);
     }
 
     // Redis 값이 정상적인 Lua 실행 경로로만 바뀐다면 항상 0 <= remainingStock <= totalQuantity지만,

@@ -7,11 +7,13 @@ import org.springframework.stereotype.Component;
 import com.mycom.petcoupon.coupon.dto.req.CouponCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponCreateResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponListResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponUpdateResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.service.PipelineDrainStatus;
 import com.mycom.petcoupon.event.entity.Event;
 
 @Component
@@ -129,5 +131,17 @@ public class CouponConverter {
 		}
 
 		return couponUpdatedAt.isAfter(stockUpdatedAt) ? couponUpdatedAt : stockUpdatedAt;
+	}
+
+	public CouponPipelineDrainStatusResponse toPipelineDrainStatusResponse(
+			Coupon coupon, PipelineDrainStatus drainStatus) {
+		return CouponPipelineDrainStatusResponse.builder()
+				.couponStatus(coupon.getStatus())
+				.blocked(drainStatus.isBlocked())
+				.outboxUnconsumed(drainStatus.outboxUnconsumed())
+				.streamUndelivered(drainStatus.streamUndelivered())
+				.streamActivePending(drainStatus.streamActivePending())
+				.checkFailed(drainStatus.checkFailed())
+				.build();
 	}
 }

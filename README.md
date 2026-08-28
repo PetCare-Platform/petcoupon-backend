@@ -183,6 +183,7 @@ curl -s -X DELETE localhost:8080/admin/auth/sessions -H "X-ADMIN-KEY: {발급받
 | `PATCH` | `/admin/events/{eventId}/coupons/{couponId}` | 쿠폰 수정 (발급 시작 전에만) |
 | `GET` | `/admin/coupons` | 쿠폰 목록 — 페이지 단위. 선택 필터 `eventId`·`status`, 미지정 시 전체. 재고는 DB(`coupon_stock`) 확정값 |
 | `GET` | `/admin/coupons/{couponId}/status` | 쿠폰 실시간 현황 — 잔여 재고는 Redis 기준 |
+| `GET` | `/admin/coupons/{couponId}/pipeline-drain-status` | 파이프라인 소진 상태 조회 — 쿠폰 상태 및 파이프라인 잔여(Outbox/Stream) 소진 여부. `streamUndelivered`는 정확한 건수가 아니라 미배달 존재 여부를 나타내며, 0 또는 1로 반환된다 |
 | `GET` | `/admin/coupon-issue/dlq` | DLQ 메시지 목록 |
 | `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | DLQ 수동 재발행 |
 | `POST` | `/admin/coupons/{couponId}/reconcile` | 정합성 검증 배치 실행 |
