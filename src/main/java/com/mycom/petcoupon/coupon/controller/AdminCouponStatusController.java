@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.service.CouponRealtimeStatusService;
 import com.mycom.petcoupon.global.common.CustomResponse;
@@ -26,6 +27,15 @@ public class AdminCouponStatusController {
             @PathVariable("couponId") @Positive Long couponId
     ) {
         CouponRealtimeStatusResponse response = couponRealtimeStatusService.getRealtimeStatus(couponId);
+
+        return CustomResponse.onSuccess(response);
+    }
+
+    @GetMapping("/{couponId}/pipeline-drain-status")
+    public CustomResponse<CouponPipelineDrainStatusResponse> getPipelineDrainStatus(
+            @PathVariable("couponId") @Positive Long couponId
+    ) {
+        CouponPipelineDrainStatusResponse response = couponRealtimeStatusService.getPipelineDrainStatus(couponId);
 
         return CustomResponse.onSuccess(response);
     }
