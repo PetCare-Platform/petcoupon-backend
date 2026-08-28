@@ -107,12 +107,19 @@ mysql_exec() {
 }
 
 # GNU date 기준. Git Bash·리눅스 모두 동작한다.
+#
+# 이 시각은 스크립트를 돌리는 쪽의 로컬 시간대로 계산되고, API 는 오프셋 없는
+# LocalDateTime 을 받는다. 즉 앱 JVM 이 다른 시간대면 그만큼 통째로 밀린다.
+# (로컬 KST 에서 UTC 로 뜬 EC2 앱을 BASE_URL 로 때리면 "3분 뒤"가 9시간 3분 뒤가 된다.)
+# 그래서 아래 출력에 시간대를 같이 찍는다 — 앱 로그의 시각과 다르면 그게 신호다.
+# %Z 는 Windows Git Bash 에서 빈 문자열이라 오프셋(%z)을 쓴다.
+LOCAL_TZ="UTC$(date +%z)"
 OPEN_AT="$(date -d "+$OPEN_DELAY_MIN minutes" +"%Y-%m-%dT%H:%M:%S")"
 CLOSE_AT="$(date -d "+$CLOSE_AFTER_DAY days" +"%Y-%m-%dT%H:%M:%S")"
 
 echo "대상       $BASE_URL"
-echo "발급 시작  $OPEN_AT  (${OPEN_DELAY_MIN}분 뒤)"
-echo "발급 종료  $CLOSE_AT"
+echo "발급 시작  $OPEN_AT $LOCAL_TZ  (${OPEN_DELAY_MIN}분 뒤)"
+echo "발급 종료  $CLOSE_AT $LOCAL_TZ"
 echo
 
 RES="$(send_json POST "$BASE_URL/admin/auth/sessions" "{\"authCode\": \"$ADMIN_AUTH_CODE\"}")"
