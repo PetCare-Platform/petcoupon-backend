@@ -34,7 +34,13 @@ import com.mycom.petcoupon.idempotency.service.IdempotencyDecision;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
 import com.mycom.petcoupon.user.repository.AppUserRepository;
 
+import java.time.LocalDateTime;
+import java.util.Optional;
+
 import tools.jackson.databind.ObjectMapper;
+
+import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.enums.DiscountType;
 
 /**
  * PetCouponApplication에 붙은 @EnableJpaAuditing 때문에 @WebMvcTest가 JPA까지 끌고 들어와 실패한다.
@@ -132,7 +138,16 @@ class CouponControllerTest {
         couponRealtimeStatusService = webCtx.getBean(CouponRealtimeStatusService.class);
         mockMvc = MockMvcBuilders.webAppContextSetup(webCtx).build();
 
-        when(couponRepository.existsById(any())).thenReturn(true);
+        Coupon defaultCoupon = Coupon.builder()
+                .name("테스트 쿠폰")
+                .discountType(DiscountType.FIXED_AMOUNT)
+                .discountValue(1000)
+                .minOrderAmount(5000)
+                .issueStartAt(LocalDateTime.now().minusDays(1))
+                .issueEndAt(LocalDateTime.now().plusDays(1))
+                .validDays(7)
+                .build();
+        when(couponRepository.findById(any())).thenReturn(Optional.of(defaultCoupon));
         when(appUserRepository.existsById(any())).thenReturn(true);
         when(idempotencyKeyService.begin(any(), any(), any())).thenReturn(IdempotencyDecision.proceed(1L));
     }
@@ -193,7 +208,7 @@ class CouponControllerTest {
 
     @Test
     void 존재하지_않는_쿠폰이면_멱등성_레코드_생성_전에_404를_반환한다() throws Exception {
-        when(couponRepository.existsById(5L)).thenReturn(false);
+        when(couponRepository.findById(5L)).thenReturn(Optional.empty());
 
         mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
                         .header(IDEMPOTENCY_HEADER, KEY)
@@ -201,6 +216,52 @@ class CouponControllerTest {
                         .content("{\"userId\":1}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COUPON404-0"));
+
+        org.mockito.Mockito.verifyNoInteractions(idempotencyKeyService);
+    }
+
+    @Test
+    void 오픈_전_쿠폰이면_멱등성_레코드_생성_전에_400을_반환한다() throws Exception {
+        Coupon notStartedCoupon = Coupon.builder()
+                .name("오픈 전 쿠폰")
+                .discountType(DiscountType.FIXED_AMOUNT)
+                .discountValue(1000)
+                .minOrderAmount(5000)
+                .issueStartAt(LocalDateTime.now().plusDays(1))
+                .issueEndAt(LocalDateTime.now().plusDays(2))
+                .validDays(7)
+                .build();
+        when(couponRepository.findById(5L)).thenReturn(Optional.of(notStartedCoupon));
+
+        mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
+                        .header(IDEMPOTENCY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COUPON400-13"));
+
+        org.mockito.Mockito.verifyNoInteractions(idempotencyKeyService);
+    }
+
+    @Test
+    void 발급_종료된_쿠폰이면_멱등성_레코드_생성_전에_400을_반환한다() throws Exception {
+        Coupon expiredCoupon = Coupon.builder()
+                .name("종료된 쿠폰")
+                .discountType(DiscountType.FIXED_AMOUNT)
+                .discountValue(1000)
+                .minOrderAmount(5000)
+                .issueStartAt(LocalDateTime.now().minusDays(2))
+                .issueEndAt(LocalDateTime.now().minusDays(1))
+                .validDays(7)
+                .build();
+        when(couponRepository.findById(5L)).thenReturn(Optional.of(expiredCoupon));
+
+        mockMvc.perform(post("/coupons/{couponId}/issues", 5L)
+                        .header(IDEMPOTENCY_HEADER, KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COUPON400-14"));
 
         org.mockito.Mockito.verifyNoInteractions(idempotencyKeyService);
     }

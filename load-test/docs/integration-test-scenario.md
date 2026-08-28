@@ -121,7 +121,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 | TC-11 | 쿠폰 사용 | `POST /coupon-issues/{id}/use` | 200, USED, 이력에 ISSUED→USED 1건 | 박신형 |
 | TC-12 | 사용 취소 | `POST /coupon-issues/{id}/cancel` | 200, ISSUED 복귀, 이력에 USED→ISSUED 1건 | 박신형 |
 | TC-13 | 신청 결과 폴링 — 접수 완료·확정 전 | TC-07 직후 `GET /users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 접수 응답이 그대로 재현된다 (**202 · `WAITING`**). 본처리를 다시 태우지 않음 | 이성집 |
-| TC-14 | 신청 결과 폴링 — 확정 후 | TC-13을 확정될 때까지 반복 | **200** + 최종 발급 정보(`couponIssueId`·`sequenceNo`)가 반환된다 | 이성집 |
+| TC-14 | 신청 결과 폴링 — 확정 후 | TC-13을 확정될 때까지 반복 | **200** + 최종 발급 정보(`couponIssueId`·`sequenceNo`·`status="ISSUED"`)가 반환된다 | 이성집 |
 | TC-15 | 신청 결과 폴링 — 없는 키 | 발급한 적 없는 `idempotencyKey`로 조회 | 404 `COUPON404-2` | 이성집 |
 | TC-16 | 실시간 요청 현황 조회 | `GET /coupons/{couponId}/status` (재고 10, 3건 확정 후) | 200, `totalQuantity=10` · `issuedQuantity=3` · `remainingQuantity=7` · `initialized=true` | 이성집 |
 | TC-17 | 실시간 현황 — 재고 미초기화 | Redis 재고 키가 없는 쿠폰으로 조회 | 200, `initialized=false` · `issuedQuantity=0` · **`remainingQuantity=totalQuantity`** | 이성집 |
@@ -130,7 +130,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 >
 > **`IN_PROGRESS`는 TC-13에서 관찰되지 않는다.** `findStatus()`가 `IN_PROGRESS`를 돌려주는 건 원본 POST 트랜잭션이 아직 안 끝나 응답이 저장되기 전인 구간뿐인데, TC-07이 응답을 받은 시점엔 이미 접수 응답(202 · `WAITING`)이 저장돼 있다. 이 구간을 보려면 POST와 폴링을 **동시에** 쏘거나 처리 지연을 만들어야 해서, 별도 시나리오로 다룬다.
 >
-> **확정 후 응답의 `status` 필드는 API 계약을 확정해야 한다.** 지금은 `null`로 나간다. `ISSUED`를 내려줄지 정하고 그에 맞춰 TC-14 기대값을 확정한다.
+> **확정 후 응답의 `status` 필드는 `ISSUED`로 계약이 확정되었다.** (접수 시 `WAITING` → 확정 시 `ISSUED`로 전이)
 >
 > TC-17이 중요한 이유는 `initialized`를 안 보면 **"재고 준비가 안 된 상태"를 정상 재고로 오인하기 때문**이다. 미초기화일 때 `CouponConverter`가 잔여를 DB 총재고로 채워 내보내므로(`remainingQuantity = totalQuantity`), 화면만 보면 발급 가능해 보이지만 실제로는 Lua가 `STOCK_NOT_INITIALIZED`로 전건 막는다.
 

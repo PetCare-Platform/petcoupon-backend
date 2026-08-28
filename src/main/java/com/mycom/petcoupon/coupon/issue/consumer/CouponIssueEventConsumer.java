@@ -64,10 +64,10 @@ public class CouponIssueEventConsumer {
 					event.requestId(), notificationException
 				);
 			}
-		} catch (DataIntegrityViolationException e) {
-			Optional<CouponIssue> racedByOtherConsumer = couponIssueRepository.findByRequestId(event.requestId());
+		} catch (DataIntegrityViolationException | org.springframework.dao.ConcurrencyFailureException e) {
+			Optional<CouponIssue> racedByOtherConsumer = findWithRetry(event.requestId());
 			if (racedByOtherConsumer.isPresent()) {
-				// 이 requestId로 이미 저장이 끝난 상태 (재전달) — 재고는 정상 소진된 것이므로 보상하지 않음
+				// 이 requestId로 이미 저장이 끝난 상태 (재전달/동시 경합) — 재고는 정상 소진된 것이므로 보상하지 않음
 				log.warn(
 					"[CouponIssueEvent] 재전달로 인한 저장 스킵 (이미 처리된 것으로 확인): requestId={}",
 					event.requestId(), e
@@ -84,5 +84,21 @@ public class CouponIssueEventConsumer {
 			}
 		}
 		// 그 외 예외는 그대로 던져서 DefaultErrorHandler의 재시도(FixedBackOff) 대상이 되도록 함
+	}
+
+	private Optional<CouponIssue> findWithRetry(String requestId) {
+		for (int i = 0; i < 5; i++) {
+			Optional<CouponIssue> found = couponIssueRepository.findByRequestId(requestId);
+			if (found.isPresent()) {
+				return found;
+			}
+			try {
+				Thread.sleep(50);
+			} catch (InterruptedException ie) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+		}
+		return couponIssueRepository.findByRequestId(requestId);
 	}
 }

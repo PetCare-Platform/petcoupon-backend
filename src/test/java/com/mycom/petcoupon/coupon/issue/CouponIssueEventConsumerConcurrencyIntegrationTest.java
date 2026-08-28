@@ -176,7 +176,8 @@ class CouponIssueEventConsumerConcurrencyIntegrationTest {
 	private CouponIssueEvent newEvent(String requestId, long sequenceNo, Long userId) {
 		return new CouponIssueEvent(
 			couponId, userId, requestId, sequenceNo,
-			"CODE-" + sequenceNo, LocalDateTime.now().plusDays(7)
+			"C" + sequenceNo + "-" + UUID.randomUUID().toString().substring(0, 8),
+			LocalDateTime.now().plusDays(7)
 		);
 	}
 

@@ -25,13 +25,18 @@ public class CouponIssueConverter {
                 .build();
     }
 
-    // 비동기 파이프라인에서 발급이 실제로 DB에 확정된 뒤 쓰는 변환 — couponIssueId·sequenceNo까지 채워서 돌려준다.
+    // 비동기 파이프라인에서 발급이 실제로 DB에 확정된 뒤 쓰는 변환 — couponIssueId·sequenceNo, status까지 채워서 돌려준다.
     public CouponIssueCreateResponse toCreateResponse(CouponIssue couponIssue) {
+        if (couponIssue.getStatus() == null) {
+            throw new IllegalStateException("쿠폰 발급 상태(status)는 필수입니다. couponIssueId=" + couponIssue.getCouponIssueId());
+        }
+
         return CouponIssueCreateResponse.builder()
                 .couponIssueId(couponIssue.getCouponIssueId())
                 .couponId(couponIssue.getCoupon().getCouponId())
                 .userId(couponIssue.getUser().getUserId())
                 .sequenceNo(couponIssue.getSequenceNo())
+                .status(couponIssue.getStatus().name())
                 .build();
     }
 

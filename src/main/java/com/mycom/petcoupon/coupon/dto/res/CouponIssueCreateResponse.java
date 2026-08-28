@@ -3,11 +3,11 @@ package com.mycom.petcoupon.coupon.dto.res;
 import lombok.Builder;
 
 /**
- * 신청 성공 응답 DTO.
- * 발급 신청이 Stream에 발행되기까지만 성공한 시점이라, 실제 CouponIssue 저장(비동기 Consumer)은
- * 아직 안 끝난 상태 — status는 항상 "WAITING"이다.
- * couponIssueId·sequenceNo는 비동기 파이프라인(Kafka Consumer가 CouponIssue를 실제로 저장한 뒤)에서만
- * 채워진다 — 순번은 Lua가 재고를 선점하는 순간(비동기)에 정해지므로 접수 시점엔 알 수 없다.
+ * 신청 응답 및 확정 응답 DTO.
+ * 1. 접수 시점: 발급 신청이 Stream에 발행되기까지만 성공한 시점이라 status는 "WAITING",
+ *    couponIssueId·sequenceNo는 null이다.
+ * 2. 확정 시점(폴링 결과): 비동기 Consumer/Persister가 DB 저장을 완료한 뒤 status는 "ISSUED",
+ *    couponIssueId·sequenceNo가 채워진다.
  */
 @Builder
 public record CouponIssueCreateResponse(

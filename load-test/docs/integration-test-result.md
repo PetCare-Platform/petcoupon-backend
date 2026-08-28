@@ -213,24 +213,15 @@ POST /internal/coupons/{couponId}/reset   {"totalQuantity": N}
 
 **다만 `idempotency_key.coupon_issue_id` 컬럼은 여전히 `NULL` 이다.** 응답 본문에는 발급 정보가 들어가므로 조회·폴링에는 지장이 없지만, 멱등키에서 발급 건을 역참조하는 용도로는 못 쓴다.
 
-### ⚠️ TC-14 — 확정 후 응답의 `status` 가 `null` 이다
+### ✅ TC-14 — 확정 후 응답의 `status`가 `ISSUED`로 계약 확정 및 반영됨
 
 ```json
-{"code":"200","result":{"status":null,"sequenceNo":1,"couponIssueId":6317771}}
+{"code":"200","result":{"status":"ISSUED","sequenceNo":1,"couponIssueId":6317771}}
 ```
 
-발급 정보는 정상적으로 채워지는데 `status` 만 비어 있다. `#125` 리뷰에서 "API 계약을 확정해야 한다"고 짚었던 부분이 그대로 남아 있다.
-
-**프론트가 `status` 로 발급 성공을 판단하면 동작하지 않는다.** `ISSUED` 를 내려줄지 정해야 한다.
-
-계약을 정할 때 쓰이는 실제 값은 이렇다. `CouponIssueConverter` 기준이며, **`SUCCESS` 같은 값은 존재하지 않는다.**
-
-| 시점 | `status` |
-| --- | --- |
-| 접수 응답(202) | `"WAITING"` 고정 |
-| 확정 응답 | `ISSUED` · `USED` · `EXPIRED` (`IssueStatus` enum 이름) |
-
-확정될 때까지는 `status` 대신 **`couponIssueId != null` 로 성공을 판정**하는 쪽이 안전하다.
+발급 정보 및 `status: "ISSUED"`가 정상적으로 채워져 반환된다.
+- 접수 시점: `status = "WAITING"`
+- 확정 시점: `status = "ISSUED"` (또는 `IssueStatus` enum 이름)
 
 ### ⚠️ TC-17 — 미초기화 쿠폰이 "재고 가득"으로 보인다
 
@@ -605,17 +596,18 @@ $env:COUPON_RECONCILIATION_SCHEDULER_ENABLED="false"; .\gradlew bootRun
 
 | 항목 | 부하 테스트 영향 | 처리 |
 | --- | --- | --- |
-| `max.block.ms` 미설정 (기본 60초) | Kafka 가 **끊겼을 때만** 발동. 정상 브로커에서는 메타데이터가 캐시돼 있어 걸리지 않는다 | **`#161`** 진행 중 |
-| `last_error` 가 `Send failed` 뿐 | 없음 | **`#162`** 진행 중 |
-| 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | **`#160`** 진행 중 |
+| `max.block.ms` 미설정 (기본 60초) | Kafka 가 **끊겼을 때만** 발동. 정상 브로커에서는 메타데이터가 캐시돼 있어 걸리지 않는다 | ✅ **`#161`** 반영 완료 |
+| `last_error` 가 `Send failed` 뿐 | 없음 | ✅ **`#162`** 반영 완료 |
+| 초기화 API 가 `coupon.status` 미원복 | **없음** — 발급 경로가 `coupon.status` 를 읽지 않는다(§5 재현 확인) | ✅ **`#160`** 반영 완료 |
 | `STOCK_MISMATCH` 가 "키 없음"과 "값 다름"을 안 가림 | 없음 | 이슈 미등록 (§5 에 방향 기록) |
-| 만료 배치 수동 트리거 부재 | 없음 | 이슈 미등록. TC-82 는 임시 테스트로 우회 |
-| TC-14 확정 응답의 `status` 가 `null` | 없음 | 이슈 미등록. 프론트 연동 전 계약 확정 필요 |
+| 만료 배치 수동 트리거 부재 | 없음 | ✅ **`#163`** 반영 완료 |
+| TC-14 확정 응답의 `status` 가 `null` | 없음 | ✅ **`#182`** 반영 완료 (`status="ISSUED"`) |
 | 정합성 자동 스케줄러 기본 켜짐 | **있음** — 30분마다 6분짜리 배치가 끼어든다 | 스위치 노출 완료. 측정 회차에서는 끈다(위 참고) |
 
-**프론트 연동 전에 남은 것은 CORS 하나다.**
+**프론트 연동 설정 현황**
 
 | 항목 | 상태 |
 | --- | --- |
 | 없는 경로가 404 가 아니라 500 | ✅ `#157` 로 해소 (§5) |
-| CORS 헤더 없음 | ⚠️ 미해소 — 브라우저에서 직접 호출하면 전부 차단된다(프록시를 쓰지 않는 경우) |
+| CORS 헤더 없음 | ✅ `#182` 로 WebConfig CORS 설정 완료 |
+| 발급 확정 응답 `status` 규격 | ✅ `#182` 로 `status="ISSUED"` 반영 완료 |

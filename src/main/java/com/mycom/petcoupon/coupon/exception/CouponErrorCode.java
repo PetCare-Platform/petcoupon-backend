@@ -31,6 +31,8 @@ public enum CouponErrorCode implements BaseErrorCode {
 			"페이지 번호는 0 이상이며, 페이지 크기는 10, 20, 50, 100 중 하나여야 합니다."),
 	INVALID_COUPON_FILTER(HttpStatus.BAD_REQUEST, "COUPON400-12",
 			"쿠폰 조회 필터가 올바르지 않습니다. status는 READY, ACTIVE, SOLD_OUT, ENDED 중 하나여야 합니다."),
+	COUPON_NOT_OPEN_YET(HttpStatus.BAD_REQUEST, "COUPON400-13", "쿠폰 발급 기간이 아닙니다. (오픈 전)"),
+	COUPON_ISSUE_EXPIRED(HttpStatus.BAD_REQUEST, "COUPON400-14", "쿠폰 발급 기간이 종료되었습니다."),
 
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON409-0", "쿠폰 재고가 모두 소진되었습니다."),
     DUPLICATE_USER(HttpStatus.CONFLICT, "COUPON409-1", "이미 발급받은 쿠폰입니다."),

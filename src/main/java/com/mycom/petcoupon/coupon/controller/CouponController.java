@@ -1,5 +1,7 @@
 package com.mycom.petcoupon.coupon.controller;
 
+import java.time.LocalDateTime;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
+import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.service.CouponIssueService;
@@ -57,12 +60,24 @@ public class CouponController {
             @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 64) String idempotencyKey,
             @Valid @RequestBody CouponIssueCreateRequest request) {
 
-        // 0단계: 쿠폰 존재 확인을 멱등성 체크보다 먼저 한다.
-        // IdempotencyKey가 coupon_id를 FK로 물고 있어서, 이 확인 없이 바로 진행하면
-        // 없는 쿠폰 요청이 "404 COUPON_NOT_FOUND"가 아니라 FK 위반(500)으로 터진다.
-        if (!couponRepository.existsById(couponId)) {
+        // 0단계: 쿠폰 존재 및 발급 가능 기간(issueStartAt ~ issueEndAt) 확인을 멱등성 체크보다 먼저 한다.
+        // IdempotencyKey가 coupon_id를 FK로 물고 있어서 없는 쿠폰 요청은 404로 막고,
+        // 오픈 전/종료 후 요청은 멱등키 등록 전에 Fail-Fast로 차단해 불필요한 멱등키 고착 및 부하를 방지한다.
+        Coupon coupon = couponRepository.findById(couponId).orElse(null);
+        if (coupon == null) {
             return ResponseEntity.status(CouponErrorCode.COUPON_NOT_FOUND.getStatus())
                     .body(CouponErrorCode.COUPON_NOT_FOUND.getErrorResponse());
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        if (now.isBefore(coupon.getIssueStartAt())) {
+            return ResponseEntity.status(CouponErrorCode.COUPON_NOT_OPEN_YET.getStatus())
+                    .body(CouponErrorCode.COUPON_NOT_OPEN_YET.getErrorResponse());
+        }
+
+        if (now.isAfter(coupon.getIssueEndAt())) {
+            return ResponseEntity.status(CouponErrorCode.COUPON_ISSUE_EXPIRED.getStatus())
+                    .body(CouponErrorCode.COUPON_ISSUE_EXPIRED.getErrorResponse());
         }
 
         // 0-b단계: userId 존재 확인도 같은 이유로 미리 한다. IdempotencyKey가 user_id도 FK로 물고 있어서,
