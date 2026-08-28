@@ -383,13 +383,9 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 | TC-02 |  |  |  |  |
 | … |  |  |  |  |
 
-## 7. 선행 조건 (현재 미완료)
+## 7. 선행 조건
 
-아래가 완료되어야 해당 시나리오를 실행할 수 있다.
-
-| 항목 | 현재 상태 | 영향 범위 |
-| --- | --- | --- |
-| 발급 이력 300만 더미데이터 | 스크립트는 #98로 머지됨. **아직 실행한 적이 없다** — 적재를 돌려야 한다 | TC-81 ~ TC-83, TC-85 |
+현재 미완료 선행 조건은 없다.
 
 ### 해소된 항목
 
@@ -397,6 +393,7 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 
 | 항목 | 반영 |
 | --- | --- |
+| 발급 이력 300만 더미데이터 | #98 스크립트로 적재 완료. TC-80 ~ TC-85 재검증 완료 |
 | 발급 API와 큐 연결 | #58 — 신청 API가 Redis Stream에 적재한다 |
 | Kafka Producer / Consumer / Recoverer | 발급 확정 경로에 연결됨 |
 | 초기화 API의 Redis 키 삭제 | #88 — 신청자·순번 키 삭제 + 재고 키 재설정까지 한다 |
