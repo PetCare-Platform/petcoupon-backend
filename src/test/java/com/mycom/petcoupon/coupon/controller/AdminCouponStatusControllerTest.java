@@ -22,8 +22,12 @@ import org.springframework.validation.beanvalidation.MethodValidationPostProcess
 import org.springframework.web.context.support.AnnotationConfigWebApplicationContext;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
+import com.mycom.petcoupon.coupon.dto.res.CouponFailureReasonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.service.CouponFailureReasonService;
+import com.mycom.petcoupon.coupon.service.CouponLoadTestStatusService;
 import com.mycom.petcoupon.coupon.service.CouponRealtimeStatusService;
 import com.mycom.petcoupon.global.auth.interceptor.AdminSessionInterceptor;
 import com.mycom.petcoupon.global.auth.service.AdminSessionService;
@@ -37,6 +41,8 @@ class AdminCouponStatusControllerTest {
     private static final String VALID_TOKEN = "valid-token";
 
     private CouponRealtimeStatusService couponRealtimeStatusService;
+    private CouponLoadTestStatusService couponLoadTestStatusService;
+    private CouponFailureReasonService couponFailureReasonService;
     private AdminSessionService adminSessionService;
     private AnnotationConfigWebApplicationContext webContext;
     private MockMvc mockMvc;
@@ -52,6 +58,16 @@ class AdminCouponStatusControllerTest {
         }
 
         @Bean
+        CouponLoadTestStatusService couponLoadTestStatusService() {
+            return mock(CouponLoadTestStatusService.class);
+        }
+
+        @Bean
+        CouponFailureReasonService couponFailureReasonService() {
+            return mock(CouponFailureReasonService.class);
+        }
+
+        @Bean
         AdminSessionService adminSessionService() {
             return mock(AdminSessionService.class);
         }
@@ -63,9 +79,13 @@ class AdminCouponStatusControllerTest {
 
         @Bean
         AdminCouponStatusController adminCouponStatusController(
-                CouponRealtimeStatusService couponRealtimeStatusService
+                CouponRealtimeStatusService couponRealtimeStatusService,
+                CouponLoadTestStatusService couponLoadTestStatusService,
+                CouponFailureReasonService couponFailureReasonService
         ) {
-            return new AdminCouponStatusController(couponRealtimeStatusService);
+            return new AdminCouponStatusController(
+                    couponRealtimeStatusService, couponLoadTestStatusService, couponFailureReasonService
+            );
         }
 
         @Bean
@@ -94,6 +114,8 @@ class AdminCouponStatusControllerTest {
         webContext.refresh();
 
         couponRealtimeStatusService = webContext.getBean(CouponRealtimeStatusService.class);
+        couponLoadTestStatusService = webContext.getBean(CouponLoadTestStatusService.class);
+        couponFailureReasonService = webContext.getBean(CouponFailureReasonService.class);
         adminSessionService = webContext.getBean(AdminSessionService.class);
         mockMvc = MockMvcBuilders.webAppContextSetup(webContext).build();
     }
@@ -176,5 +198,113 @@ class AdminCouponStatusControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.isSuccess").value(false))
                 .andExpect(jsonPath("$.code").value("COUPON503-4"));
+    }
+
+    @Test
+    void getLoadTestStatusReturnsStatusWhenAdminTokenIsValid() throws Exception {
+        CouponLoadTestStatusResponse response = CouponLoadTestStatusResponse.builder()
+                .accepted(10)
+                .passed(8)
+                .rejected(2)
+                .pending(0)
+                .sent(0)
+                .consumed(8)
+                .failed(0)
+                .dlq(1)
+                .inProgressIdempotencyKeys(0)
+                .overIssued(false)
+                .duplicateUsers(0)
+                .sequenceIntact(true)
+                .elapsedSeconds(12)
+                .build();
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponLoadTestStatusService.getLoadTestStatus(COUPON_ID)).thenReturn(response);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/load-test-status", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.result.accepted").value(10))
+                .andExpect(jsonPath("$.result.passed").value(8))
+                .andExpect(jsonPath("$.result.rejected").value(2))
+                .andExpect(jsonPath("$.result.dlq").value(1))
+                .andExpect(jsonPath("$.result.overIssued").value(false))
+                .andExpect(jsonPath("$.result.sequenceIntact").value(true))
+                .andExpect(jsonPath("$.result.elapsedSeconds").value(12));
+
+        verify(couponLoadTestStatusService).getLoadTestStatus(COUPON_ID);
+    }
+
+    @Test
+    void getLoadTestStatusReturnsUnauthorizedWhenAdminTokenIsMissing() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/load-test-status", COUPON_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON401-0"));
+
+        verifyNoInteractions(couponLoadTestStatusService);
+    }
+
+    @Test
+    void getLoadTestStatusReturnsNotFoundWhenCouponDoesNotExist() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponLoadTestStatusService.getLoadTestStatus(COUPON_ID))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/load-test-status", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
+    }
+
+    @Test
+    void getFailureReasonsReturnsCountsWhenAdminTokenIsValid() throws Exception {
+        CouponFailureReasonResponse response = CouponFailureReasonResponse.builder()
+                .rejections(CouponFailureReasonResponse.Rejections.builder()
+                        .soldOut(3)
+                        .alreadyIssued(1)
+                        .build())
+                .failures(CouponFailureReasonResponse.Failures.builder()
+                        .kafkaPublishFailed(2)
+                        .consumeProcessingFailed(1)
+                        .build())
+                .build();
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponFailureReasonService.getFailureReasons(COUPON_ID)).thenReturn(response);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/failure-reasons", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.result.rejections.soldOut").value(3))
+                .andExpect(jsonPath("$.result.rejections.alreadyIssued").value(1))
+                .andExpect(jsonPath("$.result.failures.kafkaPublishFailed").value(2))
+                .andExpect(jsonPath("$.result.failures.consumeProcessingFailed").value(1));
+
+        verify(couponFailureReasonService).getFailureReasons(COUPON_ID);
+    }
+
+    @Test
+    void getFailureReasonsReturnsUnauthorizedWhenAdminTokenIsMissing() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/failure-reasons", COUPON_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON401-0"));
+
+        verifyNoInteractions(couponFailureReasonService);
+    }
+
+    @Test
+    void getFailureReasonsReturnsNotFoundWhenCouponDoesNotExist() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponFailureReasonService.getFailureReasons(COUPON_ID))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/failure-reasons", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
     }
 }

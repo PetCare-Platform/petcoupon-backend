@@ -50,7 +50,11 @@ import lombok.NoArgsConstructor;
 	},
 	indexes = {
 		// 정리 배치(IdempotencyKeyServiceImpl.cleanupExpiredRecords)가 created_at 기준으로 스캔한다
-		@Index(name = "idx_idem_created_at", columnList = "created_at")
+		@Index(name = "idx_idem_created_at", columnList = "created_at"),
+		// 부하 테스트 현황 조회(#195)가 coupon_id로 좁혀 accepted/IN_PROGRESS 건수를 센다.
+		// coupon_id 선두 인덱스가 없으면(기존엔 user_id 선두인 uk_idem_user_key뿐) 매 폴링(5초)마다
+		// 테이블 전체 스캔이 된다 — status까지 커버해서 IN_PROGRESS 카운트도 이 인덱스로 처리한다.
+		@Index(name = "idx_idem_coupon_status", columnList = "coupon_id, status")
 	}
 )
 @EntityListeners(AuditingEntityListener.class)

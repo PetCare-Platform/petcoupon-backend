@@ -101,4 +101,28 @@ public interface CouponIssueRepository extends JpaRepository<CouponIssue, Long> 
 	// 같은 패턴 — 상태 종류가 적어 GROUP BY만으로 충분하고 네이티브 쿼리가 필요 없다.
 	@Query("SELECT ci.status AS status, COUNT(ci) AS count FROM CouponIssue ci GROUP BY ci.status")
 	List<CouponIssueStatusCount> countGroupedByStatus();
+
+	// 부하 테스트 현황 조회(#195)용 — verify_issue_result.sql 1(발급 건수)·2(1인 2매)·
+	// 4(순번 연속)번 블록 + 참고지표(확정 소요초)를 한 쿼리로 합친다. TIMESTAMPDIFF/IF가
+	// JPQL에 없어 네이티브 쿼리를 쓴다. idx_issue_coupon_id(coupon_id, coupon_issue_id)로
+	// coupon_id 필터가 커버되고, 중복유저 서브쿼리는 uk_issue_coupon_user(coupon_id, user_id)
+	// 유니크 인덱스로 커버된다.
+	//
+	// 발급이 0건이면 MIN/MAX가 NULL이라 순번 연속을 판정할 대상이 없다 — verify_issue_result.sql
+	// 4번 블록과 동일하게 이 경우를 PASS(정상)로 본다. elapsedSeconds는 이때 NULL로 나오므로
+	// 서비스에서 0으로 치환한다.
+	@Query(value = """
+			SELECT
+			       COUNT(*) AS passedCount,
+			       (SELECT COUNT(*) FROM (
+			            SELECT user_id FROM coupon_issue
+			             WHERE coupon_id = :couponId
+			             GROUP BY user_id HAVING COUNT(*) > 1
+			        ) dup) AS duplicateUserCount,
+			       IF(COUNT(*) = 0 OR (MIN(sequence_no) = 1 AND MAX(sequence_no) = COUNT(*)), true, false) AS sequenceIntact,
+			       TIMESTAMPDIFF(SECOND, MIN(created_at), MAX(created_at)) AS elapsedSeconds
+			  FROM coupon_issue
+			 WHERE coupon_id = :couponId
+			""", nativeQuery = true)
+	CouponIssueLoadTestSummary summarizeForLoadTest(@Param("couponId") Long couponId);
 }

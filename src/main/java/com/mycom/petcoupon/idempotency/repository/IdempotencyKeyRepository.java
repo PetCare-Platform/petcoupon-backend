@@ -53,4 +53,40 @@ public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, 
             @Param("provisional") boolean provisional,
             @Param("expectedStatus") IdempotencyStatus expectedStatus
     );
+
+    // 부하 테스트 현황 조회(#195)용 — "202를 돌려받았는가" 기준 접수 수. 행이 아니라 고유
+    // user_id 수를 센다(1인 1매라 같은 유저의 중복 신청은 한 건으로 잡아야 발급 건수와
+    // 비교가 맞는다 — verify_issue_result.sql 1번 블록과 동일 기준). 접수 자체가 500으로
+    // 끝난 건(FAILED + response_status NULL)만 제외한다.
+    @Query("""
+            SELECT COUNT(DISTINCT ik.user.userId) FROM IdempotencyKey ik
+             WHERE ik.coupon.couponId = :couponId
+               AND NOT (ik.status = com.mycom.petcoupon.idempotency.entity.enums.IdempotencyStatus.FAILED
+                        AND ik.responseStatus IS NULL)
+            """)
+    long countAcceptedByCouponId(@Param("couponId") Long couponId);
+
+    // 응답을 못 받고 끊긴 요청 수(verify_issue_result.sql 13번 블록과 동일 기준).
+    long countByCoupon_CouponIdAndStatus(Long couponId, IdempotencyStatus status);
+
+    // 실패 사유 분류 집계(#195) — rejections. response_body가 GeneralException을 그대로 저장한
+    // CustomResponse.onFailure(errorCode) JSON이라 code 필드로 사유를 가른다(CouponController.issue,
+    // CouponIssueServiceImpl 참고). EVENT_NOT_OPEN/EVENT_CLOSED는 여기서 못 잡는다 — 그 두 사유는
+    // 컨트롤러가 멱등키 등록 전에 Fail-Fast로 끝내버려서 이 테이블에 행 자체가 없다.
+    // idx_idem_coupon_status(coupon_id, status)가 coupon_id+status 필터를 커버해서 JSON 파싱은
+    // 그 결과 행에만 실행된다.
+    @Query(value = """
+            SELECT
+                   COALESCE(SUM(CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code')) = :soldOutCode THEN 1 ELSE 0 END), 0) AS soldOut,
+                   COALESCE(SUM(CASE WHEN JSON_UNQUOTE(JSON_EXTRACT(response_body, '$.code')) = :duplicateUserCode THEN 1 ELSE 0 END), 0) AS alreadyIssued
+              FROM idempotency_key
+             WHERE coupon_id = :couponId
+               AND status = 'FAILED'
+               AND response_body IS NOT NULL
+            """, nativeQuery = true)
+    IdempotencyRejectionCounts countRejectionsByCouponId(
+            @Param("couponId") Long couponId,
+            @Param("soldOutCode") String soldOutCode,
+            @Param("duplicateUserCode") String duplicateUserCode
+    );
 }

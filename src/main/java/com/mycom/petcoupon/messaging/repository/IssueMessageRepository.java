@@ -13,6 +13,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 
 public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long> {
@@ -40,14 +41,16 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	@Modifying(clearAutomatically = true)
 	@Query("""
 			UPDATE IssueMessage im
-			   SET im.status = :status, im.retryCount = im.retryCount + 1, im.lastError = :lastError
+			   SET im.status = :status, im.retryCount = im.retryCount + 1, im.lastError = :lastError,
+			       im.failureReason = :failureReason
 			 WHERE im.topic = :topic AND im.messageKey = :messageKey
 			""")
 	int markDlq(
 			@Param("topic") String topic,
 			@Param("messageKey") String messageKey,
 			@Param("status") IssueMessageStatus status,
-			@Param("lastError") String lastError
+			@Param("lastError") String lastError,
+			@Param("failureReason") IssueFailureReason failureReason
 	);
 	
 	
@@ -80,28 +83,31 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		UPDATE IssueMessage im
 			SET im.status = :status,
 				im.processedAt = :processedAt,
-				im.lastError = null
+				im.lastError = null,
+				im.failureReason = null
 		WHERE im.messageId = :messageId
 	""")
 	int markSent(
-		@Param("messageId") Long messageId, 
+		@Param("messageId") Long messageId,
 		@Param("status") IssueMessageStatus status,
 		@Param("processedAt") LocalDateTime processedAt
 	);
-	
+
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
 	    UPDATE IssueMessage im
 	       SET im.status = :status,
 	           im.retryCount = im.retryCount + 1,
-	           im.lastError = :lastError
+	           im.lastError = :lastError,
+	           im.failureReason = :failureReason
 	     WHERE im.messageId = :messageId
 	""")
 	int markPublishFailed(
 	    @Param("messageId") Long messageId,
 	    @Param("status") IssueMessageStatus status,
-	    @Param("lastError") String lastError
+	    @Param("lastError") String lastError,
+	    @Param("failureReason") IssueFailureReason failureReason
 	);
 
 	// 목록 조회용 — 재고 조회(findByStatusInAndRetryCountLessThan)와 동일하게 Pageable로 크기 제한.
@@ -243,4 +249,20 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 건들을 놓치게 된다. 단순 GROUP BY라 JPQL로 충분하다(네이티브 쿼리 불필요).
 	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im GROUP BY im.status")
 	List<IssueStatusCount> countGroupedByStatus();
+
+	// 부하 테스트 현황 조회(#195)용 — 쿠폰 하나로 좁힌 파이프라인 상태 분포.
+	// idx_issue_message_coupon_dlq(coupon_id, status, message_id)가 coupon_id+status를
+	// 그대로 커버해서, countGroupedByStatus()와 달리 5초 폴링에도 풀스캔이 안 난다.
+	@Query("SELECT im.status AS status, COUNT(im) AS count FROM IssueMessage im WHERE im.coupon.couponId = :couponId GROUP BY im.status")
+	List<IssueStatusCount> countGroupedByStatusForCoupon(@Param("couponId") Long couponId);
+
+	// 실패 사유 분류 집계(#195)용 — 아직 관리자 확인 대기 중인 DLQ만 대상으로 한다. ABANDONED는
+	// 이미 처리(포기)가 끝난 건이라 다시 분류해서 보여줄 실익이 없다. idx_issue_message_coupon_dlq
+	// (coupon_id, status, message_id)로 coupon_id+status 필터가 커버된다.
+	@Query("""
+			SELECT im.failureReason AS failureReason, COUNT(im) AS count FROM IssueMessage im
+			 WHERE im.coupon.couponId = :couponId AND im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ
+			 GROUP BY im.failureReason
+			""")
+	List<IssueFailureReasonCount> countDlqGroupedByFailureReasonForCoupon(@Param("couponId") Long couponId);
 }

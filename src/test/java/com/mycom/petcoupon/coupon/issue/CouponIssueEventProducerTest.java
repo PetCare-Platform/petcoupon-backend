@@ -25,6 +25,7 @@ import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.coupon.issue.producer.CouponIssueEventProducer;
 import com.mycom.petcoupon.messaging.entity.IssueMessage;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -95,7 +96,7 @@ class CouponIssueEventProducerTest {
 		
 		assertThat(thrown).isInstanceOf(CompletionException.class);
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 	}
 
 	@Test
@@ -113,7 +114,7 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 	}
 
 	@Test
@@ -131,7 +132,7 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 	}
 
 	@Test
@@ -154,7 +155,7 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 	}
 
 	@Test
@@ -170,7 +171,7 @@ class CouponIssueEventProducerTest {
 
 		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("sync failure"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("sync failure"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 	}
 
 	@Test
@@ -184,7 +185,7 @@ class CouponIssueEventProducerTest {
 
 		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
 		
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("malformed json"));
+		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("malformed json"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
 		
 		verify(kafkaTemplate, never())
 			.send(any(String.class), any(), any());
@@ -230,7 +231,8 @@ class CouponIssueEventProducerTest {
 		verify(issueMessageRepository).markPublishFailed(
 			eq(1L),
 			eq(IssueMessageStatus.FAILED),
-			eq("RuntimeException: Send failed (Caused by: IllegalStateException: Timeout waiting for broker response)")
+			eq("RuntimeException: Send failed (Caused by: IllegalStateException: Timeout waiting for broker response)"),
+			eq(IssueFailureReason.KAFKA_PUBLISH_FAILED)
 		);
 	}
 }

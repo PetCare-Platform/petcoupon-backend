@@ -21,6 +21,7 @@ import com.mycom.petcoupon.coupon.issue.config.KafkaTopics;
 import com.mycom.petcoupon.coupon.issue.consumer.CouponIssueEventRecoverer;
 import com.mycom.petcoupon.coupon.issue.dto.CouponIssueEvent;
 import com.mycom.petcoupon.idempotency.service.IdempotencyKeyService;
+import com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason;
 import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
 
@@ -51,7 +52,8 @@ class CouponIssueEventRecovererTest {
 	@Test
 	void 이벤트_역직렬화에_성공하면_DLQ_토픽에_발행하고_상태를_갱신한다() {
 		when(issueMessageRepository.markDlq(
-			KafkaTopics.COUPON_ISSUE_EVENT, "request-1", IssueMessageStatus.DLQ, "consume failed"
+			KafkaTopics.COUPON_ISSUE_EVENT, "request-1", IssueMessageStatus.DLQ, "consume failed",
+			IssueFailureReason.CONSUME_PROCESSING_FAILED
 		)).thenReturn(1);
 
 		ConsumerRecord<String, Object> record =
@@ -61,14 +63,15 @@ class CouponIssueEventRecovererTest {
 
 		verify(kafkaTemplate).send(eq(KafkaTopics.COUPON_ISSUE_EVENT_DLQ), eq(String.valueOf(EVENT.couponId())), eq(EVENT));
 		verify(issueMessageRepository).markDlq(
-			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any(),
+			eq(IssueFailureReason.CONSUME_PROCESSING_FAILED)
 		);
 	}
 
 	@Test
 	void issue_message를_찾지_못해도_DLQ_토픽_발행은_그대로_한다() {
 		when(issueMessageRepository.markDlq(
-			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any(), any()
 		)).thenReturn(0);
 
 		ConsumerRecord<String, Object> record =
@@ -82,7 +85,7 @@ class CouponIssueEventRecovererTest {
 	@Test
 	void markDlq_처리중_예외가_나도_DLQ_토픽_발행은_시도한다() {
 		when(issueMessageRepository.markDlq(
-			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any()
+			eq(KafkaTopics.COUPON_ISSUE_EVENT), eq("request-1"), eq(IssueMessageStatus.DLQ), any(), any()
 		)).thenThrow(new RuntimeException("db down"));
 
 		ConsumerRecord<String, Object> record =
