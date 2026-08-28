@@ -40,7 +40,15 @@ winget install k6 --source winget
 ### 2. 인프라 기동
 
 ```bash
-docker compose up -d
+docker compose --profile kafka up -d
+```
+
+**`--profile kafka`를 빼면 안 됩니다.** Kafka가 `docker-compose.yml`에 `profiles: [kafka]`로 묶여 있어서 `docker compose up -d`만 하면 MySQL·Redis만 뜹니다. 그 상태로 부하를 걸면 **접수는 `202`로 정상 응답하는데 발급이 한 건도 확정되지 않습니다** — 앱도 API도 멀쩡해 보여서 원인을 찾는 데 시간이 걸립니다.
+
+세 개가 다 떴는지 확인하고 넘어갑니다.
+
+```bash
+docker compose ps
 ```
 
 로컬에 MySQL이 따로 설치돼 있으면 3306 포트가 겹쳐 컨테이너가 뜨지 않습니다. 관리자 PowerShell에서 `net stop MySQL80`으로 멈춘 뒤 실행합니다.
