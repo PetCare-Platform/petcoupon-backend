@@ -11,11 +11,22 @@ import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponIssue;
@@ -38,20 +49,44 @@ import com.mycom.petcoupon.user.repository.AppUserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
-
+@Testcontainers
+@ExtendWith(OutputCaptureExtension.class)
 @SpringBootTest(properties = { 
-	"coupon.issue.stream.enabled=true", "coupon.issue.outbox.enabled=true",
-	"coupon.issue.outbox.publish-fixed-delay-ms=100", "coupon.issue.outbox.batch-size=10",
+	"coupon.issue.stream.enabled=true", 
+	"coupon.issue.outbox.enabled=true",
+	"coupon.issue.outbox.publish-fixed-delay-ms=100", 
+	"coupon.issue.outbox.batch-size=10",
 	"spring.kafka.consumer.auto-offset-reset=earliest",
 	
 	"coupon.issue.stream.pending-recovery.enabled=false",
 	
+	// 장애 복구 통합 테스트에서는 지수 백오프 시간을 짧게 설정
+    "coupon.issue.stream.recovery.initial-delay=100ms",
+    "coupon.issue.stream.recovery.max-delay=400ms",
+    "coupon.issue.stream.recovery.multiplier=2",
+    
+    // Redis 장애 상태에서 테스트가 기본 1분 동안 멈추지 않도록 단축
+    "spring.data.redis.connect-timeout=500ms",
+    "spring.data.redis.timeout=3s",
+    
 	// 이 테스트는 이벤트/쿠폰 상태 스케줄러와 무관하므로 둘 다 꺼서 경합 자체를 차단
 	"event.status.scheduler.enabled=false",
 	"coupon.status.enabled=false"
 })
 class CouponIssuePipelineIntegrationTest {
 
+	@Container
+	private static final GenericContainer<?> REDIS_CONTAINER = new GenericContainer<>(DockerImageName.parse("redis:7.2-alpine")).withExposedPorts(6379);
+
+	@DynamicPropertySource
+	static void configureRedisProperties(DynamicPropertyRegistry registry) {
+	    registry.add("spring.data.redis.host", REDIS_CONTAINER::getHost);
+	    registry.add(
+	        "spring.data.redis.port",
+	        () -> REDIS_CONTAINER.getMappedPort(6379)
+	    );
+	}
+	
 	private static final int INITIAL_STOCK = 10;
 	private static final long TIMEOUT_MILLIS = 15_000L;
 	private static final long POLL_INTERVAL_MILLIS = 100L;
@@ -195,9 +230,7 @@ class CouponIssuePipelineIntegrationTest {
 		// 1. Redis Stream Consumer가 메시지를 가져가 Lua를 실행했는지 확인
 		awaitUntil(
 		    "Lua가 실행되지 않았습니다.",
-		    () -> String.valueOf(INITIAL_STOCK - 1).equals(
-		        redisTemplate.opsForValue().get(stockKey())
-		    )
+		    () -> String.valueOf(INITIAL_STOCK - 1).equals(redisTemplate.opsForValue().get(stockKey()))
 		);
 
 		// 2. Lua 성공 후 Outbox가 저장됐는지 확인
@@ -205,9 +238,7 @@ class CouponIssuePipelineIntegrationTest {
 		    "Outbox가 저장되지 않았습니다.",
 		    () -> issueMessageRepository.findAll()
 		        .stream()
-		        .anyMatch(message ->
-		            message.getMessageKey().equals(requestId)
-		        )
+		        .anyMatch(message ->message.getMessageKey().equals(requestId))
 		);
 
 		// 3. Outbox가 Kafka로 발행됐는지 확인 — SENT는 Consumer가 곧바로 CONSUMED로 넘겨버릴 수 있는
@@ -231,11 +262,11 @@ class CouponIssuePipelineIntegrationTest {
 		);
 		
 		IssueMessage outbox = issueMessageRepository.findAll().stream()
-				.filter(message -> message.getTopic().equals(KafkaTopics.COUPON_ISSUE_EVENT))
-				.filter(message -> message.getMessageKey().equals(requestId)).findFirst().orElseThrow();
+			.filter(message -> message.getTopic().equals(KafkaTopics.COUPON_ISSUE_EVENT))
+			.filter(message -> message.getMessageKey().equals(requestId)).findFirst().orElseThrow();
 
 		CouponIssue couponIssue = couponIssueRepository.findAll().stream()
-				.filter(issue -> issue.getRequestId().equals(requestId)).findFirst().orElseThrow();
+			.filter(issue -> issue.getRequestId().equals(requestId)).findFirst().orElseThrow();
 
 		CouponStock couponStock = couponStockRepository.findById(couponId).orElseThrow();
 
@@ -272,7 +303,64 @@ class CouponIssuePipelineIntegrationTest {
 		assertThat(redisTemplate.opsForHash().get(requestSequenceKey(), requestId)).isEqualTo("1");
 	}
 
+	@Test
+	void Redis_장애가_복구되면_Consumer가_자동으로_메시지_소비를_재개한다(CapturedOutput output) throws Exception {
+
+	    try {
+	        // Redis 프로세스는 유지하고 일시적으로 응답만 중단한다.
+	        pauseRedis();
+
+	        // command timeout을 초과해 Stream 읽기 오류가 발생하도록 기다린다.
+	        Thread.sleep(4_000L);
+
+	        // Redis 응답 복구
+	        resumeRedis();
+
+	        // Redis 및 Lettuce 연결 정상화 확인
+	        awaitRedisAvailable();
+	        awaitApplicationRedisAvailable();
+
+	        // 복구 후 메시지 발행
+	        streamProducer.publish(couponId, userId, requestId);
+
+	        awaitUntil(
+	            "Redis 복구 후 Stream Consumer가 메시지 소비를 재개하지 못했습니다.",
+	            () -> String.valueOf(INITIAL_STOCK - 1).equals(redisTemplate.opsForValue().get(stockKey()))
+	        );
+
+	        awaitUntil(
+	            "Redis 복구 후 쿠폰 발급 파이프라인이 완료되지 않았습니다.",
+	            () -> couponIssueRepository.existsByRequestId(requestId)
+	        );
+
+	        IssueMessage outbox = issueMessageRepository.findAll()
+	            .stream()
+	            .filter(message -> message.getMessageKey().equals(requestId))
+	            .findFirst()
+	            .orElseThrow();
+
+	        CouponIssue couponIssue = couponIssueRepository.findAll()
+	            .stream()
+	            .filter(issue -> issue.getRequestId().equals(requestId))
+	            .findFirst()
+	            .orElseThrow();
+
+	        assertThat(outbox.getStatus()).isEqualTo(IssueMessageStatus.CONSUMED);
+
+	        assertThat(couponIssue.getRequestId()).isEqualTo(requestId);
+
+	        assertThat(redisTemplate.opsForValue().get(stockKey())).isEqualTo(String.valueOf(INITIAL_STOCK - 1));
+	        
+	     // 단순한 Lettuce 자연 재연결이 아니라, 직접 구현한 Stream 오류 복구 로직이 실행됐는지 확인한다.
+	     assertThat(output.getAll()).contains("Redis Stream 읽기 오류가 발생했습니다.").contains("Redis Stream Consumer 재시작을 요청했습니다.");
+
+	    } finally {
+	        resumeRedisIfPaused();
+	    }
+	}
+	
 	private void awaitUntil(String failureMessage, BooleanSupplier condition) throws InterruptedException {
+		
 		long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
 
 		while (System.currentTimeMillis() < deadline) {
@@ -284,6 +372,82 @@ class CouponIssuePipelineIntegrationTest {
 		}
 
 		fail(failureMessage + System.lineSeparator() + pipelineState());
+	}
+
+	private void pauseRedis() {
+		
+	    DockerClientFactory.instance()
+	        .client()
+	        .pauseContainerCmd(REDIS_CONTAINER.getContainerId())
+	        .exec();
+	}
+
+	private void resumeRedis() {
+		
+	    DockerClientFactory.instance()
+	        .client()
+	        .unpauseContainerCmd(REDIS_CONTAINER.getContainerId())
+	        .exec();
+	}
+	
+	private void resumeRedisIfPaused() {
+		
+	    Boolean paused = DockerClientFactory.instance()
+	        .client()
+	        .inspectContainerCmd(REDIS_CONTAINER.getContainerId())
+	        .exec()
+	        .getState()
+	        .getPaused();
+
+	    if (Boolean.TRUE.equals(paused)) {
+	        resumeRedis();
+	    }
+	}
+
+	private void awaitRedisAvailable() throws InterruptedException {
+		
+	    long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+
+	    while (System.currentTimeMillis() < deadline) {
+	        try {
+	            var result = REDIS_CONTAINER.execInContainer("redis-cli","ping");
+
+	            if (result.getExitCode() == 0 && result.getStdout().contains("PONG")) {
+	                return;
+	            }
+	        } catch (Exception ignored) {
+	            // Redis 프로세스가 시작될 때까지 계속 확인한다.
+	        }
+
+	        Thread.sleep(POLL_INTERVAL_MILLIS);
+	    }
+
+	    fail("Redis 컨테이너가 정상화되지 않았습니다.");
+	}
+	
+	/**
+	 * Redis 프로세스뿐 아니라 애플리케이션의 Lettuce 연결까지
+	 * 실제로 복구됐는지 확인한다.
+	 */
+	private void awaitApplicationRedisAvailable() throws InterruptedException {
+		
+	    long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+
+	    while (System.currentTimeMillis() < deadline) {
+	        try {
+	            String pong = redisTemplate.execute((RedisCallback<String>) connection -> connection.ping());
+
+	            if ("PONG".equals(pong)) {
+	                return;
+	            }
+	        } catch (RuntimeException ignored) {
+	            // Lettuce가 아직 재연결되지 않았으면 계속 확인한다.
+	        }
+
+	        Thread.sleep(POLL_INTERVAL_MILLIS);
+	    }
+
+	    fail("애플리케이션의 Redis 연결이 정상화되지 않았습니다.");
 	}
 
 	private String stockKey() {

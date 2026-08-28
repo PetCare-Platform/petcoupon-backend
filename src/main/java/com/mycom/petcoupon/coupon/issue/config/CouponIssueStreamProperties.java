@@ -22,6 +22,9 @@ public class CouponIssueStreamProperties {
 
 	private PendingRecovery pendingRecovery = new PendingRecovery();
 
+	// Redis Stream Listener 읽기 오류 후 Consumer 복구 재시도 설정
+	private Recovery recovery = new Recovery();
+	
 	@Getter
     @Setter
     public static class PendingRecovery {
@@ -47,4 +50,19 @@ public class CouponIssueStreamProperties {
     	// 최종 처리 실패 메시지를 저장할 Redis Stream
     	private String dlqKey = "coupon:issue:stream:dlq";
     }
+	
+	@Getter
+	@Setter
+	public static class Recovery {
+
+	    // 최초 복구 재시도 대기 시간
+	    private Duration initialDelay = Duration.ofSeconds(1);
+
+	    // 지수 백오프가 도달할 최대 대기 시간
+	    private Duration maxDelay = Duration.ofSeconds(30);
+
+	    // 재시도마다 지연 시간을 증가시키는 배수
+	    // 1초 -> 2초 -> 4초 -> 8초 ...
+	    private long multiplier = 2L;
+	}
 }
