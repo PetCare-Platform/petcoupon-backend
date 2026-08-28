@@ -33,9 +33,13 @@ import com.mycom.petcoupon.monitoring.service.MonitoringSseService;
  * 인증 실패가 어떻게 나가는지가 핵심이다 — 오류 응답이 Accept 협상에 걸리면 401이 아니라 500이
  * 나가고, 그러면 프론트가 만료된 세션으로 무한 재연결한다.
  *
- * <p>운영과 같게 {@link GlobalExceptionHandler}도 advice로 등록해 둔다. 전역 핸들러는 Content-Type을
- * 지정하지 않으므로, 아래 테스트가 통과한다는 건 {@code MonitoringController} 안의
- * {@code @ExceptionHandler}가 advice보다 먼저 선택돼 처리했다는 뜻이다.
+ * <p>처리 주체는 {@link GlobalExceptionHandler}다. 오류 응답을 만드는 지점을 그 클래스의 private
+ * 헬퍼 하나로 모아 Content-Type을 {@code application/json}으로 못박아 두었고, 아래 테스트들은 그게
+ * 실제로 지켜지는지를 상태 코드와 함께 확인한다.
+ *
+ * <p>이 컨트롤러에만 거는 로컬 핸들러로는 풀 수 없는 문제라서 전역에서 처리한다. 경로 오타로 나는
+ * {@code NoResourceFoundException}은 애초에 이 컨트롤러로 매핑되지 않아, 컨트롤러 단위 advice가
+ * 관여할 기회 자체가 없다({@code GlobalExceptionHandlerNotFoundTest} 참고).
  */
 class MonitoringStreamAuthTest {
 

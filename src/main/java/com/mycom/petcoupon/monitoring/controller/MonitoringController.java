@@ -4,7 +4,6 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -13,17 +12,13 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.mycom.petcoupon.global.common.CustomResponse;
-import com.mycom.petcoupon.global.common.code.BaseErrorCode;
-import com.mycom.petcoupon.global.common.exception.GeneralException;
 import com.mycom.petcoupon.monitoring.dto.req.MonitoringSettingsUpdateRequest;
 import com.mycom.petcoupon.monitoring.dto.res.MonitoringSettingsResponse;
 import com.mycom.petcoupon.monitoring.service.MonitoringSseService;
 
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
-@Slf4j
 @RestController
 @RequestMapping("/admin/monitoring")
 @RequiredArgsConstructor
