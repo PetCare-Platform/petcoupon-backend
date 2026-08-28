@@ -42,8 +42,22 @@ import jakarta.persistence.EntityManagerFactory;
  * listDlqMessages()가 @Transactional 없이 lazy(coupon)를 컨버터에서 접근하는 구조라,
  * Mockito 단위 테스트로는 실제 LazyInitializationException 여부를 검증할 수 없다.
  * @SpringBootTest로 실제 open-in-view=false 환경/트랜잭션 경계를 그대로 재현해서 확인한다.
+ *
+ * [버그 리포트 반영] Hibernate Statistics(generate_statistics=true)는 SessionFactory
+ * 하나에 딸린 프로세스 전역 카운터라, 이 클래스만 단독 실행할 땐 문제없다가 전체 테스트를
+ * 같이 돌리면 실패하는 게 관찰됐다 — 배경 스케줄러(Outbox 발행 1초 주기 등)가 살아있는
+ * 컨텍스트가 캐시돼 있으면, statistics.clear()와 측정 사이에 그 스케줄러가 쏜 쿼리까지
+ * 같이 세어져 카운트가 오염된다. README의 "새 @SpringBootTest를 추가할 때는 스케줄러를
+ * 꺼야 한다" 컨벤션을 안 지켰던 게 근본 원인 — #174가 만든 문제가 아니라 이 클래스가
+ * 처음 만들어질 때부터 있던 결함이고, 그동안 우연히 안 걸렸을 뿐이다.
  */
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
+@SpringBootTest(properties = {
+		"spring.jpa.properties.hibernate.generate_statistics=true",
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.outbox.enabled=false",
+		"coupon.reconciliation.scheduler.enabled=false"
+})
 class CouponIssueDlqReprocessServiceIntegrationTest {
 
 	@Autowired
