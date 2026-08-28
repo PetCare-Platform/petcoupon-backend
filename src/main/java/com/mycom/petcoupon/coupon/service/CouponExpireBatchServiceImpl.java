@@ -2,6 +2,7 @@ package com.mycom.petcoupon.coupon.service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
@@ -11,7 +12,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.mycom.petcoupon.coupon.entity.enums.IssueStatus;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -29,6 +32,7 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
 
     private final CouponIssueRepository couponIssueRepository;
     private final TransactionTemplate transactionTemplate;
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     public CouponExpireBatchServiceImpl(
             CouponIssueRepository couponIssueRepository,
@@ -43,21 +47,30 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
     @Override
     @Scheduled(cron = "0 0 1 * * *", scheduler = "couponExpireBatchTaskScheduler") // 매일 새벽 1시에 실행
     public int expireOverdueCoupons() {
-        LocalDateTime now = LocalDateTime.now();
-        int totalExpired = 0;
-
-        while (true) {
-            ChunkResult result = transactionTemplate.execute(status -> expireChunk(now));
-
-            totalExpired += result.expiredCount();
-
-            if (result.fetchedCount() < chunkSize) {
-                break;
-            }
+        if (!running.compareAndSet(false, true)) {
+            log.warn("쿠폰 만료 배치가 이미 실행 중입니다. 중복 실행을 방지합니다.");
+            throw new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS);
         }
 
-        log.info("쿠폰 만료 배치 완료. 총 대상={}건", totalExpired);
-        return totalExpired;
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            int totalExpired = 0;
+
+            while (true) {
+                ChunkResult result = transactionTemplate.execute(status -> expireChunk(now));
+
+                totalExpired += result.expiredCount();
+
+                if (result.fetchedCount() < chunkSize) {
+                    break;
+                }
+            }
+
+            log.info("쿠폰 만료 배치 완료. 총 대상={}건", totalExpired);
+            return totalExpired;
+        } finally {
+            running.set(false);
+        }
     }
 
     private ChunkResult expireChunk(LocalDateTime now) {
@@ -75,6 +88,7 @@ public class CouponExpireBatchServiceImpl implements CouponExpireBatchService {
                 SELECT coupon_issue_id, coupon_id, user_id, 'ISSUED', 'EXPIRED', 'BATCH', NOW(6)
                   FROM coupon_issue
                  WHERE coupon_issue_id IN (:ids)
+                   AND status = 'ISSUED'
                 """)
                 .setParameter("ids", targetIds)
                 .executeUpdate();

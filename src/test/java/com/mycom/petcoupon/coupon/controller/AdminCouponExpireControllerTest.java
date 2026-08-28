@@ -46,4 +46,18 @@ class AdminCouponExpireControllerTest {
 
         verify(couponExpireBatchService).expireOverdueCoupons();
     }
+
+    @Test
+    void triggerExpireBatch_이미_실행중이면_409를_반환한다() throws Exception {
+        when(couponExpireBatchService.expireOverdueCoupons())
+                .thenThrow(new com.mycom.petcoupon.global.common.exception.GeneralException(
+                        com.mycom.petcoupon.coupon.exception.CouponErrorCode.REQUEST_IN_PROGRESS));
+
+        mockMvc.perform(post("/admin/coupons/expire"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON409-5"));
+
+        verify(couponExpireBatchService).expireOverdueCoupons();
+    }
 }
