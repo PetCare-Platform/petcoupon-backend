@@ -284,4 +284,34 @@ class CouponRealtimeStatusServiceImplTest {
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())
                 .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
     }
+
+    @Test
+    void getIssueTimeSeries_throwsException_whenWindowSecondsIsNotMultipleOfBucketSeconds() {
+        assertThatThrownBy(() -> couponRealtimeStatusService.getIssueTimeSeries(1L, 90, 7))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(com.mycom.petcoupon.global.common.code.CommonErrorCode.NOT_VALID_ERROR);
+    }
+
+    @Test
+    void getIssueTimeSeries_supportsNonDivisorOfHour_whenMultipleOfBucketSeconds() {
+        Long couponId = 1L;
+        int windowSeconds = 70;
+        int bucketSeconds = 7;
+
+        when(couponRepository.existsById(couponId)).thenReturn(true);
+        when(issueMessageRepository.findThroughputByCouponAndSeconds(
+                org.mockito.ArgumentMatchers.eq(couponId),
+                org.mockito.ArgumentMatchers.eq(bucketSeconds),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any()
+        )).thenReturn(List.of());
+
+        var response = couponRealtimeStatusService.getIssueTimeSeries(couponId, windowSeconds, bucketSeconds);
+
+        assertThat(response.couponId()).isEqualTo(couponId);
+        assertThat(response.windowSeconds()).isEqualTo(windowSeconds);
+        assertThat(response.bucketSeconds()).isEqualTo(bucketSeconds);
+        assertThat(response.timeSeries()).hasSize(10); // 70 / 7 = 10개 버킷
+    }
 }

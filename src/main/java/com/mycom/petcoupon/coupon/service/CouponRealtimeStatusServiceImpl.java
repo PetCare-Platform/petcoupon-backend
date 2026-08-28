@@ -81,7 +81,8 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
     @Override
     @Transactional(readOnly = true)
     public CouponIssueTimeSeriesResponse getIssueTimeSeries(Long couponId, int windowSeconds, int bucketSeconds) {
-        if (windowSeconds <= 0 || bucketSeconds <= 0 || bucketSeconds > windowSeconds) {
+        // windowSeconds는 bucketSeconds의 배수여야 한다 — 나누어떨어지지 않으면 실제 조회 구간과 요청 구간이 달라진다.
+        if (windowSeconds <= 0 || bucketSeconds <= 0 || bucketSeconds > windowSeconds || windowSeconds % bucketSeconds != 0) {
             throw new GeneralException(CommonErrorCode.NOT_VALID_ERROR);
         }
 
@@ -92,8 +93,7 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
         LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
         // created_at < to 경계이므로 현재 초까지 포함하기 위해 to를 now.plusSeconds(1)로 설정한다.
         LocalDateTime to = now.plusSeconds(1);
-        int bucketCount = (int) Math.ceil((double) windowSeconds / bucketSeconds);
-        LocalDateTime from = to.minusSeconds((long) bucketCount * bucketSeconds);
+        LocalDateTime from = to.minusSeconds(windowSeconds);
 
         List<IssueThroughputBucketResponse> timeSeries = buildTimeSeries(couponId, bucketSeconds, from, to);
 
