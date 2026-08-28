@@ -2,25 +2,31 @@
 #
 # 시연·부하 테스트용 이벤트 + 쿠폰 데이터 (#181)
 #
-# 이벤트 4개와 각 이벤트당 쿠폰 1개를 만든다. 셋은 진행 중, 하나는 이미 끝난 것으로 둬서
-# 목록 화면이 실제 서비스처럼 보이게 한다. 마지막에 부하 테스트 대상 COUPON_ID 를 출력한다.
+# 이벤트 4개와 각 이벤트당 쿠폰 1개를 만든다. 전부 진행 중이라 오픈 시각이 지나면
+# 공개 목록에 네 개가 다 뜬다. 마지막에 부하 테스트 대상 COUPON_ID 를 출력한다.
 #
 #   ./load-test/scripts/setup-demo-coupon.sh
 #   MAIN_TOTAL_QUANTITY=1000 ./load-test/scripts/setup-demo-coupon.sh
 #   BASE_URL=http://10.0.1.20:8080 ./load-test/scripts/setup-demo-coupon.sh
 #
-# 만들어지는 것
-#   ① 선착순 반려견 무료 검진   종합검진 무료 (100%)      진행 중   ← 부하 테스트·시연 대상
-#   ② 검진 할인 쿠폰            검진비 30% 할인           진행 중
-#   ③ 반려동물 용품 할인        사료 5,000원 할인         진행 중
-#   ④ 여름 예방접종             예방접종 20% 할인         종료
+# 만들어지는 것 (전부 진행 중)
+#   ① 선착순 반려견 무료 검진   종합검진 무료 (100%)      재고 적음   ← 부하 테스트·시연 대상
+#   ② 검진 할인 쿠폰            검진비 30% 할인           재고 넉넉
+#   ③ 반려동물 용품 할인        사료 5,000원 할인         재고 넉넉
+#   ④ 여름 예방접종             예방접종 20% 할인         재고 넉넉
 #
-#   ①만 재고를 요청 수보다 적게 잡아 경쟁이 실제로 일어나게 한다. ②③은 넉넉히 둬서
-#   "그냥 받아가는 쿠폰"으로 보이고, ④는 "지난 이벤트" 자리를 채운다.
+#   ①만 재고를 요청 수보다 적게 잡아 경쟁이 실제로 일어나게 한다. 나머지는 넉넉히 둬서
+#   "그냥 받아가는 쿠폰"으로 보이고, 목록 화면을 채우는 역할을 한다.
+#
+#   종료된 이벤트는 넣지 않는다 — 공개 목록(GET /events)이 OPEN 만 반환하고 공개 상세도
+#   OPEN 이 아니면 EVENT404-1 로 막아서, CLOSED 이벤트는 프론트에 "종료됨"으로 뜨는 게
+#   아니라 아예 안 보인다. 넣어봐야 화면에 없는 데이터가 된다.
+#   (관리자 목록 GET /admin/events 는 상태 필터가 없어 전부 보인다)
 #
 # 채워지는 테이블
 #   event                  createEvent()
-#   event_status_history   createEvent() 가 NONE->SCHEDULED, 상태 변경 API 가 전이 이력
+#   event_status_history   createEvent() 가 NONE->SCHEDULED 를 남기고, 이후 상태 스케줄러가
+#                          SCHEDULED->OPEN 전이를 추가한다
 #   coupon                 createCoupon()
 #   coupon_stock           createCoupon() 이 같은 트랜잭션에서
 #   Redis 재고 키          createCoupon() (#180 이후)
@@ -34,11 +40,6 @@
 #   만든다(#180 이후로는 Redis 재고 키까지). 이벤트도 createEvent() 가 NONE->SCHEDULED 이력을
 #   직접 남긴다. SQL 로 넣으면 이것들이 조용히 빠지고, 조회는 되는데 발급하는 순간 깨진다
 #   (통합 테스트 TC-73 이 그 상태를 일부러 만들어 DLQ 적재를 유도한 케이스다).
-#
-#   단 ④(종료된 이벤트)는 API 만으로 못 만든다 — 쿠폰 생성이 이벤트 SCHEDULED 상태를 요구하고
-#   발급 기간이 이벤트 기간 안에 있어야 해서, 과거 시각으로는 애초에 생성이 안 된다.
-#   그래서 정상 경로로 만든 뒤 시각만 SQL 로 과거로 당기고, 상태는 다시 API 로 전이시킨다.
-#   이력이 실제 전이로 쌓이므로 순수 SQL 보다 정확하다.
 #
 # 실행 전
 #   docker compose --profile kafka up -d      # Kafka 는 profiles 로 묶여 있어 이 옵션이 필요하다
@@ -183,12 +184,17 @@ EOF
 }
 
 # ---------------------------------------------------------------------
-# 진행 중 3개
+# 이벤트 4개 + 쿠폰 4개 (전부 진행 중)
+#
+#   ①만 재고를 적게 잡는다. 부하 테스트에서 요청 수보다 재고가 적어야 경쟁이 생기고,
+#   "재고 10,000에 20,000명이 몰렸을 때 정확히 10,000장만 나갔는가"를 볼 수 있다.
+#   나머지는 재고를 넉넉히 둬서 목록 화면을 채우는 역할만 한다.
 # ---------------------------------------------------------------------
 echo "① 선착순 반려견 무료 검진 이벤트"
 create_pair "선착순 반려견 무료 검진 이벤트" "선착순 무료 검진 — 부하 테스트·시연 대상" \
 	"반려견 종합검진 무료 쿠폰" "RATE" 100 0 "null" "$MAIN_TOTAL_QUANTITY"
 MAIN_COUPON_ID="$CREATED_COUPON_ID"
+FIRST_EVENT_ID="$CREATED_EVENT_ID"
 echo
 
 echo "② 검진 할인 쿠폰 이벤트"
@@ -201,44 +207,10 @@ create_pair "반려동물 용품 할인 이벤트" "사료·용품 할인" \
 	"반려동물 사료 5,000원 할인 쿠폰" "FIXED_AMOUNT" 5000 30000 "null" 50000
 echo
 
-# ---------------------------------------------------------------------
-# 종료된 것 1개
-#
-#   과거 시각으로는 생성 자체가 안 되므로, 현재 시각으로 만든 뒤
-#   시각을 과거로 당기고(SQL) 상태를 API 로 SCHEDULED -> OPEN -> CLOSED 전이시킨다.
-#   전이마다 event_status_history 가 쌓여 실제로 지나간 이벤트와 같은 모양이 된다.
-#
-#   쿠폰 상태는 상태 이력 테이블이 없어서(coupon.status 컬럼뿐) SQL 로 바꿔도 잃을 게 없다.
-#   상태 스케줄러가 issueEndAt 이 지난 쿠폰을 ENDED 로 바꾸지만, 매분 실행이라 기다리지 않고
-#   여기서 직접 맞춘다.
-# ---------------------------------------------------------------------
-echo "④ 여름 예방접종 이벤트 (종료)"
-create_pair "여름 예방접종 이벤트" "지난 이벤트" \
-	"반려동물 예방접종 20% 할인 쿠폰" "RATE" 20 20000 30000 3000
-PAST_EVENT_ID="$CREATED_EVENT_ID"
-PAST_COUPON_ID="$CREATED_COUPON_ID"
-
-PAST_OPEN="$(date -d "-30 days" +"%Y-%m-%d %H:%M:%S")"
-PAST_CLOSE="$(date -d "-1 days" +"%Y-%m-%d %H:%M:%S")"
-
-mysql_exec "
-UPDATE event SET open_at='$PAST_OPEN', close_at='$PAST_CLOSE' WHERE event_id=$PAST_EVENT_ID;
-UPDATE coupon SET issue_start_at='$PAST_OPEN', issue_end_at='$PAST_CLOSE', status='ENDED' WHERE coupon_id=$PAST_COUPON_ID;
-" || die "④ 시각을 과거로 당기지 못했습니다 (MySQL 컨테이너 $MYSQL_CONTAINER 확인)"
-
-for to_status in OPEN CLOSED; do
-	RES="$(send_json PATCH "$BASE_URL/admin/events/$PAST_EVENT_ID/status" \
-		"{\"status\": \"$to_status\", \"reason\": \"시연 데이터 — 지난 이벤트\"}" \
-		-H "X-ADMIN-KEY: $TOKEN")"
-	[ "$(json_value isSuccess "$RES")" = "true" ] || die "④ 상태 전이 ($to_status)" "$RES"
-done
-
-# 종료된 쿠폰은 발급 대상이 아니므로 Redis 재고 키를 남겨둘 이유가 없다.
-# 정합성 배치가 ENDED 쿠폰을 대상으로 도는데, 남겨두면 대조 대상만 늘어난다.
-docker exec petcoupon-redis redis-cli --scan --pattern "coupon:issue:*{$PAST_COUPON_ID}" 2>/dev/null \
-	| xargs -r docker exec petcoupon-redis redis-cli DEL > /dev/null 2>&1
-
-echo "  종료 처리 완료 (open_at=$PAST_OPEN, close_at=$PAST_CLOSE)"
+echo "④ 여름 예방접종 이벤트"
+create_pair "여름 예방접종 이벤트" "예방접종 할인" \
+	"반려동물 예방접종 20% 할인 쿠폰" "RATE" 20 20000 30000 30000
+LAST_EVENT_ID="$CREATED_EVENT_ID"
 
 # ---------------------------------------------------------------------
 # 결과
@@ -252,7 +224,7 @@ SELECT e.event_id, e.name AS 이벤트, e.status AS 이벤트상태,
   FROM event e
   JOIN coupon c ON c.event_id = e.event_id
   JOIN coupon_stock s ON s.coupon_id = c.coupon_id
- WHERE e.event_id >= $((PAST_EVENT_ID - 3))
+ WHERE e.event_id BETWEEN $FIRST_EVENT_ID AND $LAST_EVENT_ID
  ORDER BY e.event_id;
 "
 
