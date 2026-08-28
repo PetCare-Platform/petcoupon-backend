@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -379,6 +381,117 @@ class AdminCouponStatusControllerTest {
                 .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
 
         mockMvc.perform(get("/admin/coupons/{couponId}/pipeline-drain-status", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COUPON404-0"));
+    }
+
+    @Test
+    void getIssueTimeSeriesReturnsTimeSeriesWhenAdminTokenIsValid() throws Exception {
+        var timeSeriesResponse = com.mycom.petcoupon.coupon.dto.res.CouponIssueTimeSeriesResponse.builder()
+                .couponId(COUPON_ID)
+                .windowSeconds(90)
+                .bucketSeconds(5)
+                .timeSeries(List.of(
+                        com.mycom.petcoupon.coupon.dto.res.IssueThroughputBucketResponse.builder()
+                                .bucket("2026-08-29 01:50:00")
+                                .issuedCount(50L)
+                                .failedCount(2L)
+                                .inProgressCount(1L)
+                                .build()
+                ))
+                .build();
+
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getIssueTimeSeries(COUPON_ID, 90, 5)).thenReturn(timeSeriesResponse);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN)
+                        .param("windowSeconds", "90")
+                        .param("bucketSeconds", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.code").value("200"))
+                .andExpect(jsonPath("$.result.couponId").value(COUPON_ID))
+                .andExpect(jsonPath("$.result.windowSeconds").value(90))
+                .andExpect(jsonPath("$.result.bucketSeconds").value(5))
+                .andExpect(jsonPath("$.result.timeSeries[0].bucket").value("2026-08-29 01:50:00"))
+                .andExpect(jsonPath("$.result.timeSeries[0].issuedCount").value(50))
+                .andExpect(jsonPath("$.result.timeSeries[0].failedCount").value(2))
+                .andExpect(jsonPath("$.result.timeSeries[0].inProgressCount").value(1));
+
+        verify(couponRealtimeStatusService).getIssueTimeSeries(COUPON_ID, 90, 5);
+    }
+
+    @Test
+    void getIssueTimeSeriesUsesDefaultParametersWhenNotProvided() throws Exception {
+        var timeSeriesResponse = com.mycom.petcoupon.coupon.dto.res.CouponIssueTimeSeriesResponse.builder()
+                .couponId(COUPON_ID)
+                .windowSeconds(90)
+                .bucketSeconds(5)
+                .timeSeries(List.of())
+                .build();
+
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getIssueTimeSeries(COUPON_ID, 90, 5)).thenReturn(timeSeriesResponse);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.isSuccess").value(true))
+                .andExpect(jsonPath("$.code").value("200"))
+                .andExpect(jsonPath("$.result.windowSeconds").value(90))
+                .andExpect(jsonPath("$.result.bucketSeconds").value(5));
+
+        verify(couponRealtimeStatusService).getIssueTimeSeries(COUPON_ID, 90, 5);
+    }
+
+    @Test
+    void getIssueTimeSeriesReturnsUnauthorizedWhenAdminTokenIsMissing() throws Exception {
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON401-0"));
+
+        verifyNoInteractions(couponRealtimeStatusService);
+    }
+
+    @Test
+    void getIssueTimeSeriesReturnsBadRequestWhenWindowSecondsIsZero() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN)
+                        .param("windowSeconds", "0"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+
+        verifyNoInteractions(couponRealtimeStatusService);
+    }
+
+    @Test
+    void getIssueTimeSeriesReturnsBadRequestWhenBucketSecondsExceedsMax() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID)
+                        .header(AdminSessionInterceptor.HEADER, VALID_TOKEN)
+                        .param("bucketSeconds", "301"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.isSuccess").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON400-1"));
+
+        verifyNoInteractions(couponRealtimeStatusService);
+    }
+
+    @Test
+    void getIssueTimeSeriesReturnsNotFoundWhenCouponDoesNotExist() throws Exception {
+        when(adminSessionService.isValid(VALID_TOKEN)).thenReturn(true);
+        when(couponRealtimeStatusService.getIssueTimeSeries(COUPON_ID, 90, 5))
+                .thenThrow(new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        mockMvc.perform(get("/admin/coupons/{couponId}/issue-timeseries", COUPON_ID)
                         .header(AdminSessionInterceptor.HEADER, VALID_TOKEN))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.isSuccess").value(false))

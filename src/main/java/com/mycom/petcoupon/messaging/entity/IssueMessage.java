@@ -64,6 +64,14 @@ import lombok.NoArgsConstructor;
 		@Index(
 			name = "idx_issue_message_dlq_list",
 			columnList = "status, created_at, message_id"
+		),
+		// 쿠폰별 발급 시계열 조회(#198, IssueMessageRepository.findThroughputByCouponAndSeconds)가
+		// coupon_id = :couponId AND created_at >= :from AND created_at < :to 조건으로
+		// 대시보드에서 초 단위 폴링으로 호출된다. (coupon_id, created_at) 복합 인덱스로
+		// 해당 쿠폰의 특정 시간 범위만 인덱스 레인지 스캔하게 한다.
+		@Index(
+			name = "idx_issue_message_coupon_created_at",
+			columnList = "coupon_id, created_at"
 		)
 	},
 	uniqueConstraints = {

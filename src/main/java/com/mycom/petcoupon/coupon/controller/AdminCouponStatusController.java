@@ -4,9 +4,11 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponFailureReasonResponse;
+import com.mycom.petcoupon.coupon.dto.res.CouponIssueTimeSeriesResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponPipelineDrainStatusResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
@@ -15,6 +17,8 @@ import com.mycom.petcoupon.coupon.service.CouponLoadTestStatusService;
 import com.mycom.petcoupon.coupon.service.CouponRealtimeStatusService;
 import com.mycom.petcoupon.global.common.CustomResponse;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 
@@ -62,6 +66,19 @@ public class AdminCouponStatusController {
             @PathVariable("couponId") @Positive Long couponId
     ) {
         CouponPipelineDrainStatusResponse response = couponRealtimeStatusService.getPipelineDrainStatus(couponId);
+
+        return CustomResponse.onSuccess(response);
+    }
+
+    @GetMapping("/{couponId}/issue-timeseries")
+    public CustomResponse<CouponIssueTimeSeriesResponse> getIssueTimeSeries(
+            @PathVariable("couponId") @Positive Long couponId,
+            @RequestParam(name = "windowSeconds", defaultValue = "90") @Min(1) @Max(3600) int windowSeconds,
+            @RequestParam(name = "bucketSeconds", defaultValue = "5") @Min(1) @Max(300) int bucketSeconds
+    ) {
+        CouponIssueTimeSeriesResponse response = couponRealtimeStatusService.getIssueTimeSeries(
+                couponId, windowSeconds, bucketSeconds
+        );
 
         return CustomResponse.onSuccess(response);
     }

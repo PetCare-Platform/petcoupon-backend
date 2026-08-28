@@ -446,4 +446,120 @@ class IssueMessageRepositoryTest {
 		assertThat(byReason.get(IssueFailureReason.KAFKA_PUBLISH_FAILED)).isEqualTo(2L);
 		assertThat(byReason.get(IssueFailureReason.CONSUME_PROCESSING_FAILED)).isEqualTo(1L);
 	}
+
+	@Test
+	void findThroughputByCouponAndSeconds는_특정쿠폰의_초단위_집계를_정확히_수행한다() {
+		LocalDateTime now = LocalDateTime.now().withNano(0);
+		// 초를 5의 배수로 맞춘다
+		int remainder = now.getSecond() % 5;
+		LocalDateTime bucketStart = now.minusSeconds(remainder);
+		String bucketKey = bucketStart.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+		LocalDateTime from = bucketStart.minusSeconds(10);
+		LocalDateTime to = bucketStart.plusSeconds(10);
+
+		// 1. 대상 쿠폰 메시지 생성
+		IssueMessage consumed = IssueMessage.pending(coupon, 101L, 101L, "coupon-ts-consumed", "{}");
+		entityManager.persist(consumed);
+		IssueMessage dlq = IssueMessage.pending(coupon, 102L, 102L, "coupon-ts-dlq", "{}");
+		entityManager.persist(dlq);
+		IssueMessage pending = IssueMessage.pending(coupon, 103L, 103L, "coupon-ts-pending", "{}");
+		entityManager.persist(pending);
+
+		// 2. 다른 쿠폰 메시지 생성 (집계에서 제외되어야 함)
+		Coupon otherCoupon = Coupon.builder()
+				.event(coupon.getEvent())
+				.name("다른 테스트 쿠폰")
+				.discountType(coupon.getDiscountType())
+				.discountValue(1_000)
+				.minOrderAmount(10_000)
+				.maxDiscountAmount(null)
+				.issueStartAt(now.minusMinutes(10))
+				.issueEndAt(now.plusHours(1))
+				.validDays(7)
+				.build();
+		entityManager.persist(otherCoupon);
+
+		IssueMessage otherConsumed = IssueMessage.pending(otherCoupon, 104L, 104L, "other-ts-consumed", "{}");
+		entityManager.persist(otherConsumed);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(consumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(
+				dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.updateStatus(otherConsumed.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		for (IssueMessage msg : List.of(consumed, dlq, pending, otherConsumed)) {
+			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+					.setParameter("time", bucketStart.plusSeconds(1))
+					.setParameter("id", msg.getMessageId())
+					.executeUpdate();
+		}
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueThroughputBucket> buckets = issueMessageRepository.findThroughputByCouponAndSeconds(
+				coupon.getCouponId(), 5, from, to
+		);
+
+		IssueThroughputBucket targetBucket = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucketKey))
+				.findFirst()
+				.orElseThrow();
+
+		assertThat(targetBucket.getIssuedCount()).isEqualTo(1L);
+		assertThat(targetBucket.getFailedCount()).isEqualTo(1L);
+		assertThat(targetBucket.getInProgressCount()).isEqualTo(1L);
+	}
+
+	@Test
+	void findThroughputByCouponAndSeconds는_9시간약수가아닌_7초버킷에서도_타임존과_무관하게_정확히_집계한다() {
+		LocalDateTime from = LocalDateTime.now().withNano(0).minusMinutes(1);
+		int bucketSeconds = 7;
+		LocalDateTime to = from.plusSeconds(35); // 7초 버킷 5개
+
+		// from + 3초 (1번째 버킷: [from, from+7s))
+		IssueMessage msg1 = IssueMessage.pending(coupon, 201L, 201L, "coupon-ts-7s-1", "{}");
+		// from + 10초 (2번째 버킷: [from+7s, from+14s))
+		IssueMessage msg2 = IssueMessage.pending(coupon, 202L, 202L, "coupon-ts-7s-2", "{}");
+		entityManager.persist(msg1);
+		entityManager.persist(msg2);
+		entityManager.flush();
+
+		issueMessageRepository.updateStatus(msg1.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.updateStatus(msg2.getMessageId(), IssueMessageStatus.CONSUMED);
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(3))
+				.setParameter("id", msg1.getMessageId())
+				.executeUpdate();
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
+				.setParameter("time", from.plusSeconds(10))
+				.setParameter("id", msg2.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		List<IssueThroughputBucket> buckets = issueMessageRepository.findThroughputByCouponAndSeconds(
+				coupon.getCouponId(), bucketSeconds, from, to
+		);
+
+		String bucket1Key = from.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+		String bucket2Key = from.plusSeconds(7).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+
+		IssueThroughputBucket bucket1 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket1Key))
+				.findFirst()
+				.orElseThrow();
+		IssueThroughputBucket bucket2 = buckets.stream()
+				.filter(b -> b.getBucket().equals(bucket2Key))
+				.findFirst()
+				.orElseThrow();
+
+		assertThat(bucket1.getIssuedCount()).isEqualTo(1L);
+		assertThat(bucket2.getIssuedCount()).isEqualTo(1L);
+	}
 }
