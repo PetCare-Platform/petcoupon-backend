@@ -3,11 +3,39 @@
 > **선착순 쿠폰 발급 시스템**
 > 대규모 동시 요청 상황에서도 **초과 발급 0건**과 **1인 1매**를 보장하는 쿠폰 발급 백엔드입니다.
 
-![Java](https://img.shields.io/badge/Java-21-007396)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.0-6DB33F)
-![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1)
-![Redis](https://img.shields.io/badge/Redis-7.2-DC382D)
-![Kafka](https://img.shields.io/badge/Kafka-3.7.0-231F20)
+**Language · Framework**
+
+![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.0-6DB33F?logo=springboot&logoColor=white)
+![Spring Data JPA](https://img.shields.io/badge/Spring%20Data%20JPA-6DB33F?logo=spring&logoColor=white)
+![Spring Batch](https://img.shields.io/badge/Spring%20Batch-6DB33F?logo=spring&logoColor=white)
+![Lombok](https://img.shields.io/badge/Lombok-BC4521?logo=lombok&logoColor=white)
+
+**Data · Messaging**
+
+![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-7.2-DC382D?logo=redis&logoColor=white)
+![Redis Stream](https://img.shields.io/badge/Redis%20Stream-DC382D?logo=redis&logoColor=white)
+![Lua](https://img.shields.io/badge/Lua-2C2D72?logo=lua&logoColor=white)
+![Kafka](https://img.shields.io/badge/Kafka-3.7.0-231F20?logo=apachekafka&logoColor=white)
+
+**Build · Infrastructure**
+
+![Gradle](https://img.shields.io/badge/Gradle-02303A?logo=gradle&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
+![Actuator](https://img.shields.io/badge/Actuator-6DB33F?logo=springboot&logoColor=white)
+
+**Test · Quality**
+
+![JUnit 5](https://img.shields.io/badge/JUnit%205-25A162?logo=junit5&logoColor=white)
+![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F?logo=testcontainers&logoColor=white)
+![Awaitility](https://img.shields.io/badge/Awaitility-4B8BBE)
+![k6](https://img.shields.io/badge/k6-7D64FF?logo=k6&logoColor=white)
+
+**Collaboration**
+
+![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)
+![Notion](https://img.shields.io/badge/Notion-000000?logo=notion&logoColor=white)
 
 ---
 
