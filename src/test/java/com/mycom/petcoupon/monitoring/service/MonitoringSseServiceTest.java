@@ -10,9 +10,12 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,6 +49,9 @@ class MonitoringSseServiceTest {
 
     private TestableMonitoringSseService service;
     private SimpleMeterRegistry meterRegistry;
+
+    // 가장 최근에 만들어진 구독의 큐. 자리를 빼앗기는 상황을 테스트에서 걸기 위해 붙잡아 둔다.
+    private volatile SlotStealingQueue stealingQueue;
 
     // 다음에 만들어질 emitter가 멈춰 설 이벤트. 연결 후에 걸면 송신 스레드가 이미 connected를
     // 보내버린 뒤라 경쟁이 생기므로, 생성 시점에 미리 심어 둔다.
@@ -198,10 +204,73 @@ class MonitoringSseServiceTest {
 
         await().atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(healthy.names()).contains(MONITORING_EVENT));
-        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
-            assertThat(broken.isCompleted()).isTrue();
-            assertThat(service.activeSubscriptionCount()).isEqualTo(1);
-        });
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isEqualTo(1));
+    }
+
+    @Test
+    @DisplayName("송신에 실패해도 emitter를 완료시키지 않는다")
+    void doesNotCompleteEmitterAfterSendFailure() {
+        start(properties());
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        emitter.failWith(new IOException("broken pipe"));
+        service.offer(event("발급 실패"));
+
+        // 구독은 정리되어야 한다.
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isZero());
+
+        /*
+         * 여기서 complete()를 부르면 이미 못 쓰는 응답을 flush하면서
+         * AsyncRequestNotUsableException이 나고, 그게 async dispatch로 GlobalExceptionHandler까지
+         * 올라가 JSON 500을 다시 쓰려다 HttpMessageNotWritableException으로 이어진다(#191).
+         * 송신 실패는 컨테이너가 이미 아는 사건이라 요청 정리도 컨테이너가 한다.
+         */
+        assertThat(emitter.isCompleted()).isFalse();
+        assertThat(emitter.completeCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("컨테이너 콜백으로 정리된 뒤에도 emitter를 완료시키지 않는다")
+    void doesNotCompleteEmitterOnContainerCallbacks() {
+        start(properties());
+        RecordingEmitter emitter = connect();
+        awaitConnected(emitter);
+
+        // 컨테이너가 연결 종료를 통보한 상황. 이때 complete()를 부르면 dispatch가 한 번 더 돈다.
+        emitter.fireCompletion();
+
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isZero());
+        assertThat(emitter.completeCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("서버 종료 시에는 살아 있는 연결만 한 번씩 완료시킨다")
+    void completesLiveEmittersOnlyOnShutdown() {
+        start(properties());
+        RecordingEmitter live = connect();
+        RecordingEmitter dead = connect();
+        awaitConnected(live);
+        awaitConnected(dead);
+
+        // dead는 송신 실패로 이미 정리된 구독이다.
+        dead.failWith(new IOException("broken pipe"));
+        service.offer(event("발급 실패"));
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.activeSubscriptionCount()).isEqualTo(1));
+
+        service.shutdown();
+
+        // 살아 있던 연결은 정확히 한 번 완료되고, 이미 끝난 연결은 다시 완료되지 않는다.
+        assertThat(live.completeCount()).isEqualTo(1);
+        assertThat(dead.completeCount()).isZero();
+
+        // 두 번 내려도 중복 완료가 없어야 한다.
+        service.shutdown();
+        assertThat(live.completeCount()).isEqualTo(1);
     }
 
     @Test
@@ -218,8 +287,8 @@ class MonitoringSseServiceTest {
         emitter.failWith(new IOException("broken pipe"));
 
         await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
-            assertThat(emitter.isCompleted()).isTrue();
             assertThat(service.activeSubscriptionCount()).isZero();
+            assertThat(emitter.completeCount()).isZero();
         });
     }
 
@@ -362,6 +431,147 @@ class MonitoringSseServiceTest {
     }
 
     @Test
+    @DisplayName("큐가 가득 차면 오래된 이벤트를 버리고 최신 이벤트를 남긴다")
+    void keepsNewestEventsWhenQueueIsFull() {
+        MonitoringProperties properties = properties();
+        properties.setQueueCapacity(3);
+        start(properties);
+
+        RecordingEmitter emitter = connectBlockedOn(CONNECTED);
+        await().atMost(Duration.ofSeconds(2)).until(emitter::isBlocked);
+
+        for (int i = 0; i < 10; i++) {
+            service.offer(event("발급 실패 " + i));
+        }
+
+        emitter.unblock();
+
+        /*
+         * 부하 상황에서 관리자가 봐야 하는 건 지금 무슨 일이 나고 있는지다. 최신을 버리면
+         * 화면이 과거에 묶여 장애가 커질수록 현재 상태를 못 본다.
+         */
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(emitter.payloads())
+                        .anyMatch(payload -> payload.contains("발급 실패 9")));
+
+        List<String> delivered = emitter.payloads().stream()
+                .filter(payload -> payload.contains("발급 실패"))
+                .toList();
+
+        assertThat(delivered).hasSize(3);
+        assertThat(delivered).allMatch(payload ->
+                payload.contains("발급 실패 7")
+                        || payload.contains("발급 실패 8")
+                        || payload.contains("발급 실패 9"));
+
+        // 10건 중 3건만 남았으니 유실은 정확히 7건이다.
+        assertThat(droppedCount()).isEqualTo(7.0);
+        assertThat(emitter.payloads()).anyMatch(payload -> payload.contains("droppedCount=7"));
+    }
+
+    @Test
+    @DisplayName("비운 자리를 다른 생산자가 채가도 마지막까지 최신 이벤트 삽입을 재시도한다")
+    void retriesInsertAfterEveryPollWhenSlotsAreStolen() {
+        int capacity = 3;
+        MonitoringProperties properties = properties();
+        properties.setQueueCapacity(capacity);
+        start(properties);
+
+        RecordingEmitter emitter = connectBlockedOn(CONNECTED);
+        await().atMost(Duration.ofSeconds(2)).until(emitter::isBlocked);
+
+        // 큐를 가득 채운다.
+        for (int i = 0; i < capacity; i++) {
+            service.offer(event("오래된 " + i));
+        }
+
+        /*
+         * 이후 3번의 offer를 "다른 로깅 스레드가 자리를 먼저 채간 것"으로 만든다.
+         * 재시도 횟수와 같은 수라, 루프의 마지막 poll이 만든 자리에서만 삽입이 성공할 수 있다.
+         *
+         * 예전 구조(offer 먼저, 실패하면 poll)에서는 마지막 poll 뒤에 offer가 없어서
+         * 오래된 3건을 버리고도 최신 이벤트까지 잃고 큐에 빈자리가 남았다 — 4건 유실.
+         * 지금 구조(poll 먼저, 곧바로 offer)에서는 3건만 버리고 최신 이벤트가 들어간다.
+         */
+        stealingQueue.stealNext(3);
+        service.offer(event("최신 이벤트"));
+
+        emitter.unblock();
+
+        // 최신 이벤트는 반드시 살아남아야 한다.
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(deliveredEvents(emitter))
+                        .anyMatch(payload -> payload.contains("최신 이벤트")));
+
+        // 버린 건 오래된 3건뿐이다. 4건이면 최신 이벤트까지 버렸다는 뜻이다.
+        assertThat(droppedCount()).isEqualTo(3.0);
+        assertThat(deliveredEvents(emitter)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("여러 스레드가 동시에 넣어도 큐에 빈자리가 남지 않고 최신 이벤트가 살아남는다")
+    void keepsQueueFullAndNewestEventsUnderConcurrentProducers() throws Exception {
+        int capacity = 4;
+        int producers = 8;
+        int perProducer = 500;
+
+        MonitoringProperties properties = properties();
+        properties.setQueueCapacity(capacity);
+        start(properties);
+
+        // 송신을 막아 두면 큐가 전혀 소비되지 않아, 남은 내용이 곧 offer 로직의 결과가 된다.
+        RecordingEmitter emitter = connectBlockedOn(CONNECTED);
+        await().atMost(Duration.ofSeconds(2)).until(emitter::isBlocked);
+
+        CountDownLatch startGate = new CountDownLatch(1);
+        List<Thread> threads = new ArrayList<>();
+        for (int p = 0; p < producers; p++) {
+            int producer = p;
+            threads.add(new Thread(() -> {
+                awaitQuietly(startGate);
+                for (int i = 0; i < perProducer; i++) {
+                    service.offer(event("p" + producer + "-" + i));
+                }
+            }));
+        }
+
+        threads.forEach(Thread::start);
+        startGate.countDown();
+        for (Thread thread : threads) {
+            thread.join();
+        }
+
+        /*
+         * 생산이 멈춘 뒤 단일 스레드로 표식을 큐 용량만큼 넣는다. drop-oldest가 맞다면 이 표식이
+         * 마지막 capacity건이므로 전부 살아남아야 한다 — 동시 생산 구간에서는 어떤 이벤트가
+         * 남을지 결정적으로 말할 수 없어서, 최신 우선 여부는 이 조용한 구간으로 검증한다.
+         */
+        for (int i = 0; i < capacity; i++) {
+            service.offer(event("MARKER-" + i));
+        }
+
+        emitter.unblock();
+
+        long total = (long) producers * perProducer + capacity;
+
+        /*
+         * 큐에 남아 있던 건 정확히 capacity건이어야 한다.
+         *
+         * 이게 이 테스트의 핵심이다. poll로 자리를 만들어 놓고 offer를 재시도하지 않으면 그 자리가
+         * 빈 채로 남아, 소비 시점에 capacity보다 적게 나온다. 단일 생산자로는 재시도 한 번에
+         * 성공해 버려서 이 경쟁 조건 자체가 재현되지 않는다.
+         */
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> assertThat(deliveredEvents(emitter)).hasSize(capacity));
+
+        // 유실 집계는 정확해야 한다 — 전달된 것과 버린 것의 합이 넣은 전부다.
+        assertThat(droppedCount()).isEqualTo((double) (total - capacity));
+
+        // 마지막에 넣은 최신 이벤트가 살아남았다.
+        assertThat(deliveredEvents(emitter)).allMatch(payload -> payload.contains("MARKER-"));
+    }
+
+    @Test
     @DisplayName("유실이 없으면 누락 통지를 보내지 않는다")
     void doesNotNotifyWhenNothingDropped() {
         start(properties());
@@ -408,6 +618,22 @@ class MonitoringSseServiceTest {
         return connect();
     }
 
+    // 실제로 클라이언트에 나간 monitoring-event의 payload만 추린다.
+    // connected/heartbeat/events-dropped는 제외된다.
+    private List<String> deliveredEvents(RecordingEmitter emitter) {
+        List<String> names = emitter.names();
+        List<String> payloads = emitter.payloads();
+        List<String> delivered = new ArrayList<>();
+
+        for (int i = 0; i < names.size() && i < payloads.size(); i++) {
+            if (MONITORING_EVENT.equals(names.get(i))) {
+                delivered.add(payloads.get(i));
+            }
+        }
+
+        return delivered;
+    }
+
     private void awaitConnected(RecordingEmitter emitter) {
         await().atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> assertThat(emitter.names()).contains(CONNECTED));
@@ -448,6 +674,40 @@ class MonitoringSseServiceTest {
             created.add(emitter);
             return emitter;
         }
+
+        @Override
+        BlockingQueue<MonitoringEventResponse> createQueue(int capacity) {
+            stealingQueue = new SlotStealingQueue(capacity);
+            return stealingQueue;
+        }
+    }
+
+    /**
+     * 지정한 횟수만큼 {@code offer}를 실패시키는 큐.
+     *
+     * <p>drop-oldest가 재시도하는 이유는 "poll로 만든 자리를 다른 로깅 스레드가 먼저 채가는" 경쟁
+     * 때문인데, 그 순간은 스레드를 아무리 많이 띄워도 결정적으로 만들 수 없다. 실패하는 offer는
+     * 자리를 빼앗긴 것과 호출자 입장에서 구별되지 않으므로, 그 한 지점만 흉내 낸다.
+     */
+    private static final class SlotStealingQueue extends ArrayBlockingQueue<MonitoringEventResponse> {
+
+        private final AtomicInteger remainingSteals = new AtomicInteger();
+
+        private SlotStealingQueue(int capacity) {
+            super(capacity);
+        }
+
+        @Override
+        public boolean offer(MonitoringEventResponse event) {
+            if (remainingSteals.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                return false;
+            }
+            return super.offer(event);
+        }
+
+        private void stealNext(int count) {
+            remainingSteals.set(count);
+        }
     }
 
     /**
@@ -459,8 +719,16 @@ class MonitoringSseServiceTest {
         private final List<String> names = new CopyOnWriteArrayList<>();
         private final List<String> payloads = new CopyOnWriteArrayList<>();
         private final CountDownLatch releaseGate = new CountDownLatch(1);
-        private final AtomicBoolean completed = new AtomicBoolean();
         private final AtomicBoolean blocked = new AtomicBoolean();
+
+        // 서블릿 컨테이너가 연결 종료를 통보하는 경로를 테스트에서 흉내 내기 위해 콜백을 붙잡아 둔다.
+        private final List<Runnable> completionCallbacks = new CopyOnWriteArrayList<>();
+
+        /*
+         * 완료 횟수를 센다. boolean이면 "complete를 아예 안 불렀다"와 "여러 번 불렀다"를
+         * 구분할 수 없는데, #191에서 문제가 된 게 정확히 그 구분이다.
+         */
+        private final AtomicInteger completeCount = new AtomicInteger();
 
         private volatile String blockOnEvent;
         private volatile IOException failure;
@@ -510,7 +778,13 @@ class MonitoringSseServiceTest {
 
         @Override
         public void complete() {
-            completed.set(true);
+            completeCount.incrementAndGet();
+        }
+
+        @Override
+        public void onCompletion(Runnable callback) {
+            completionCallbacks.add(callback);
+            super.onCompletion(callback);
         }
 
         private List<String> names() {
@@ -522,7 +796,16 @@ class MonitoringSseServiceTest {
         }
 
         private boolean isCompleted() {
-            return completed.get();
+            return completeCount.get() > 0;
+        }
+
+        private int completeCount() {
+            return completeCount.get();
+        }
+
+        // 컨테이너가 onCompletion을 통보한 상황을 재현한다.
+        private void fireCompletion() {
+            completionCallbacks.forEach(Runnable::run);
         }
 
         private boolean isBlocked() {

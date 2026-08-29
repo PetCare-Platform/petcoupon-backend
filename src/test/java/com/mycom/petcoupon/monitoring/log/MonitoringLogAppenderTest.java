@@ -9,10 +9,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
+import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
+import com.mycom.petcoupon.monitoring.config.MonitoringProperties;
 import com.mycom.petcoupon.monitoring.dto.res.MonitoringEventResponse;
+import com.mycom.petcoupon.monitoring.exception.MonitoringErrorCode;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.LoggingEvent;
 
 class MonitoringLogAppenderTest {
@@ -50,6 +56,79 @@ class MonitoringLogAppenderTest {
                 "org.springframework.context.support.PostProcessorRegistrationDelegate$BeanPostProcessorChecker"));
 
         assertThat(received).isEmpty();
+    }
+
+    @Test
+    @DisplayName("기본 제외 목록이 SSE 오류 로그의 재유입을 막는다")
+    void blocksExceptionHandlerResolverFeedbackLoop() {
+        // 운영에서 실제로 쓰이는 기본값으로 검증한다. 여기서만 통과하고 기본값에 빠져 있으면 의미가 없다.
+        MonitoringLogAppender defaults =
+                new MonitoringLogAppender(sink, new MonitoringProperties().getExcludedLoggers());
+        defaults.start();
+
+        /*
+         * SSE 응답이 끊긴 뒤 GlobalExceptionHandler가 JSON 오류 본문을 쓰려다 실패하면 이 WARN이 난다.
+         * 이걸 수집하면 SSE 오류 → 모니터링 이벤트 → 송신 실패 → 다시 SSE 오류로 순환한다(#191).
+         */
+        defaults.doAppend(event(Level.WARN, "Failure in @ExceptionHandler ...",
+                "org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver"));
+
+        assertThat(received).isEmpty();
+
+        // 반면 실제 애플리케이션 500 오류는 GlobalExceptionHandler가 직접 남기므로 계속 올라와야 한다.
+        defaults.doAppend(event(Level.ERROR, "[Unhandled Exception]",
+                "com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler"));
+
+        assertThat(received).hasSize(1);
+        assertThat(received.get(0).source()).isEqualTo("GlobalExceptionHandler");
+
+        defaults.stop();
+    }
+
+    @Test
+    @DisplayName("모니터링 자신의 로그는 수집하지 않는다")
+    void blocksSelfCollectionFromMonitoringPackage() {
+        MonitoringLogAppender defaults =
+                new MonitoringLogAppender(sink, new MonitoringProperties().getExcludedLoggers());
+        defaults.start();
+
+        /*
+         * 스트림이 아파서 남긴 로그가 다시 그 스트림으로 들어가면 장애일수록 이벤트가 불어난다.
+         * 관측 도구는 자기 자신을 관측 대상에 넣지 않는다(#191).
+         */
+        defaults.doAppend(event(Level.ERROR, "SSE 송신 실패",
+                "com.mycom.petcoupon.monitoring.service.MonitoringSseService"));
+        defaults.doAppend(event(Level.WARN, "appender 오류",
+                "com.mycom.petcoupon.monitoring.log.MonitoringLogAppender"));
+
+        assertThat(received).isEmpty();
+
+        // 같은 최상위 패키지라도 모니터링 밖이면 그대로 수집된다.
+        defaults.doAppend(event(Level.ERROR, "발급 실패",
+                "com.mycom.petcoupon.coupon.service.CouponIssueService"));
+
+        assertThat(received).hasSize(1);
+
+        defaults.stop();
+    }
+
+    @Test
+    @DisplayName("연결 한도 초과 503 로그는 전역 예외 핸들러에서 나도 SSE 이벤트로 전달하지 않는다")
+    void doesNotForwardExpectedCapacityRejectionFromGlobalExceptionHandler() {
+        Logger exceptionHandlerLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        Level originalLevel = exceptionHandlerLogger.getLevel();
+        exceptionHandlerLogger.setLevel(Level.INFO);
+        exceptionHandlerLogger.addAppender(appender);
+
+        try {
+            new GlobalExceptionHandler().handleCustomException(
+                    new GeneralException(MonitoringErrorCode.TOO_MANY_STREAM_CONNECTIONS));
+
+            assertThat(received).isEmpty();
+        } finally {
+            exceptionHandlerLogger.detachAppender(appender);
+            exceptionHandlerLogger.setLevel(originalLevel);
+        }
     }
 
     @Test
