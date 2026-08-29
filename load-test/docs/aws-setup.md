@@ -43,6 +43,32 @@ c 계열이 아니라 r 계열이다.
 중지하고 유형만 올리거나(중지 상태에서 변경 가능), `INSTANCE_INDEX` · `INSTANCE_STRIDE` 로
 여러 대에 나눠 쏜다(`README.md` "여러 대에서 나눠 쏠 때").
 
+### 앱 서버 기동
+
+사설 IP 는 환경변수로 주입한다. 앱은 소스를 두지 않고 **빌드한 jar 만 올려서** 실행한다.
+
+```bash
+# 앱 서버(172.31.43.201)
+ulimit -n 65535
+
+TZ=Asia/Seoul \
+DB_URL="jdbc:mysql://172.31.40.51:3306/petcoupon" \
+REDIS_HOST=172.31.40.51 \
+KAFKA_BOOTSTRAP_SERVERS=172.31.40.51:9092 \
+java -jar app.jar
+```
+
+부하 측정 시에는 여기에 튜닝 환경변수(`ISSUE_LOG_LEVEL` · `TOMCAT_*` · `DB_POOL_SIZE` ·
+`COUPON_RECONCILIATION_SCHEDULER_ENABLED`)를 함께 준다. 값과 근거는
+[`load-test-scenario.md`](./load-test-scenario.md) §2 사전 설정에 있다.
+
+> ⚠️ **`TZ` 를 빼면 안 된다.** EC2 는 기본이 UTC 라 OS 시간대를 맞춰두지 않으면 앱만 UTC 로
+> 돌아간다. 쿠폰 생성 스크립트는 인프라 서버(KST)에서 실행되므로 발급 시작 시각이 **9시간
+> 어긋나** 쿠폰이 열리지 않는다. OS 설정에 기대지 않고 실행 명령에 명시한다.
+>
+> `ulimit -n` 은 셸 세션 단위라 SSH 를 새로 붙을 때마다 다시 지정해야 한다.
+> `TOMCAT_MAX_CONNECTIONS=25000` 을 받으려면 파일 디스크립터가 그만큼 필요하다.
+
 ## 2. 보안 그룹
 
 그룹은 두 개이고, **앱과 k6 가 같은 그룹에 들어 있다.**
