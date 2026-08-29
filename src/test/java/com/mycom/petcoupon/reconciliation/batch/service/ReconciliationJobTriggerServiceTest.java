@@ -243,6 +243,21 @@ class ReconciliationJobTriggerServiceTest {
                 .isEqualTo(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
     }
 
+    // #202 리뷰 반영 — 허용 목록을 SOLD_OUT·ENDED 둘로 넓혔으니, 넓히지 않은 쪽도 실제로 막히는지
+    // 본다. ACTIVE만 검증하면 "READY도 거절한다"는 건 확인된 적 없는 주장으로 남는다.
+    @Test
+    void 발급_시작_전_쿠폰이면_거부된다() {
+        transactionTemplate.executeWithoutResult(status ->
+                entityManager.createNativeQuery("UPDATE coupon SET status = 'READY' WHERE coupon_id = :couponId")
+                        .setParameter("couponId", activeCoupon.getCouponId())
+                        .executeUpdate());
+
+        assertThatThrownBy(() -> reconciliationJobTriggerService.reconcile(activeCoupon.getCouponId()))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
+    }
+
     @Test
     void 파이프라인이_드레인_안됐으면_예전과_같은_예외로_거부된다() {
         transactionTemplate.executeWithoutResult(status ->

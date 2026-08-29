@@ -26,6 +26,12 @@ import lombok.RequiredArgsConstructor;
  * SOLD_OUT도 통과시킨다(#202) — 재고가 0이면 Lua가 전건 거절하므로 새 발급이 생길 수 없고, 이미
  * 나간 요청의 뒤늦은 확정은 아래 드레인 체크가 막는다. ENDED만 허용하던 때는 발급 기간이 한 달
  * 남은 쿠폰을 재고를 다 써도 그때까지 검증할 수 없었다.
+ *
+ * <p><b>이 전제는 {@code CouponController.issue()}의 SOLD_OUT 차단에 의존한다.</b> Lua는 Redis
+ * 재고만 보고 {@code coupon.status}는 안 읽어서, SOLD_OUT인데 Redis에만 재고가 남은 상태에서는
+ * 발급이 그대로 통과한다. 그 차단이 없으면 여기 드레인 체크를 지난 직후 새 요청이 들어와 검증
+ * 도중에 Redis 재고가 움직이고, 리포트가 서로 다른 시점의 스냅샷을 비교하게 된다. 발급 API의
+ * SOLD_OUT 차단을 지우려면 이 Tasklet의 허용 상태도 ENDED로 되돌려야 한다.
  */
 @Component
 @StepScope

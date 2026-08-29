@@ -17,6 +17,7 @@ import com.mycom.petcoupon.coupon.dto.req.CouponIssueCreateRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueCreateResponse;
 import com.mycom.petcoupon.coupon.dto.res.CouponRealtimeStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
+import com.mycom.petcoupon.coupon.entity.enums.CouponStatus;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
 import com.mycom.petcoupon.coupon.repository.CouponRepository;
 import com.mycom.petcoupon.coupon.service.CouponIssueService;
@@ -78,6 +79,26 @@ public class CouponController {
         if (now.isAfter(coupon.getIssueEndAt())) {
             return ResponseEntity.status(CouponErrorCode.COUPON_ISSUE_EXPIRED.getStatus())
                     .body(CouponErrorCode.COUPON_ISSUE_EXPIRED.getErrorResponse());
+        }
+
+        // 0-a단계: 품절된 쿠폰도 여기서 끊는다(#202).
+        //
+        // Lua는 Redis 재고만 보고 coupon.status는 안 읽는다. 그래서 이 검사가 없으면 SOLD_OUT인데
+        // Redis에만 재고가 남은 상태(초기화 직후, Redis 재기동, 실제 정합성 오류)에서 발급이 그대로
+        // 통과한다. 정합성 검증이 "SOLD_OUT이면 더 발급되지 않는다"를 전제로 SOLD_OUT 쿠폰을 검증
+        // 대상에 넣었으므로(PreconditionCheckTasklet 참고), 그 전제를 실제로 보장하는 곳이 여기다 —
+        // 파이프라인 드레인 검사는 검사 시점 이후에 새로 들어오는 요청까지는 막지 못한다.
+        //
+        // ENDED에는 이 검사가 필요 없다. ENDED는 issueEndAt이 지나야만 붙는 상태라(endCoupons),
+        // 바로 위 기간 검사가 이미 같은 요청을 막는다. SOLD_OUT은 발급 기간과 무관하게 붙어서
+        // API 경로가 열려 있는 유일한 상태다.
+        //
+        // 위 기간 검사와 마찬가지로 멱등키 등록·Stream 적재보다 앞에 둔다 — 어차피 Lua가 거절할
+        // 요청에 멱등키를 만들고 Stream을 채울 이유가 없다. coupon은 위에서 이미 읽어둔 엔티티라
+        // 쿼리도 늘지 않는다.
+        if (coupon.getStatus() == CouponStatus.SOLD_OUT) {
+            return ResponseEntity.status(CouponErrorCode.SOLD_OUT.getStatus())
+                    .body(CouponErrorCode.SOLD_OUT.getErrorResponse());
         }
 
         // 0-b단계: userId 존재 확인도 같은 이유로 미리 한다. IdempotencyKey가 user_id도 FK로 물고 있어서,
