@@ -73,7 +73,12 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # 브로커가 접속한 클라이언트에게 "나한테 오려면 이 주소로 와"라고 알려주는 값이다.
+      # 앱이 다른 서버에 있으면 localhost 는 앱 자신을 가리켜서 접속이 실패한다.
+      # 기본값은 로컬 개발용으로 두고, 분리 환경에서만 사설 IP 를 넘긴다.
+      #
+      #   KAFKA_ADVERTISED_HOST=172.31.40.51 docker compose --profile kafka up -d
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_ADVERTISED_HOST:-localhost}:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
