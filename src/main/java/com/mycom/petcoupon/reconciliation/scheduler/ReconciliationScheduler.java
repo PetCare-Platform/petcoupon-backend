@@ -16,8 +16,10 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * 정합성 검증(#111)을 관리자가 수동으로 트리거하지 않아도 주기적으로 자동 실행한다(#154).
  *
- * PreconditionCheckTasklet이 ENDED 상태가 아니면 바로 거절하므로, 애초에 ENDED 쿠폰만
- * 대상으로 순회한다. 간격은 코드에 고정하지 않고 프로퍼티로 빼서, 운영은 기본값(30분)을 쓰고
+ * PreconditionCheckTasklet이 통과시키지 않는 상태는 바로 거절되므로, 애초에 검증 가능한
+ * 상태(CouponStatus.RECONCILABLE_STATUSES — SOLD_OUT·ENDED)의 쿠폰만 순회한다. 판정 기준을
+ * 두 곳에 따로 적으면 어긋나므로 목록을 enum에서 가져온다.
+ * 간격은 코드에 고정하지 않고 프로퍼티로 빼서, 운영은 기본값(30분)을 쓰고
  * 테스트/시연에서는 짧은 값으로 오버라이드할 수 있게 한다 — 실제로 몇십 분을 기다리며
  * 검증할 방법이 없기 때문이다.
  */
@@ -41,9 +43,10 @@ public class ReconciliationScheduler {
             scheduler = "reconciliationSchedulerTaskScheduler"
     )
     public void runScheduledReconciliation() {
-        List<Long> endedCouponIds = couponRepository.findCouponIdsByStatus(CouponStatus.ENDED);
+        List<Long> targetCouponIds = couponRepository.findCouponIdsByStatusIn(
+                CouponStatus.RECONCILABLE_STATUSES);
 
-        for (Long couponId : endedCouponIds) {
+        for (Long couponId : targetCouponIds) {
             try {
                 reconciliationJobTriggerService.reconcile(couponId);
             } catch (Exception e) {

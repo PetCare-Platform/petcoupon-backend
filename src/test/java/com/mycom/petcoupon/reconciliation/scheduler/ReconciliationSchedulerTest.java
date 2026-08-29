@@ -32,8 +32,8 @@ class ReconciliationSchedulerTest {
     private ReconciliationScheduler scheduler;
 
     @Test
-    void runScheduledReconciliation은_ENDED_쿠폰_전체를_순회하며_reconcile을_호출한다() {
-        when(couponRepository.findCouponIdsByStatus(CouponStatus.ENDED)).thenReturn(List.of(1L, 2L, 3L));
+    void runScheduledReconciliation은_검증_가능한_쿠폰_전체를_순회하며_reconcile을_호출한다() {
+        when(couponRepository.findCouponIdsByStatusIn(CouponStatus.RECONCILABLE_STATUSES)).thenReturn(List.of(1L, 2L, 3L));
 
         scheduler.runScheduledReconciliation();
 
@@ -47,7 +47,7 @@ class ReconciliationSchedulerTest {
     // 주석에 명시된 요구사항을 그대로 검증한다.
     @Test
     void 한_쿠폰의_reconcile_실패가_나머지_쿠폰_검증을_막지_않는다() {
-        when(couponRepository.findCouponIdsByStatus(CouponStatus.ENDED)).thenReturn(List.of(1L, 2L, 3L));
+        when(couponRepository.findCouponIdsByStatusIn(CouponStatus.RECONCILABLE_STATUSES)).thenReturn(List.of(1L, 2L, 3L));
         doThrow(new GeneralException(CouponErrorCode.REQUEST_IN_PROGRESS))
                 .when(reconciliationJobTriggerService).reconcile(2L);
 

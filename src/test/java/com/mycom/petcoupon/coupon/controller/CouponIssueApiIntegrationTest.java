@@ -70,6 +70,9 @@ class CouponIssueApiIntegrationTest {
 	private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 	private static final long TIMEOUT_MILLIS = 15_000L;
 	private static final long POLL_INTERVAL_MILLIS = 100L;
+	// application.properties의 coupon.issue.stream.key와 같은 값. 이 테스트는 "Stream에 안 들어갔다"를
+	// 길이 변화로 보므로 키 이름이 필요하다.
+	private static final String ISSUE_STREAM_KEY = "coupon:issue:stream";
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -379,6 +382,46 @@ class CouponIssueApiIntegrationTest {
 		mockMvc.perform(get("/users/{userId}/coupon-issue-requests", nonExistentUserId))
 				.andExpect(status().isNotFound())
 				.andExpect(jsonPath("$.code").value("USER404-0"));
+	}
+
+	// #202 — SOLD_OUT 쿠폰은 Redis 재고가 남아 있어도 Stream까지 못 간다.
+	//
+	// Redis 재고를 일부러 남겨두는 게 이 테스트의 핵심이다. 재고를 0으로 두면 Lua가 어차피 거절해서
+	// "컨트롤러가 막았는지 Lua가 막았는지" 구분이 안 된다. 재고가 남은 상태에서 Stream 길이가 그대로면
+	// 컨트롤러가 앞에서 끊었다는 뜻이다 — 정합성 검증이 SOLD_OUT을 대상에 넣을 수 있는 근거가 이거다.
+	@Test
+	void 품절_상태면_Redis_재고가_남아_있어도_발급_요청이_Stream에_들어가지_않는다() throws Exception {
+		initRedisStock(coupon.getCouponId(), 10);
+
+		transactionTemplate.executeWithoutResult(status ->
+				entityManager.createNativeQuery("UPDATE coupon SET status = 'SOLD_OUT' WHERE coupon_id = :couponId")
+						.setParameter("couponId", coupon.getCouponId())
+						.executeUpdate());
+
+		long streamSizeBefore = currentStreamSize();
+		String key = "sold-out-" + UUID.randomUUID();
+
+		mockMvc.perform(post("/coupons/{couponId}/issues", coupon.getCouponId())
+						.header(IDEMPOTENCY_HEADER, key)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userId\":" + requester.getUserId() + "}"))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("COUPON409-0"));
+
+		// Stream에 아무것도 안 쌓였다 — Lua까지 가지 않았다.
+		assertThat(currentStreamSize()).isEqualTo(streamSizeBefore);
+
+		// 멱등키도 안 만들어졌다 — 차단이 멱등키 등록보다 앞이라는 뜻이다.
+		assertThat(idempotencyKeyRepository.findByUser_UserIdAndIdempotencyKey(requester.getUserId(), key))
+				.isEmpty();
+
+		// Redis 재고도 그대로다. 차감이 일어났다면 Lua가 돌았다는 뜻이 된다.
+		assertThat(redisTemplate.opsForValue().get(stockKey(coupon.getCouponId()))).isEqualTo("10");
+	}
+
+	private long currentStreamSize() {
+		Long size = redisTemplate.opsForStream().size(ISSUE_STREAM_KEY);
+		return size == null ? 0L : size;
 	}
 
 	// TC-43: 동일 requestId(Idempotency-Key) 재전송 + 재고 소진

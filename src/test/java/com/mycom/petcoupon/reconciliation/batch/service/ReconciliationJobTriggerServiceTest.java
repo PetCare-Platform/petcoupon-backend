@@ -220,8 +220,38 @@ class ReconciliationJobTriggerServiceTest {
         assertThat(report.getFinishedAt()).isNotNull();
     }
 
+    // #202 — 재고를 다 쓴 쿠폰은 발급 기간이 남아 있어도 더 발급될 수 없으므로 검증 대상이다.
+    // 예전에는 ENDED만 통과해서, 발급 기간이 한 달 남은 쿠폰은 품절돼도 그때까지 검증할 수 없었다.
+    @Test
+    void 품절된_쿠폰도_Job을_끝까지_돌려_리포트를_돌려준다() {
+        transactionTemplate.executeWithoutResult(status ->
+                entityManager.createNativeQuery("UPDATE coupon SET status = 'SOLD_OUT' WHERE coupon_id = :couponId")
+                        .setParameter("couponId", endedCoupon.getCouponId())
+                        .executeUpdate());
+
+        ReconciliationBatchResult result = reconciliationJobTriggerService.reconcile(endedCoupon.getCouponId());
+
+        assertThat(result.report().getCoupon().getCouponId()).isEqualTo(endedCoupon.getCouponId());
+        assertThat(result.report().getFinishedAt()).isNotNull();
+    }
+
     @Test
     void 발급이_진행중인_쿠폰이면_예전과_같은_예외로_거부된다() {
+        assertThatThrownBy(() -> reconciliationJobTriggerService.reconcile(activeCoupon.getCouponId()))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.RECONCILIATION_NOT_ALLOWED_YET);
+    }
+
+    // #202 리뷰 반영 — 허용 목록을 SOLD_OUT·ENDED 둘로 넓혔으니, 넓히지 않은 쪽도 실제로 막히는지
+    // 본다. ACTIVE만 검증하면 "READY도 거절한다"는 건 확인된 적 없는 주장으로 남는다.
+    @Test
+    void 발급_시작_전_쿠폰이면_거부된다() {
+        transactionTemplate.executeWithoutResult(status ->
+                entityManager.createNativeQuery("UPDATE coupon SET status = 'READY' WHERE coupon_id = :couponId")
+                        .setParameter("couponId", activeCoupon.getCouponId())
+                        .executeUpdate());
+
         assertThatThrownBy(() -> reconciliationJobTriggerService.reconcile(activeCoupon.getCouponId()))
                 .isInstanceOf(GeneralException.class)
                 .extracting(ex -> ((GeneralException) ex).getErrorCode())

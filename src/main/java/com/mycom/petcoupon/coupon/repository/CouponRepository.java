@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.coupon.repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -67,11 +68,12 @@ public interface CouponRepository extends JpaRepository<Coupon, Long> {
 			""")
 	List<Coupon> findAllByEventId(@Param("eventId") Long eventId);
 
-	// 정합성 검증 스케줄러(#154)용 — PreconditionCheckTasklet이 ENDED가 아니면 바로 거절하므로,
-	// 스케줄러가 애초에 ENDED 쿠폰만 대상으로 순회하게 한다. couponId만 필요해서 엔티티 전체를
+	// 정합성 검증 스케줄러(#154)용 — PreconditionCheckTasklet이 통과시키지 않는 상태는 어차피
+	// 거절되므로, 스케줄러가 애초에 검증 가능한 상태의 쿠폰만 순회하게 한다. 상태가 SOLD_OUT과
+	// ENDED 둘로 늘어나(#202) 단건 비교에서 IN으로 바꿨다. couponId만 필요해서 엔티티 전체를
 	// 읽지 않는다.
-	@Query("SELECT c.couponId FROM Coupon c WHERE c.status = :status")
-	List<Long> findCouponIdsByStatus(@Param("status") CouponStatus status);
+	@Query("SELECT c.couponId FROM Coupon c WHERE c.status IN :statuses")
+	List<Long> findCouponIdsByStatusIn(@Param("statuses") Collection<CouponStatus> statuses);
 
 	// 발급 시작 여부 판정 기준 시각. 애플리케이션 시계를 쓰면 인스턴스마다 판단이 갈리고
 	// DB와 드리프트가 나므로, 모두가 공유하는 DB 시계를 기준으로 삼는다.
