@@ -58,7 +58,7 @@ public enum CouponErrorCode implements BaseErrorCode {
     RESET_PRECONDITION_NOT_MET(HttpStatus.CONFLICT, "COUPON409-8", "앞 회차 메시지가 아직 처리 중이라 초기화할 수 없습니다."),
 
     // 409-8은 PR #88(RESET_PRECONDITION_NOT_MET)이 같은 번호로 먼저 dev에 머지돼서 409-9로 둔다.
-    RECONCILIATION_NOT_ALLOWED_YET(HttpStatus.CONFLICT, "COUPON409-9", "발급이 종료된 쿠폰만 정합성 검증할 수 있습니다."),
+    RECONCILIATION_NOT_ALLOWED_YET(HttpStatus.CONFLICT, "COUPON409-9", "발급이 종료되었거나 품절된 쿠폰만 정합성 검증할 수 있습니다."),
 
     // ENDED 체크와 별도 코드로 둔 이유 — 원인이 다르다. 이건 CouponIssuePipelineDrainChecker가
     // 감지하는 "아직 파이프라인에 처리 중인 요청이 남음"이라, 보통 몇 초~몇십 초면 자연히 풀린다.
