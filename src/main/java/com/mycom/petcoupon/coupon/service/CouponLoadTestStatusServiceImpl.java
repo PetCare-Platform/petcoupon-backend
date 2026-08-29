@@ -9,6 +9,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponIssueLoadTestSummary;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
@@ -37,6 +39,7 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
     private final IssueMessageRepository issueMessageRepository;
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final CouponIssueRepository couponIssueRepository;
+    private final CouponIssueLuaService couponIssueLuaService;
 
     @Override
     @Transactional(readOnly = true)
@@ -59,9 +62,18 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
         long passed = summary.getPassedCount();
         long expectedPassed = Math.min(accepted, couponStock.getTotalQuantity());
 
+        // 재고 키가 없으면(초기화 전/삭제) 통과 수를 알 수 없으므로 0으로 둔다 — totalQuantity를
+        // 그대로 빼면 "전량 통과"로 보인다. Redis 접근 자체가 실패하면 예외가 그대로 올라간다.
+        // 이 상황은 발급 파이프라인이 이미 멈춘 상태라, 화면만 살려두는 편이 더 오해를 부른다.
+        CouponIssueRealtimeStock realtimeStock = couponIssueLuaService.getRealtimeStock(couponId);
+        long stockPassed = realtimeStock.initialized()
+                ? couponStock.getTotalQuantity() - realtimeStock.remainingStock()
+                : 0L;
+
         return CouponLoadTestStatusResponse.builder()
                 .accepted(accepted)
                 .passed(passed)
+                .stockPassed(stockPassed)
                 .rejected(rejected)
                 .pending(countOf(pipelineCounts, IssueMessageStatus.PENDING))
                 .sent(countOf(pipelineCounts, IssueMessageStatus.SENT))
