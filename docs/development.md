@@ -35,7 +35,7 @@ last_verified: 2026-08-28
 | 위험한 영역 수정 | [7. Transaction·동시성](#7-transaction과-동시성) · [8. Redis](#8-redis-개발-규칙) · [9. Kafka·Outbox](#9-kafka와-outbox-개발-규칙) · [10. Idempotency](#10-idempotency-개발-규칙) |
 | 백그라운드 작업 | [11. Scheduler](#11-scheduler-개발-규칙) · [12. Batch](#12-batch-및-reconciliation-개발-규칙) |
 | 인증·내부 API | [13. 관리자 인증](#13-관리자-인증-개발-규칙) · [14. Internal API](#14-internal-api-개발-규칙) |
-| 테스트 작성 | [15. 테스트 가이드](#15-테스트-가이드) ~ [19. Spring·JPA 주의사항](#19-spring--jpa-주의사항) |
+| 테스트 작성 | [15. 테스트 가이드](#15-테스트-가이드) ~ [19. Spring / JPA 주의사항](#19-spring--jpa-주의사항) |
 | 협업 | [20. Git 컨벤션](#20-git-컨벤션) · [21. Issue 작성](#21-issue-작성) · [22. PR 작성](#22-pull-request-작성) |
 | **작업 완료 전 확인** | [23. 변경 종류별 필수 확인](#23-변경-종류별-필수-확인) · [24. 핵심 불변조건](#24-변경-시-지켜야-하는-핵심-불변조건) · [25. 개발 완료 기준](#25-개발-완료-기준) |
 
@@ -88,6 +88,22 @@ docker compose --profile kafka ps
 | `docker compose down -v` | 볼륨까지 삭제, MySQL·Redis 데이터 초기화 |
 
 `down -v`는 로컬 데이터 전체를 삭제하므로 **단순 재시작 용도로 사용하지 않습니다.**
+
+### 로컬 인프라 기본 설정
+
+`docker-compose.yml`의 기본값 중 개발·부하 테스트에 영향을 주는 항목입니다. 값을 바꾸기 전에 이유를 먼저 확인합니다.
+
+| 항목 | 값 | 이유 |
+| --- | --- | --- |
+| MySQL `--max-connections` | `500` | 기본값 151은 부하 테스트에서 부족합니다. **`DB_POOL_SIZE` × 인스턴스 수의 상한**이므로 풀을 키울 때 함께 확인합니다 |
+| MySQL 문자셋 | `utf8mb4` / `utf8mb4_unicode_ci` | — |
+| Redis `maxmemory-policy` | `noeviction` | 쿠폰 재고 키가 메모리 압박으로 **삭제되면 재고가 남아 있어도 품절로 처리**됩니다 |
+| Redis `appendonly` | `yes` | 컨테이너를 내렸다 올려도 재고 키가 남도록 AOF를 사용합니다 |
+| Kafka | KRaft 단일 노드, `profiles: [kafka]` | 기본 `docker compose up -d`로는 뜨지 않습니다 |
+| 컨테이너 이름 | `petcoupon-mysql` · `petcoupon-redis` · `petcoupon-kafka` | `docker exec` 명령이 이 이름을 사용합니다 |
+| TZ | `Asia/Seoul` | MySQL·Kafka에 지정. **테스트의 기본 timezone은 UTC**이므로 혼동하지 않습니다 |
+
+세 컨테이너 모두 healthcheck가 있으므로 기동 확인은 `docker compose --profile kafka ps`의 상태 컬럼을 봅니다.
 
 ---
 

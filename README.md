@@ -205,52 +205,6 @@ docker exec petcoupon-mysql \
 ```
 
 에러 코드는 `{DOMAIN}{HTTP_STATUS}-{순번}` 규칙을 따릅니다. (`COUPON409-0`, `EVENT404-0`)
-에러 코드는 `{DOMAIN}{STATUS}-{순번}` 규칙을 따른다 — `COUPON409-0`, `EVENT404-0` 등.
-
-### 사용자
-
-| Method | Path | 설명 |
-|---|---|---|
-| `GET` | `/events` | 공개 이벤트 목록 — `OPEN` 상태만 최신 등록순으로 조회 |
-| `GET` | `/events/{eventId}` | 공개 이벤트 상세 — `OPEN`만 조회 가능(`SCHEDULED`·`CLOSED`는 `EVENT404-1`). 연결된 쿠폰 기본정보 목록 포함, 없으면 `coupons: []`. 실시간 재고는 `/coupons/{couponId}/status`가 따로 제공 |
-| `POST` | `/coupons/{couponId}/issues` | 선착순 신청 (`Idempotency-Key` 헤더 필수) → `202` |
-| `GET` | `/coupons/{couponId}/status` | 쿠폰 실시간 요청 현황 — 잔여 재고는 Redis 기준. `initialized`가 `false`면 아직 재고 키가 없다는 뜻이라 `remainingQuantity: 0`을 품절로 읽으면 안 된다 |
-| `GET` | `/users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 신청 결과 폴링 |
-| `GET` | `/users/{userId}/coupon-issue-requests` | 내 발급 신청 내역 |
-| `GET` | `/coupon-issues/{couponIssueId}` | 발급 쿠폰 상세 |
-| `GET` | `/coupon-issues/{couponIssueId}/status` | 발급 쿠폰 상태 |
-| `POST` | `/coupon-issues/{couponIssueId}/use` | 쿠폰 사용 |
-| `POST` | `/coupon-issues/{couponIssueId}/cancel` | 사용 취소 |
-
-### 관리자 — `X-ADMIN-KEY` 필요
-
-| Method | Path | 설명 |
-|---|---|---|
-| `POST` | `/admin/auth/sessions` | 세션 토큰 발급 (**토큰 불필요**) |
-| `DELETE` | `/admin/auth/sessions` | 세션 폐기 |
-| `GET` | `/admin/events` | 전체 이벤트 목록 — 모든 상태를 최신 등록순으로 조회 |
-| `POST` | `/admin/events` | 이벤트 생성 |
-| `GET` | `/admin/events/{eventId}` | 이벤트 상세 |
-| `GET` | `/admin/events/{eventId}/status` | 이벤트 상태 |
-| `PATCH` | `/admin/events/{eventId}` | 이벤트 수정 |
-| `PATCH` | `/admin/events/{eventId}/status` | 이벤트 상태 변경 |
-| `POST` | `/admin/events/{eventId}/coupons` | 쿠폰 생성 |
-| `PATCH` | `/admin/events/{eventId}/coupons/{couponId}` | 쿠폰 수정 (발급 시작 전에만) |
-| `GET` | `/admin/coupons` | 쿠폰 목록 — 페이지 단위. 선택 필터 `eventId`·`status`, 미지정 시 전체. 재고는 DB(`coupon_stock`) 확정값 |
-| `GET` | `/admin/coupons/{couponId}/status` | 쿠폰 실시간 현황 — 잔여 재고는 Redis 기준 |
-| `GET` | `/admin/coupons/{couponId}/pipeline-drain-status` | 파이프라인 소진 상태 조회 — 쿠폰 상태 및 파이프라인 잔여(Outbox/Stream) 소진 여부. `streamUndelivered`는 정확한 건수가 아니라 미배달 존재 여부를 나타내며, 0 또는 1로 반환된다 |
-| `GET` | `/admin/coupon-issue/dlq` | DLQ 메시지 목록 |
-| `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | DLQ 수동 재발행 |
-| `POST` | `/admin/coupons/{couponId}/reconcile` | 정합성 검증 배치 실행 |
-
-목록과 단건은 재고의 출처가 다르다. 목록은 Kafka 소비까지 끝난 **확정 발급 현황**(`coupon_stock`)이라
-발급이 몰리는 동안에는 실시간 잔여와 어긋난다. 실시간 값이 필요하면 단건 조회를 쓴다.
-목록에서 쿠폰마다 Redis를 읽으면 20건 목록에 왕복이 20회 생기고, 쿠폰 한 건의 정합성 오류가
-페이지 전체를 실패시키기 때문이다.
-
-목록에는 그 수치의 기준 시각(`stockUpdatedAt`)을 함께 싣는다. 발급 확정에 쓰는
-`increaseIssuedQuantity`가 벌크 UPDATE라 `coupon_stock.updated_at`이 갱신되지 않는 문제가
-있었는데, 그 메서드가 시각을 직접 갱신하도록 고친 뒤에야 이 필드를 실었다(이슈 #146).
 
 목록 API의 페이징 파라미터는 공통 규칙을 따릅니다.
 
@@ -306,6 +260,10 @@ docker exec petcoupon-mysql \
 | `GET`   | `/admin/coupons/{couponId}/status`           | 쿠폰 실시간 현황              |
 | `POST`  | `/admin/coupons/expire`                      | 만료 쿠폰 배치 수동 실행         |
 
+목록과 단건은 **재고의 출처가 다릅니다.** 목록은 Kafka 소비까지 끝난 확정 발급 현황(`coupon_stock`)이라 발급이 몰리는 동안에는 실시간 잔여와 어긋납니다. 실시간 값이 필요하면 단건 조회를 씁니다.
+
+목록에서 쿠폰마다 Redis를 읽으면 20건 목록에 왕복이 20회 생기고, 쿠폰 한 건의 정합성 오류가 페이지 전체를 실패시키기 때문입니다. 대신 목록에는 그 수치의 기준 시각(`stockUpdatedAt`)을 함께 싣습니다.
+
 **운영 · 장애 대응**
 
 | Method | Endpoint                                        | 설명                       |
@@ -315,6 +273,9 @@ docker exec petcoupon-mysql \
 | `POST` | `/admin/coupon-issue/dlq/{messageId}/abandon`   | DLQ 메시지 폐기               |
 | `POST` | `/admin/coupons/{couponId}/reconcile`           | 쿠폰 정합성 검증 배치 실행          |
 | `GET`  | `/admin/coupons/{couponId}/reconciliation-reports` | 정합성 검증 이력 (`limit`, 1~100) |
+| `GET`  | `/admin/coupons/{couponId}/pipeline-drain-status` | 파이프라인 소진 상태 — 정합성 검증·초기화 사전 조건 확인 |
+
+`pipeline-drain-status`의 `streamUndelivered`는 건수가 아니라 **미배달 존재 여부**(`0` 또는 `1`)입니다. `XINFO GROUPS` 특성상 건수를 집계할 수 없기 때문입니다. `checkFailed`가 `true`면 잔여 0건이 아니라 **"확인 불가"**를 뜻합니다.
 
 **모니터링 · 통계**
 
@@ -322,10 +283,15 @@ docker exec petcoupon-mysql \
 | ------- | ------------------------------- | ----------------------------------- |
 | `GET`   | `/admin/dashboard/summary`      | 대시보드 요약 (이벤트·쿠폰·발급 현황)              |
 | `GET`   | `/admin/coupon-issue/statistics` | 발급 처리량 추이(최근 24시간)와 메시지 상태 분포       |
+| `GET`   | `/admin/coupons/{couponId}/load-test-status` | 부하 테스트 현황 — 접수·통과·거절·Outbox 단계별 집계 |
+| `GET`   | `/admin/coupons/{couponId}/failure-reasons` | 실패 사유 분류 — 거절(품절·중복)과 실패(발행·소비) |
+| `GET`   | `/admin/coupons/{couponId}/issue-timeseries` | 쿠폰별 초 단위 발급 추이 (`windowSeconds` 1~3600, 기본 90 / `bucketSeconds` 1~300, 기본 5) |
 | `GET`   | `/admin/system/health`          | 인프라 컴포넌트 상태                         |
 | `GET`   | `/admin/monitoring/stream`      | WARN/ERROR 실시간 스트림 (SSE)            |
 | `GET`   | `/admin/monitoring/settings`    | 모니터링 스트림 ON/OFF 조회                  |
 | `PATCH` | `/admin/monitoring/settings`    | 모니터링 스트림 ON/OFF 변경                  |
+
+`failure-reasons`의 거절 사유에 `EVENT_NOT_OPEN`·`EVENT_CLOSED`는 포함되지 않습니다. 두 경우는 멱등키 등록 전에 Fail-Fast로 끝나 `idempotency_key`에 남지 않기 때문입니다.
 
 `/admin/monitoring/stream`은 `X-ADMIN-KEY` 헤더가 필요하므로 브라우저 네이티브 `EventSource`로는 호출할 수 없습니다.
 `@microsoft/fetch-event-source` 같은 fetch 기반 SSE 클라이언트를 사용해야 합니다.

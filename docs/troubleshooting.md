@@ -85,6 +85,20 @@ docker compose --profile kafka up -d
 
 Kafka는 Compose profile로 분리되어 있으므로 `docker compose up -d`만 실행하면 Kafka가 올라오지 않습니다.
 
+### 포트 충돌
+
+컨테이너가 뜨지 않으면 포트가 이미 점유돼 있는지 확인합니다. 필요한 포트는 `3306`(MySQL), `6379`(Redis), `9092`(Kafka), `8080`(애플리케이션)입니다.
+
+```bash
+docker compose --profile kafka logs mysql | tail -20
+```
+
+`3306` 충돌은 Windows에 MySQL이 서비스로 설치돼 있는 경우가 대부분입니다. **관리자 권한 PowerShell**에서 중지합니다.
+
+```powershell
+net stop MySQL80
+```
+
 ### 애플리케이션 상태
 
 ```bash

@@ -24,12 +24,12 @@ PetCoupon Backend의 팀원별 담당 영역과 주요 기술적 기여를 정�
 
 | Contributor | 역할 |
 |---|---|
-| [`rien00`](#rien00--선착순-신청-api--idempotency) | 신청 API · Idempotency |
-| [`tnqlsqkr`](#tnqlsqkr--redis--lua--동시성-제어) | Redis · Lua · 동시성 |
-| [`mercy0704`](#mercy0704--kafka--outbox--dlq) | Kafka · Outbox · DLQ |
-| [`shin838`](#shin838--쿠폰-상태--정합성--batch) | 쿠폰 상태 · 정합성 · Batch |
-| [`seyeonham`](#seyeonham--부하-테스트--대량-데이터--테스트-인프라) | 부하 테스트 · 테스트 인프라 |
-| [`Catverdose`](#catverdose--이벤트쿠폰-관리--관리자-운영) | 이벤트·쿠폰 관리 · 관리자 운영 |
+| [`rien00`](#rien00) | 신청 API · Idempotency |
+| [`tnqlsqkr`](#tnqlsqkr) | Redis · Lua · 동시성 |
+| [`mercy0704`](#mercy0704) | Kafka · Outbox · DLQ |
+| [`shin838`](#shin838) | 쿠폰 상태 · 정합성 · Batch |
+| [`seyeonham`](#seyeonham) | 부하 테스트 · 테스트 인프라 |
+| [`Catverdose`](#catverdose) | 이벤트·쿠폰 관리 · 관리자 운영 |
 
 ---
 
@@ -73,7 +73,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 
 ---
 
-<details>
+<details id="rien00">
 <summary><strong>rien00</strong> — 선착순 신청 API · Idempotency</summary>
 
 ### 담당 영역
@@ -110,7 +110,7 @@ void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
 
 ---
 
-<details>
+<details id="tnqlsqkr">
 <summary><strong>tnqlsqkr</strong> — Redis · Lua · 동시성 제어</summary>
 
 ### 담당 영역
@@ -150,7 +150,7 @@ Redis Stream과 Lua Script를 기반으로 선착순 발급의 핵심 동시성 
 
 ---
 
-<details>
+<details id="mercy0704">
 <summary><strong>mercy0704</strong> — Kafka · Outbox · DLQ</summary>
 
 ### 담당 영역
@@ -190,7 +190,7 @@ Kafka 재전달, Consumer Retry, Retry 초과 DLQ, 동일 DLQ 동시 재처리, 
 
 ---
 
-<details>
+<details id="shin838">
 <summary><strong>shin838</strong> — 쿠폰 상태 · 정합성 · Batch</summary>
 
 ### 담당 영역
@@ -230,7 +230,7 @@ Kafka 재전달, Consumer Retry, Retry 초과 DLQ, 동일 DLQ 동시 재처리, 
 
 ---
 
-<details>
+<details id="seyeonham">
 <summary><strong>seyeonham</strong> — 부하 테스트 · 대량 데이터 · 테스트 인프라</summary>
 
 ### 담당 영역
@@ -270,7 +270,7 @@ Burst, Constant Arrival Rate, 동일 사용자 동시 요청, Idempotency 재전
 
 ---
 
-<details>
+<details id="catverdose">
 <summary><strong>Catverdose</strong> — 이벤트·쿠폰 관리 · 관리자 운영</summary>
 
 ### 담당 영역
