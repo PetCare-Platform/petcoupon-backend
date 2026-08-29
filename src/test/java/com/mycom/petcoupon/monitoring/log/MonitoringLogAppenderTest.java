@@ -9,11 +9,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
+import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.global.common.exception.GlobalExceptionHandler;
 import com.mycom.petcoupon.monitoring.config.MonitoringProperties;
 import com.mycom.petcoupon.monitoring.dto.res.MonitoringEventResponse;
+import com.mycom.petcoupon.monitoring.exception.MonitoringErrorCode;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.LoggingEvent;
 
 class MonitoringLogAppenderTest {
@@ -105,6 +110,25 @@ class MonitoringLogAppenderTest {
         assertThat(received).hasSize(1);
 
         defaults.stop();
+    }
+
+    @Test
+    @DisplayName("연결 한도 초과 503 로그는 전역 예외 핸들러에서 나도 SSE 이벤트로 전달하지 않는다")
+    void doesNotForwardExpectedCapacityRejectionFromGlobalExceptionHandler() {
+        Logger exceptionHandlerLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        Level originalLevel = exceptionHandlerLogger.getLevel();
+        exceptionHandlerLogger.setLevel(Level.INFO);
+        exceptionHandlerLogger.addAppender(appender);
+
+        try {
+            new GlobalExceptionHandler().handleCustomException(
+                    new GeneralException(MonitoringErrorCode.TOO_MANY_STREAM_CONNECTIONS));
+
+            assertThat(received).isEmpty();
+        } finally {
+            exceptionHandlerLogger.detachAppender(appender);
+            exceptionHandlerLogger.setLevel(originalLevel);
+        }
     }
 
     @Test

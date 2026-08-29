@@ -23,6 +23,7 @@ import jakarta.validation.ConstraintViolationException;
 import com.mycom.petcoupon.global.common.CustomResponse;
 import com.mycom.petcoupon.global.common.code.BaseErrorCode;
 import com.mycom.petcoupon.global.common.code.CommonErrorCode;
+import com.mycom.petcoupon.monitoring.exception.MonitoringErrorCode;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -51,14 +52,18 @@ public class GlobalExceptionHandler {
     	BaseErrorCode errorCode = ex.getErrorCode();
 
     	/*
-    	 * GeneralException은 4xx(쿠폰 소진·중복 발급 같은 업무 거절)와 5xx(스트림 연결 한도 등)를
-    	 * 모두 싣는다. 예외 타입이 같다고 한 레벨로 묶으면 둘 중 하나는 반드시 틀리므로 상태로 가른다.
-    	 */
-    	if (errorCode.getStatus().is5xxServerError()) {
-    		log.error("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
-    	} else {
-    		log.debug("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
-    	}
+     * GeneralException은 4xx(쿠폰 소진·중복 발급 같은 업무 거절)와 5xx를 모두 싣는다. 다만
+     * 스트림 연결 한도 초과는 서버 장애가 아니라 예상 가능한 capacity rejection이다. 503 응답은
+     * 재시도를 유도하려고 유지하되, INFO로 분리해 MonitoringLogAppender(WARN/ERROR 수집)에
+     * 재유입되지 않게 한다. Redis·DB 장애 등 나머지 5xx는 계속 ERROR다.
+     */
+        if (errorCode == MonitoringErrorCode.TOO_MANY_STREAM_CONNECTIONS) {
+            log.info("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
+        } else if (errorCode.getStatus().is5xxServerError()) {
+            log.error("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
+        } else {
+            log.debug("[CustomException] {} {}", errorCode.getCode(), errorCode.getMessage());
+        }
 
         return jsonError(errorCode);
     }

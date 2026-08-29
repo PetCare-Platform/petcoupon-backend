@@ -29,7 +29,8 @@ import com.mycom.petcoupon.monitoring.exception.MonitoringErrorCode;
  * 오류 로그 레벨 정책을 지킨다(#191).
  *
  * <p>기준은 "누가 고쳐야 하는가"다. 4xx는 클라이언트가 잘못 보냈고 서버는 설계대로 거절한
- * 것이므로 DEBUG, 5xx는 서버가 책임져야 하는 상태이므로 WARN/ERROR다.
+ * 것이므로 DEBUG, 서버 장애 5xx는 WARN/ERROR다. 단, 예상 가능한 스트림 연결 한도 초과는
+ * 503 응답을 유지하면서 INFO로 남긴다.
  *
  * <p>이게 단순한 취향 문제가 아닌 이유는 {@code MonitoringLogAppender}가 WARN/ERROR만
  * 수집하기 때문이다. 즉 이 정책이 곧 <b>관리자 실시간 화면에 무엇이 뜨는가</b>를 정한다.
@@ -74,13 +75,22 @@ class GlobalExceptionHandlerLogLevelTest {
 	}
 
 	@Test
-	@DisplayName("5xx 업무 예외는 ERROR로 남긴다")
-	void logsServerSideBusinessErrorsAtError() {
+	@DisplayName("스트림 연결 한도 초과는 503을 유지하고 INFO로 남긴다")
+	void logsExpectedStreamCapacityRejectionAtInfo() {
 		/*
-		 * GeneralException은 4xx와 5xx를 같은 타입에 싣는다. 예외 타입만 보고 한 레벨로 묶으면
-		 * 둘 중 하나는 반드시 틀린다 — 상태 코드로 갈라야 하는 이유다.
+		 * 이 503은 장애가 아니라 예상한 capacity rejection이다. WARN/ERROR면
+		 * MonitoringLogAppender가 기존 구독자에게 이 이벤트를 다시 전파해 재연결 부하를 키운다.
 		 */
 		handler.handleCustomException(new GeneralException(MonitoringErrorCode.TOO_MANY_STREAM_CONNECTIONS));
+
+		assertThat(levels()).containsExactly(Level.INFO);
+	}
+
+	@Test
+	@DisplayName("연결 한도 초과가 아닌 503 업무 예외는 ERROR로 남긴다")
+	void logsOtherServerSideBusinessErrorsAtError() {
+		// Redis·DB 장애 등 일반적인 일시적 서버 실패는 계속 관리자 모니터링 대상이어야 한다.
+		handler.handleCustomException(new GeneralException(CommonErrorCode.SERVICE_UNAVAILABLE));
 
 		assertThat(levels()).containsExactly(Level.ERROR);
 	}
