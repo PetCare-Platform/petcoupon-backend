@@ -615,4 +615,48 @@ class IssueMessageRepositoryTest {
 		// PENDING, DLQ(publish-failed), DLQ(사유 없음)는 제외
 		assertThat(published).isEqualTo(4L);
 	}
+
+	// Kafka 가 같은 VPC 안이면 왕복이 1ms 미만이라, 발행 콜백이 markSent 를 커밋하기 전에 Consumer 가
+	// 소비를 끝내는 순서가 실제로 발생한다(부하 테스트에서 발급 68,000건 중 3건 실측).
+	// 여기서 검증하는 것은 타이밍이 아니라 "종착 상태를 되돌리지 않는가"이므로 순서를 강제해서 재현한다.
+	@Test
+	void markSent는_이미_CONSUMED된_메시지를_SENT로_되돌리지_않는다() {
+		IssueMessage message = IssueMessage.pending(coupon, 90L, 90L, "race-consumed-first", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		// Consumer 가 먼저 확정한 상태
+		issueMessageRepository.updateStatus(message.getMessageId(), IssueMessageStatus.CONSUMED);
+		entityManager.flush();
+		entityManager.clear();
+
+		// 뒤늦게 도착한 발행 콜백
+		int updated = issueMessageRepository.markSent(
+				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
+		);
+
+		// 0 은 실패가 아니라 "Consumer 가 먼저 확정했다"는 정상 결과다
+		assertThat(updated).isZero();
+
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.CONSUMED);
+	}
+
+	@Test
+	void markSent는_아직_확정되지_않은_메시지는_SENT로_올린다() {
+		IssueMessage message = IssueMessage.pending(coupon, 91L, 91L, "race-sent-first", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+		entityManager.clear();
+
+		int updated = issueMessageRepository.markSent(
+				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
+		);
+
+		assertThat(updated).isEqualTo(1);
+
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
+		assertThat(found.getProcessedAt()).isNotNull();
+	}
 }

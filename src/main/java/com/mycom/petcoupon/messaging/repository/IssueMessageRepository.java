@@ -77,6 +77,17 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		Pageable pageable
 	);
 
+	// 발행 성공 시 SENT 로 올린다. status <> CONSUMED 조건이 없으면 이미 확정된 건을 SENT 로 되돌린다 —
+	// Kafka 가 같은 VPC 안이면 왕복이 1ms 미만이라, 발행 콜백이 markSent 를 커밋하기 전에 Consumer 가
+	// 소비를 끝내고 markConsumed 까지 커밋하는 순서가 실제로 발생한다(부하 테스트 실측 3~6ms 차,
+	// 발급 68,000건 중 3건 — load-test/docs/load-test-result.md 8.1절). 두 UPDATE 가 모두 조건이 없으면
+	// 나중에 커밋한 쪽이 이기므로 status 가 SENT 로 남는다. 발급은 확정됐는데 파이프라인은 미소진으로
+	// 보여 초기화 API 와 정합성 검증 배치가 막힌다.
+	//
+	// IdempotencyKeyRepository 의 provisional 분기와 같은 패턴이다 — "아직 확정 아님"인 쓰기가
+	// 종착 상태를 덮어쓰지 못하게 조건으로 막는다.
+	//
+	// 이 조건 때문에 반환값 0 은 실패가 아니라 "Consumer 가 먼저 확정했다"는 정상 결과다.
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
@@ -86,6 +97,7 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 				im.lastError = null,
 				im.failureReason = null
 		WHERE im.messageId = :messageId
+		  AND im.status <> com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED
 	""")
 	int markSent(
 		@Param("messageId") Long messageId,
