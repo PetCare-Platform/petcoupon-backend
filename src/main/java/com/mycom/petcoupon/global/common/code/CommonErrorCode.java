@@ -23,7 +23,10 @@ public enum CommonErrorCode implements BaseErrorCode {
     
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON405-0", "지원하지 않는 HTTP 메서드입니다."),
 
-    INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500-0", "서버 내부 오류가 발생했습니다.");
+    INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500-0", "서버 내부 오류가 발생했습니다."),
+
+    // 서버 결함이 아니라 "지금은 못 한다"는 상태다. 500으로 주면 프론트가 재시도를 포기한다.
+    SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "COMMON503-0", "일시적으로 요청을 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.");
 	
 	private final HttpStatus status;
 	private final String code;
