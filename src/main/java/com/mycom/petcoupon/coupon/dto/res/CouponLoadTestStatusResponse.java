@@ -9,6 +9,11 @@ import lombok.Builder;
 public record CouponLoadTestStatusResponse(
         long accepted,
         long passed,
+        // 깔때기 "재고 통과" 전용 — Redis Lua 가 실제로 통과시킨 건수(totalQuantity - Redis 재고)다.
+        // passed 는 coupon_issue 를 세므로 파이프라인 맨 끝(DB 확정) 시점 값이고, 상류인 재고 통과
+        // 자리에 쓰면 Kafka 발행보다 작아지는 역전이 생긴다. 판정(overIssued)과 손실 계산은
+        // 확정된 발급 수여야 하므로 passed 를 그대로 쓰고, 이 값은 화면 전용이다.
+        long stockPassed,
         long rejected,
         long pending,
         long sent,

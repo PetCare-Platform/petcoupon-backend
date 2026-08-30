@@ -17,6 +17,8 @@ import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
 import com.mycom.petcoupon.coupon.entity.Coupon;
 import com.mycom.petcoupon.coupon.entity.CouponStock;
 import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
 import com.mycom.petcoupon.coupon.repository.CouponIssueLoadTestSummary;
 import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
 import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
@@ -43,6 +45,9 @@ class CouponLoadTestStatusServiceImplTest {
 
     @Mock
     private CouponIssueRepository couponIssueRepository;
+
+    @Mock
+    private CouponIssueLuaService couponIssueLuaService;
 
     @InjectMocks
     private CouponLoadTestStatusServiceImpl couponLoadTestStatusService;
@@ -87,6 +92,13 @@ class CouponLoadTestStatusServiceImplTest {
         };
     }
 
+    private static CouponIssueRealtimeStock realtimeStock(boolean initialized, int remainingStock) {
+        return CouponIssueRealtimeStock.builder()
+                .initialized(initialized)
+                .remainingStock(remainingStock)
+                .build();
+    }
+
     @Test
     void getLoadTestStatus_returnsResponse_whenCouponExists() {
         CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
@@ -105,6 +117,7 @@ class CouponLoadTestStatusServiceImplTest {
         // IssueMessageRepositoryTest에서 실제 쿼리로 검증한다.
         when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(9L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(8, 0, true, 12L));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
@@ -141,6 +154,7 @@ class CouponLoadTestStatusServiceImplTest {
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
                 .thenReturn(0L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
@@ -159,6 +173,7 @@ class CouponLoadTestStatusServiceImplTest {
                 .thenReturn(0L);
         // 총재고(5)·접수(5) 모두 5인데 실제 발급이 6건 — 초과발급 상황
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(6, 0, true, 3L));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
@@ -186,6 +201,7 @@ class CouponLoadTestStatusServiceImplTest {
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
                 .thenReturn(0L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
@@ -209,9 +225,97 @@ class CouponLoadTestStatusServiceImplTest {
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
                 .thenReturn(0L);
         when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, false, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
 
         CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
 
         assertThat(response.sequenceIntact()).isFalse();
+    }
+
+    // 깔때기의 "재고 통과"는 Redis Lua 가 실제로 걸러낸 수라, 파이프라인 맨 끝에서 세는 passed 와
+    // 부하 도중 값이 다르다. 상류 단계가 하류보다 작아 보이는 역전을 막는 것이 이 필드의 목적이다.
+    @Test
+    void getLoadTestStatus_stockPassed는_Redis_재고에서_역산한다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(10000).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(20000L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(10000L);
+        // 재고는 이미 소진됐지만 DB 확정은 4,200건까지만 진행된 상태
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(4200, 0, true, 5L));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 0));
+
+        CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
+
+        assertThat(response.stockPassed()).isEqualTo(10000);
+        // passed 는 확정된 발급 수 그대로여야 한다 — 판정과 손실 계산이 이 값을 쓴다
+        assertThat(response.passed()).isEqualTo(4200);
+        assertThat(response.overIssued()).isFalse();
+    }
+
+    // 재고 키가 없을 때 totalQuantity 를 그대로 빼면 "전량 통과"로 보인다.
+    @Test
+    void getLoadTestStatus_stockPassed는_재고_키가_없으면_0이다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(10000).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(false, 0));
+
+        CouponLoadTestStatusResponse response = couponLoadTestStatusService.getLoadTestStatus(COUPON_ID);
+
+        assertThat(response.stockPassed()).isZero();
+    }
+
+    // 같은 Redis 값을 읽는 CouponRealtimeStatusServiceImpl 과 유효 범위 판단이 같아야 한다.
+    // 범위를 벗어난 값을 그대로 빼면 stockPassed 가 음수이거나 총재고보다 커진 채 노출된다.
+    @Test
+    void getLoadTestStatus_Redis_재고가_음수면_예외를_던진다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, -1));
+
+        assertThatThrownBy(() -> couponLoadTestStatusService.getLoadTestStatus(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+    }
+
+    @Test
+    void getLoadTestStatus_Redis_재고가_총재고보다_크면_예외를_던진다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 101));
+
+        assertThatThrownBy(() -> couponLoadTestStatusService.getLoadTestStatus(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
     }
 }
