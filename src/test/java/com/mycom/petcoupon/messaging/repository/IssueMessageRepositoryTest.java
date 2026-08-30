@@ -659,4 +659,62 @@ class IssueMessageRepositoryTest {
 		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
 		assertThat(found.getProcessedAt()).isNotNull();
 	}
+
+	// ABANDONED 는 재고까지 복구하고 포기한 종착 상태다. 뒤늦은 발행 콜백이 SENT 로 되돌리면
+	// failureReason 과 stockRestoredAt 의 맥락이 사라진다.
+	@Test
+	void markSent는_이미_ABANDONED된_메시지를_SENT로_되돌리지_않는다() {
+		IssueMessage message = IssueMessage.pending(coupon, 92L, 92L, "race-abandoned", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.ABANDONED, "포기", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		int updated = issueMessageRepository.markSent(
+				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
+		);
+
+		assertThat(updated).isZero();
+
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.ABANDONED);
+		assertThat(found.getFailureReason()).isEqualTo(IssueFailureReason.CONSUME_PROCESSING_FAILED);
+	}
+
+	// DLQ 는 일부러 막지 않는다. claimForReprocess 가 status 를 DLQ 로 둔 채 재처리를 선점하므로,
+	// 관리자 재처리로 재발행에 성공한 건은 markSent 로 DLQ -> SENT 가 되어야 한다.
+	// 여기를 막으면 재발행에 성공해도 실패 목록에서 사라지지 않는다.
+	@Test
+	void markSent는_DLQ_재처리로_재발행에_성공하면_SENT로_올린다() {
+		IssueMessage message = IssueMessage.pending(coupon, 93L, 93L, "dlq-reprocess", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.DLQ, "발행 실패", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		// 관리자 재처리 선점 — status 는 DLQ 로 유지된다
+		int claimed = issueMessageRepository.claimForReprocess(message.getMessageId(), IssueMessageStatus.DLQ, 1);
+		assertThat(claimed).isEqualTo(1);
+		entityManager.flush();
+		entityManager.clear();
+
+		int updated = issueMessageRepository.markSent(
+				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
+		);
+
+		assertThat(updated).isEqualTo(1);
+
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
+		assertThat(found.getLastError()).isNull();
+		assertThat(found.getFailureReason()).isNull();
+	}
 }
