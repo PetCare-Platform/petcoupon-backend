@@ -76,7 +76,25 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		int retryCount,
 		Pageable pageable
 	);
-
+	// 발행 성공 시 SENT 로 올린다. 종착 상태를 막는 조건이 없으면 뒤늦게 도착한 발행 콜백이
+	// 이미 끝난 건을 SENT 로 되돌린다 — Kafka 가 같은 VPC 안이면 왕복이 1ms 미만이라, 발행
+	// 콜백이 markSent 를 커밋하기 전에 Consumer 가 소비를 끝내고 markConsumed 까지 커밋하는
+	// 순서가 실제로 발생한다(부하 테스트 실측 3~6ms 차, 발급 68,000건 중 3건). 두 UPDATE 가
+	// 모두 조건이 없으면 나중에 커밋한 쪽이 이기므로 status 가 SENT 로 남는다. 발급은
+	// 확정됐는데 파이프라인은 미소진으로 보여 초기화 API 와 정합성 검증 배치가 막힌다.
+	//
+	// ABANDONED 도 같은 이유로 막는다. 재고까지 복구하고 포기한 종착 상태인데 SENT 로
+	// 되돌아가면 failureReason 과 stockRestoredAt 의 맥락이 사라진다.
+	//
+	// DLQ 는 일부러 막지 않는다 — claimForReprocess 가 status 를 DLQ 로 둔 채 재처리를
+	// 선점하므로(Outbox 폴러가 다시 집어가지 않게 하려는 의도), 관리자 재처리로 재발행에
+	// 성공한 건은 이 메서드를 통해 DLQ -> SENT 로 올라가야 한다. 막으면 재발행에 성공해도
+	// 상태가 DLQ 로 남아 실패 목록에서 사라지지 않는다.
+	//
+	// IdempotencyKeyRepository 의 provisional 분기와 같은 패턴이다 — "아직 확정 아님"인 쓰기가
+	// 종착 상태를 덮어쓰지 못하게 조건으로 막는다.
+	//
+	// 이 조건 때문에 반환값 0 은 실패가 아니라 "이미 끝난 건이다"라는 정상 결과다.
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
@@ -86,6 +104,10 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 				im.lastError = null,
 				im.failureReason = null
 		WHERE im.messageId = :messageId
+		  AND im.status NOT IN (
+		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED,
+		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED
+		      )
 	""")
 	int markSent(
 		@Param("messageId") Long messageId,
