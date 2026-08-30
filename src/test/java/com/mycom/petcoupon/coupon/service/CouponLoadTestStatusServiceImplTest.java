@@ -276,4 +276,46 @@ class CouponLoadTestStatusServiceImplTest {
 
         assertThat(response.stockPassed()).isZero();
     }
+
+    // 같은 Redis 값을 읽는 CouponRealtimeStatusServiceImpl 과 유효 범위 판단이 같아야 한다.
+    // 범위를 벗어난 값을 그대로 빼면 stockPassed 가 음수이거나 총재고보다 커진 채 노출된다.
+    @Test
+    void getLoadTestStatus_Redis_재고가_음수면_예외를_던진다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, -1));
+
+        assertThatThrownBy(() -> couponLoadTestStatusService.getLoadTestStatus(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+    }
+
+    @Test
+    void getLoadTestStatus_Redis_재고가_총재고보다_크면_예외를_던진다() {
+        CouponStock couponStock = CouponStock.builder().coupon(Coupon.builder().build()).totalQuantity(100).build();
+
+        when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
+        when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of());
+        when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
+        when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(COUPON_ID, IdempotencyStatus.FAILED))
+                .thenReturn(0L);
+        when(issueMessageRepository.countPublishedByCoupon(COUPON_ID)).thenReturn(0L);
+        when(couponIssueRepository.summarizeForLoadTest(COUPON_ID)).thenReturn(summary(0, 0, true, null));
+        when(couponIssueLuaService.getRealtimeStock(COUPON_ID)).thenReturn(realtimeStock(true, 101));
+
+        assertThatThrownBy(() -> couponLoadTestStatusService.getLoadTestStatus(COUPON_ID))
+                .isInstanceOf(GeneralException.class)
+                .extracting(ex -> ((GeneralException) ex).getErrorCode())
+                .isEqualTo(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+    }
 }
