@@ -3,7 +3,9 @@ package com.mycom.petcoupon.coupon.issue.config;
 import java.time.Duration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
+import jakarta.validation.constraints.Min;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -13,6 +15,7 @@ import lombok.Setter;
  */
 @Getter
 @Setter
+@Validated
 @ConfigurationProperties(prefix = "coupon.issue.stream")
 public class CouponIssueStreamProperties {
 
@@ -20,6 +23,10 @@ public class CouponIssueStreamProperties {
 	private String group;
 	private String consumer;
 
+	// Redis Stream Consumer가 XREADGROUP 한 번에 조회할 최대 메시지 수
+	@Min(value = 1, message = "Redis Stream Consumer batchSize는 1 이상이어야 합니다.")
+	private int batchSize = 10;
+	
 	private PendingRecovery pendingRecovery = new PendingRecovery();
 
 	// Redis Stream Listener 읽기 오류 후 Consumer 복구 재시도 설정
