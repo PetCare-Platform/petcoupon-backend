@@ -71,10 +71,11 @@ public class CouponIssueStreamConfig {
 		ensureConsumerGroup();
 
 		// Redis Stream 을 계속 감시하는 Listener Container 설정 
+		// batchSize는 XREADGROUP COUNT에 사용되며 메시지 병렬 처리 개수가 아님 
 		StreamMessageListenerContainer.StreamMessageListenerContainerOptions<String, MapRecord<String, String, String>> options =
 			StreamMessageListenerContainer.StreamMessageListenerContainerOptions
 				.builder()
-				.batchSize(10)
+				.batchSize(properties.getBatchSize())
 				.build();
 
 		
