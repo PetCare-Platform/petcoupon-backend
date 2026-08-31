@@ -40,6 +40,7 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final CouponIssueRepository couponIssueRepository;
     private final CouponIssueLuaService couponIssueLuaService;
+    private final CouponRealtimeStockValidator realtimeStockValidator;
 
     @Override
     @Transactional(readOnly = true)
@@ -66,7 +67,7 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
         // 그대로 빼면 "전량 통과"로 보인다. Redis 접근 자체가 실패하면 예외가 그대로 올라간다.
         // 이 상황은 발급 파이프라인이 이미 멈춘 상태라, 화면만 살려두는 편이 더 오해를 부른다.
         CouponIssueRealtimeStock realtimeStock = couponIssueLuaService.getRealtimeStock(couponId);
-        validateRealtimeStock(realtimeStock, couponStock.getTotalQuantity());
+        realtimeStockValidator.validate(realtimeStock, couponStock.getTotalQuantity());
 
         long stockPassed = realtimeStock.initialized()
                 ? couponStock.getTotalQuantity() - realtimeStock.remainingStock()
@@ -97,20 +98,4 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
         return counts.getOrDefault(status, 0L);
     }
 
-    // CouponRealtimeStatusServiceImpl.validateRealtimeStock()과 같은 검증이다. 같은 Redis 값을
-    // 읽는 두 API가 유효 범위를 다르게 판단하면, 한쪽은 막고 한쪽은 통과시켜 나중에 걸려 넘어진다.
-    //
-    // 범위를 벗어난 값을 그대로 빼면 stockPassed가 음수이거나 총재고보다 커진 채 화면에 나간다.
-    // 이상을 드러내려고 만든 화면이 이상을 숨기는 셈이라, 예외로 올려 눈에 띄게 한다 —
-    // 재고가 이 지경이면 이 쿠폰의 파생 수치를 전부 믿을 수 없다.
-    private void validateRealtimeStock(CouponIssueRealtimeStock realtimeStock, int totalQuantity) {
-        if (!realtimeStock.initialized()) {
-            return;
-        }
-
-        int remainingStock = realtimeStock.remainingStock();
-        if (remainingStock < 0 || remainingStock > totalQuantity) {
-            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
-        }
-    }
 }

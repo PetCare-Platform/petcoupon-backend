@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
@@ -48,6 +49,9 @@ class CouponLoadTestStatusServiceImplTest {
 
     @Mock
     private CouponIssueLuaService couponIssueLuaService;
+
+    @Spy
+    private CouponRealtimeStockValidator realtimeStockValidator = new CouponRealtimeStockValidator();
 
     @InjectMocks
     private CouponLoadTestStatusServiceImpl couponLoadTestStatusService;

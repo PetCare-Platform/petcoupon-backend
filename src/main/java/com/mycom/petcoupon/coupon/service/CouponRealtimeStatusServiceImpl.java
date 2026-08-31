@@ -42,6 +42,7 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
     private final CouponRepository couponRepository;
     private final CouponStockRepository couponStockRepository;
     private final CouponIssueLuaService couponIssueLuaService;
+    private final CouponRealtimeStockValidator realtimeStockValidator;
     private final CouponIssuePipelineDrainChecker pipelineDrainChecker;
     private final CouponConverter couponConverter;
     private final IssueMessageRepository issueMessageRepository;
@@ -62,7 +63,7 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
         // DB 쪽은 Kafka 소비 이후에야 갱신되는 최종 정합값이라 "실시간"과는 갱신 시점이 다르다.
         CouponIssueRealtimeStock realtimeStock = couponIssueLuaService.getRealtimeStock(couponId);
 
-        validateRealtimeStock(realtimeStock, couponStock.getTotalQuantity());
+        realtimeStockValidator.validate(realtimeStock, couponStock.getTotalQuantity());
 
         return couponConverter.toRealtimeStatusResponse(coupon, couponStock, realtimeStock);
     }
@@ -134,16 +135,4 @@ public class CouponRealtimeStatusServiceImpl implements CouponRealtimeStatusServ
                 .build();
     }
 
-    // Redis 값이 정상적인 Lua 실행 경로로만 바뀐다면 항상 0 <= remainingStock <= totalQuantity지만,
-    // 수동 조작이나 초기화 버그로 이 범위를 벗어날 수 있다 — 미초기화(0)는 정상 상태라 검증 대상이 아니다.
-    private void validateRealtimeStock(CouponIssueRealtimeStock realtimeStock, int totalQuantity) {
-        if (!realtimeStock.initialized()) {
-            return;
-        }
-
-        int remainingStock = realtimeStock.remainingStock();
-        if (remainingStock < 0 || remainingStock > totalQuantity) {
-            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
-        }
-    }
 }
