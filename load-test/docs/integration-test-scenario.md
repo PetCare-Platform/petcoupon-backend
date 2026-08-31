@@ -1,0 +1,409 @@
+# 통합 테스트 시나리오
+
+## 1. 목적과 범위
+
+각 담당자가 구현한 기능이 **하나의 흐름으로 이어지는지** 확인한다. 개별 단위 테스트가 아니라 이벤트 생성부터 쿠폰 사용·만료·정합성 검증까지 실제 API를 호출해 검증한다.
+
+| 구분 | 통합 테스트 | 부하 테스트 |
+| --- | --- | --- |
+| 확인하는 것 | 기능이 끝까지 이어지는가 | 규모에서 버티는가 |
+| 요청 규모 | 1~200건 | 20,000건 |
+| 판정 기준 | 기대값과 일치하는가 | TPS, p95, 정합성 |
+| 실행 순서 | 먼저 | 통합 테스트 통과 후 |
+
+## 2. 사전 조건
+
+### 환경
+
+| 항목 | 조건 |
+| --- | --- |
+| 실행 위치 | 로컬 (`docker compose up -d` — MySQL 8.0, Redis 7.2) |
+| 애플리케이션 | 단일 인스턴스, `dev` 브랜치 최신 |
+| 초기 데이터 | 회원 더미데이터 적재 완료 (`load-test/sql/seed_users.sql`) |
+| 관리자 인증 | 세션 토큰 발급 완료 (아래 참고) |
+
+### 관리자 세션 발급
+
+`/admin/**`은 전부 세션 토큰을 요구한다. 토큰 없이 호출하면 **401**이 떨어지므로, 관리자 API를 쓰는 시나리오는 시작 전에 토큰을 받아둔다.
+
+```bash
+curl -X POST localhost:8080/admin/auth/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"authCode":"local-dev-admin-auth-code"}'
+```
+
+**201**과 함께 토큰이 돌아온다.
+
+```json
+{
+  "isSuccess": true,
+  "code": "201",
+  "message": "Created",
+  "result": { "token": "…", "expiresAt": "2026-08-27T01:00:00" }
+}
+```
+
+받은 토큰을 이후 관리자 API 요청에 `X-ADMIN-KEY` 헤더로 싣는다.
+
+```bash
+curl -X POST localhost:8080/admin/coupons/1/reconcile \
+  -H "X-ADMIN-KEY: <발급받은 토큰>"
+```
+
+| 항목 | 값 |
+| --- | --- |
+| 인증 코드 | `local-dev-admin-auth-code` (로컬 기본값) — 환경변수 `ADMIN_AUTH_CODE`로 덮어쓴다 |
+| 토큰 유효 기간 | 8시간 — 환경변수 `ADMIN_SESSION_TTL` (예: `PT2H`) |
+| 세션 폐기 | `DELETE /admin/auth/sessions` (이 요청에도 토큰이 필요하다) |
+
+> **인증 코드를 설정하지 않으면 세션 발급이 전건 거부된다.** 로컬에는 기본값이 있어 그대로 뜨지만, 기본값을 지운 환경에서 `ADMIN_AUTH_CODE`를 빠뜨리면 기동 로그에 ERROR가 남고 `/admin/**`이 통째로 막힌다.
+>
+> 토큰은 8시간 뒤 만료된다. 시나리오를 나눠서 여러 날 진행한다면 그날 다시 발급받는다.
+
+**`/internal/**`은 인증 대상이 아니다.** 부하 테스트 전용(`@Profile("!prod")`)이라 인터셉터에서 제외했다. 아래 초기화 API와 TC-55·TC-56·TC-83은 토큰 없이 호출한다.
+
+### 매 시나리오 시작 전 초기화
+
+모든 시나리오는 아래 API로 상태를 초기화한 뒤 시작한다. 시나리오 간 순서에 의존하지 않도록 하기 위함이다.
+
+| API | 동작 |
+| --- | --- |
+| `POST /internal/coupons/{couponId}/reset` | 발급 이력·멱등키·알림·메시지·검증 결과 삭제, 재고를 지정 수량으로 원복 |
+
+> Redis 키(`stock`, `applicants`, `sequence`, `request-sequence`)도 이 API가 함께 정리한다(#88). 신청자·순번 키는 삭제하고 재고 키는 지정 수량으로 다시 채운다. 응답의 `redisStock`은 초기화 후 Redis 에서 다시 읽은 값이라, `totalQuantity`와 다르면 초기화가 덜 끝난 것이다.
+>
+> 앞 회차 메시지가 파이프라인에 남아 있으면 `409 COUPON409-8`로 거절한다. 남은 메시지가 뒤늦게 처리되며 이번 회차 재고를 깎기 때문이다. 큐가 빌 때까지 기다린 뒤 다시 호출한다.
+>
+> ⚠️ **발급 시나리오는 이 API를 부르지 않으면 아예 진행되지 않는다.** Lua 는 MySQL 이 아니라 Redis 의 `coupon:issue:stock` 키를 보고 재고를 판정하는데, 지금 이 키를 채우는 곳은 이 초기화 API 하나뿐이다 — 관리자 쿠폰 생성이나 `READY → ACTIVE` 스케줄러는 Redis 를 건드리지 않는다. 키가 없으면 Lua 가 `STOCK_NOT_INITIALIZED` 를 내고 Consumer 가 ACK 하지 않아, 신청은 `202` 로 접수되지만 확정이 영원히 안 난다. **쿠폰을 새로 만들었다면 발급을 걸기 전에 반드시 한 번 호출한다.**
+
+## 3. 시나리오 목록
+
+**담당**은 해당 기능의 구현 담당자를 뜻한다. 실행은 담당6이 하지만, 시나리오가 실패하면 그 기능의 담당자가 확인한다. 각자 아래 표에서 자기 시나리오를 확인하고, 커버되지 않는 항목이 있으면 알려준다.
+
+| 담당 | 시나리오 | 개수 |
+| --- | --- | --- |
+| 전송흔 | TC-01 ~ 06, TC-20 ~ 29 | 16 |
+| 박신형 | TC-11 ~ 12, TC-34 ~ 37, TC-45 ~ 46, TC-50 ~ 54, TC-57 ~ 62, TC-64 ~ 66, TC-85 | 23 |
+| 박수빈 | TC-31 ~ 32, TC-40 ~ 42, TC-44, TC-90 ~ 91, TC-93 ~ 94 | 10 |
+| 이성집 | TC-07 ~ 10, TC-13 ~ 17, TC-30, TC-33, TC-38, TC-43 | 13 |
+| 정자비 | TC-71 ~ 79, TC-95 | 10 |
+| 함세연 | TC-55 ~ 56, TC-80 ~ 84 | 7 |
+| 공통 | TC-92 | 1 |
+
+`공통`은 여러 담당자의 코드가 함께 있어야 성립하는 시나리오다.
+
+테스트 코드를 작성할 때는 시나리오 ID를 주석으로 남긴다. 결과를 모을 때 어느 테스트가 어느 시나리오인지 찾기 위함이다.
+
+```java
+// TC-45: 동일 발급 건에 사용 동시 호출
+@Test
+void onlyOneUseSucceedsWhenCalledConcurrently() { ... }
+```
+
+### A. 정상 흐름 (End-to-End) — TC-01 ~ TC-17
+
+> **TC-01 ~ TC-06은 관리자 API라 `X-ADMIN-KEY` 헤더가 필요하다.** 빠뜨리면 기대 결과 대신 401이 떨어진다. 발급 절차는 §2 참고. TC-07 이후는 사용자 API라 토큰이 필요 없다.
+>
+> TC-02 ~ TC-04는 이벤트 수정 API가 하나로 통합(#83)되면서 `PATCH /admin/events/{eventId}` 한 곳으로 바뀌었다. **`description`을 비울 때는 `null`이 아니라 빈 문자열을 보낸다** — `null`은 "이 필드는 안 바꾼다"는 뜻이라 아무 일도 일어나지 않는다.
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-01 | 이벤트 생성 | `POST /admin/events` | 201, `event.status = SCHEDULED` | 전송흔 |
+| TC-02 | 이벤트 이름 수정 | `PATCH /admin/events/{eventId}` · `{"name": "..."}` | 200, 이름 변경 반영 | 전송흔 |
+| TC-03 | 이벤트 설명 비우기 | `PATCH /admin/events/{eventId}` · `{"description": ""}` | 200, `description`이 NULL | 전송흔 |
+| TC-04 | 이벤트 기간 수정 | `PATCH /admin/events/{eventId}` · `{"openAt": "...", "closeAt": "..."}` | 200, openAt·closeAt 변경 반영 | 전송흔 |
+| TC-05 | 쿠폰 생성 | `POST /admin/events/{eventId}/coupons` (재고 10) | 201, `coupon_stock.remaining_quantity = 10` | 전송흔 |
+| TC-06 | 이벤트 오픈 | `PATCH /admin/events/{id}/status` → OPEN | 200, `event_status_history`에 SCHEDULED→OPEN 1건 | 전송흔 |
+| TC-07 | 쿠폰 발급 신청 (접수) | `POST /coupons/{couponId}/issues` | 202, result = WAITING. Redis 재고 차감, 순번 채번 | 이성집 |
+| TC-08 | 비동기 확정 후 결과 조회 | ① `GET /users/{userId}/coupon-issue-requests/status?idempotencyKey=`를 확정될 때까지 폴링해 `couponIssueId`를 얻고 ② 그 ID로 `GET /coupon-issues/{id}/status` | 일정 시간(예: 3초) 내 ISSUED, `coupon_issue` 1건 | 이성집 |
+| TC-09 | 발급 상세 조회 | `GET /coupon-issues/{id}` | 200, couponCode·expiresAt 포함, `isUsable = true` | 이성집 |
+| TC-10 | 내 발급 내역 목록 | `GET /users/{userId}/coupon-issue-requests` | 200, `createdAt` 최신순 정렬 | 이성집 |
+| TC-11 | 쿠폰 사용 | `POST /coupon-issues/{id}/use` | 200, USED, 이력에 ISSUED→USED 1건 | 박신형 |
+| TC-12 | 사용 취소 | `POST /coupon-issues/{id}/cancel` | 200, ISSUED 복귀, 이력에 USED→ISSUED 1건 | 박신형 |
+| TC-13 | 신청 결과 폴링 — 접수 완료·확정 전 | TC-07 직후 `GET /users/{userId}/coupon-issue-requests/status?idempotencyKey=` | 접수 응답이 그대로 재현된다 (**202 · `WAITING`**). 본처리를 다시 태우지 않음 | 이성집 |
+| TC-14 | 신청 결과 폴링 — 확정 후 | TC-13을 확정될 때까지 반복 | **200** + 최종 발급 정보(`couponIssueId`·`sequenceNo`·`status="ISSUED"`)가 반환된다 | 이성집 |
+| TC-15 | 신청 결과 폴링 — 없는 키 | 발급한 적 없는 `idempotencyKey`로 조회 | 404 `COUPON404-2` | 이성집 |
+| TC-16 | 실시간 요청 현황 조회 | `GET /coupons/{couponId}/status` (재고 10, 3건 확정 후) | 200, `totalQuantity=10` · `issuedQuantity=3` · `remainingQuantity=7` · `initialized=true` | 이성집 |
+| TC-17 | 실시간 현황 — 재고 미초기화 | Redis 재고 키가 없는 쿠폰으로 조회 | 200, `initialized=false` · `issuedQuantity=0` · **`remainingQuantity=totalQuantity`** | 이성집 |
+
+> TC-13 ~ TC-15는 비동기 발급의 결과 확인 창구다. 신청 응답이 `WAITING`뿐이라 사용자가 당첨 여부를 알 방법이 이것뿐이므로, 세 갈래(접수 재현 · 확정 후 · 없는 키)를 모두 확인한다.
+>
+> **`IN_PROGRESS`는 TC-13에서 관찰되지 않는다.** `findStatus()`가 `IN_PROGRESS`를 돌려주는 건 원본 POST 트랜잭션이 아직 안 끝나 응답이 저장되기 전인 구간뿐인데, TC-07이 응답을 받은 시점엔 이미 접수 응답(202 · `WAITING`)이 저장돼 있다. 이 구간을 보려면 POST와 폴링을 **동시에** 쏘거나 처리 지연을 만들어야 해서, 별도 시나리오로 다룬다.
+>
+> **확정 후 응답의 `status` 필드는 `ISSUED`로 계약이 확정되었다.** (접수 시 `WAITING` → 확정 시 `ISSUED`로 전이)
+>
+> TC-17이 중요한 이유는 `initialized`를 안 보면 **"재고 준비가 안 된 상태"를 정상 재고로 오인하기 때문**이다. 미초기화일 때 `CouponConverter`가 잔여를 DB 총재고로 채워 내보내므로(`remainingQuantity = totalQuantity`), 화면만 보면 발급 가능해 보이지만 실제로는 Lua가 `STOCK_NOT_INITIALIZED`로 전건 막는다.
+
+### B. 예외 흐름 — TC-20 ~ TC-38
+
+#### 이벤트
+
+| ID | 시나리오 | 기대 결과 | 담당 |
+| --- | --- | --- | --- |
+| TC-20 | openAt > closeAt로 이벤트 생성 | 400 `EVENT400-0` | 전송흔 |
+| TC-21 | 존재하지 않는 이벤트 수정 | 404 `EVENT404-0` | 전송흔 |
+| TC-22 | 동일 상태로 변경 (OPEN → OPEN) | 400 `EVENT400-1` | 전송흔 |
+| TC-23 | 전이 순서 위반 (SCHEDULED → CLOSED) | 400 `EVENT400-2` | 전송흔 |
+| TC-24 | 역방향 전이 (CLOSED → OPEN) | 400 `EVENT400-2` | 전송흔 |
+
+#### 쿠폰 생성
+
+| ID | 시나리오 | 기대 결과 | 담당 |
+| --- | --- | --- | --- |
+| TC-25 | 쿠폰 생성 불가 이벤트 상태에서 생성 | 400 `COUPON400-1` | 전송흔 |
+| TC-26 | 발급 종료가 시작보다 이전 | 400 `COUPON400-2` | 전송흔 |
+| TC-27 | 발급 기간이 이벤트 기간을 벗어남 | 400 `COUPON400-3` | 전송흔 |
+| TC-28 | 정률 할인 정책 오류 | 400 `COUPON400-4` | 전송흔 |
+| TC-29 | 정액 할인에 최대 할인 금액 설정 | 400 `COUPON400-5` | 전송흔 |
+
+#### 발급 · 사용 · 취소
+
+| ID | 시나리오 | 기대 결과 | 담당 |
+| --- | --- | --- | --- |
+| TC-30 | 존재하지 않는 쿠폰에 신청 | 404 `COUPON404-0` | 이성집 |
+| TC-31 | 동일 사용자 중복 신청 | 409 `COUPON409-1`, 재고 추가 차감 없음 | 박수빈 |
+| TC-32 | 재고 소진 후 신청 | 409 `COUPON409-0` | 박수빈 |
+| TC-33 | 존재하지 않는 발급 건 조회 | 404 `COUPON404-1` | 이성집 |
+| TC-34 | 본인 쿠폰이 아닌 건을 사용 | 403 `COUPON403-0` | 박신형 |
+| TC-35 | 이미 사용한 쿠폰 재사용 | 409 `COUPON409-3` | 박신형 |
+| TC-36 | 사용하지 않은 쿠폰 취소 | 409 `COUPON409-3` | 박신형 |
+| TC-37 | 만료된 쿠폰 사용 | 409 `COUPON409-3` (`INVALID_ISSUE_STATUS`) | 박신형 |
+| TC-38 | 존재하지 않는 사용자의 발급 내역 조회 | 404 `USER404-0` | 이성집 |
+
+### C. 경계 · 동시성 (핵심) — TC-40 ~ TC-46
+
+> 선착순 시스템의 본질을 검증하는 구간이다. 초과 발급이 단 1건이라도 발생하면 실패로 판정한다.
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-40 | 재고 1개에 동시 2명 신청 | 서로 다른 userId 2명 동시 | 성공 1건, 품절 1건. 재고 0 | 박수빈 |
+| TC-41 | 재고 100에 동시 200명 신청 | 서로 다른 userId 200명 동시 | 성공 **정확히 100건**, `coupon_issue` 100건, 재고 0 | 박수빈 |
+| TC-42 | 같은 사용자가 동시에 5번 신청 | 동일 userId로 동시 5요청 | 성공 1건, 나머지 `COUPON409-1` | 박수빈 |
+| TC-43 | 동일 멱등키 재전송 | **같은 `userId` + 같은 `Idempotency-Key`로 2회** | 발급 1건만 생성, 재고 1만 차감, **최초 순번 반환**. 동시 재전송이면 처리 중이라 409 `COUPON409-5`가 나올 수 있고, 확정 후 재전송이면 저장된 최종 응답이 재현된다 | 이성집 |
+| TC-44 | 재고 0에 동시 50명 신청 | 소진 상태에서 동시 요청 | 전건 `COUPON409-0`, 재고 음수 없음 | 박수빈 |
+| TC-45 | 동일 발급 건에 **사용** 동시 호출 | use API 동시 10요청 | 성공 1건, 이력 1건 | 박신형 |
+| TC-46 | 동일 발급 건에 **취소** 동시 호출 | cancel API 동시 10요청 | 성공 1건, 이력 1건 | 박신형 |
+
+> TC-45·TC-46은 `CouponIssueConcurrencyIntegrationTest`로 검증됨 (#59)
+
+### D. 배치 · 정합성 — TC-50 ~ TC-66
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-50 | 쿠폰 만료 배치 | 기한 지난 ISSUED 건 준비 후 수동 실행 | 대상만 EXPIRED, 이력에 ISSUED→EXPIRED 기록 | 박신형 |
+| TC-51 | 만료 대상이 아닌 건은 미변경 | USED·기한 미도래 건 혼재 | 해당 건들 상태 유지 | 박신형 |
+| TC-52 | 청크 경계 처리 | 대상 2,500건 (chunk-size 1000) | 전건 EXPIRED, 이력 2,500건. 누락 없음 | 박신형 |
+| TC-53 | 배치 재실행 | TC-50 직후 다시 실행 | 대상 0건, 이력 중복 없음 | 박신형 |
+| TC-54 | Redis ↔ DB 재고 정합성 | TC-41 직후 양쪽 조회 | Redis 잔여 + DB 발급 건수 = 총 재고 | 박신형 |
+| TC-55 | 초기화 API 동작 | `POST /internal/coupons/{id}/reset` | 발급 이력 0건, 재고 원복, 응답의 삭제 건수와 실제 일치 | 함세연 |
+| TC-56 | 초기화 API 운영 차단 | `prod` 프로파일로 기동 후 호출 | 404 (엔드포인트 미등록) | 함세연 |
+| TC-57 | 정합성 검증 배치 — 정상 상태 판정 | 불일치 없는 쿠폰에 `reconcile()` 실행 | `result = MATCHED`, `errorCount = 0` | 박신형 |
+| TC-58 | 정합성 검증 배치 — 이력 불일치 탐지 (HISTORY_MISMATCH) | 현재 상태와 최종 이력이 다른 건을 만든 후 실행 | `verification_detail`에 HISTORY_MISMATCH 기록 | 박신형 |
+| TC-59 | 정합성 검증 배치 — 허용 안 된 전이 탐지 (INVALID_STATUS) | 화이트리스트에 없는 상태 전이 이력을 만든 후 실행 | `verification_detail`에 INVALID_STATUS 기록 | 박신형 |
+| TC-60 | 정합성 검증 배치 — 중복 발급 탐지 (DUPLICATE_ISSUE) | 동일 유저·쿠폰 중복 발급 건을 만든 후 실행 | `verification_detail`에 DUPLICATE_ISSUE 기록 | 박신형 |
+| TC-61 | 정합성 검증 배치 — 재현성 | 같은 `asOfAt`으로 재실행 | 이전 실행과 동일한 결과 | 박신형 |
+| TC-62 | 정합성 검증 배치 — 재고 불일치 탐지 (STOCK_MISMATCH) | 재고 수량과 실제 발급 건수가 안 맞는 상황을 만든 후 실행 | `verification_detail`에 STOCK_MISMATCH 기록 | 박신형 |
+| TC-63 | (결번 — DUPLICATE_CONSUME 타입 삭제) |  |  |  |
+| TC-64 | 정합성 검증 배치 — 순번 결번 탐지 (SEQUENCE_GAP) | sequence_no 결번·중복 상황을 만든 후 실행 | `verification_detail`에 SEQUENCE_GAP 기록 | 박신형 |
+| TC-65 | 정합성 검증 배치 — 재고 미복구 탐지 (STOCK_NOT_RESTORED) | `abandon` 확정 건(`ABANDONED`)의 재고 보상 누락 상황을 재현한 후 실행 | `verification_detail`에 STOCK_NOT_RESTORED 기록 | 박신형 |
+| TC-66 | 정합성 검증 배치 트리거 | `POST /admin/coupons/{couponId}/reconcile` (`X-ADMIN-KEY` 필요) | 즉시 실행되고 리포트가 생성됨 | 박신형 |
+
+> TC-62 · TC-64 · TC-65는 배치의 2단계 검증이다. **#111로 구현돼 전부 실행 가능하다** — 배치가 탐지하는 오류 타입은 HISTORY_MISMATCH · INVALID_STATUS · DUPLICATE_ISSUE · STOCK_MISMATCH · SEQUENCE_GAP · STOCK_NOT_RESTORED 6종이다. TC-66의 트리거 API는 #103으로 반영됐다.
+>
+> **TC-63은 결번이다.** DUPLICATE_CONSUME은 "같은 Kafka 메시지를 두 번 소비해 발급이 두 건 생긴다"를 잡으려던 타입인데, `coupon_issue`의 `request_id` 유니크 제약이 애초에 두 번째 저장을 막아서 이 상태가 만들어지지 않는다. 발생할 수 없는 것을 탐지하는 코드를 두면 매번 도는 배치에 빈 쿼리만 하나 늘어나므로 #111에서 타입 자체를 지웠다. 중복 소비가 실제로 막히는지는 **TC-75(Consumer 중복 전달 멱등)** 가 본다.
+>
+> **TC-66은 관리자 API라 토큰이 필요하다.** 나머지 D 구간은 SQL 조회와 데이터 조작이라 토큰과 무관하다.
+
+### E. 비동기 발급 확정 (Kafka) — TC-70 ~ TC-79 · TC-95
+
+> 발급 접수(API 응답)와 발급 확정(DB 저장)이 분리되어 있어, "응답이 성공"과 "실제 발급 완료"가 다른 시점이다. 이 구간이 끊기면 사용자는 성공 응답을 받았는데 쿠폰이 없는 상태가 된다.
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-70 | (결번 — TC-13으로 대체) |  |  |  |
+| TC-71 | Consumer 정상 처리 | 발급 10건 접수 후 대기 | Consumer Lag 0, `coupon_issue` 10건 전건 ISSUED | 정자비 |
+| TC-72 | Consumer 일시 실패 후 재시도 | DB 연결을 잠시 끊고 접수 → 복구 | 재시도 후 정상 저장. 중복 저장 없음 | 정자비 |
+| TC-73 | 재시도 최종 실패 → DLQ 적재 | Consumer가 계속 실패하도록 유도 | DLQ 적재됨(`issue_message.status = DLQ`). 재고는 아직 원복되지 않음 — 자동 복구 없음(의도적 설계) | 정자비 |
+| TC-74 | Kafka 발행 자체 실패 | Kafka 중단 상태에서 신청 — 발행이 계속 실패하도록 유도 | WAITING 응답은 정상적으로 나감(발행 실패가 응답에 영향 없음). `issue_message`가 FAILED로 남고 재시도 대상에 들어감 | 정자비 |
+| TC-75 | Consumer 중복 전달 (멱등) | 동일 메시지 2회 전달 | `coupon_issue` 1건만. 유니크 위반이 500으로 새지 않음 | 정자비 |
+| TC-76 | 처리 전 앱 종료 후 재기동 | 10건 정상 접수 직후(Consumer가 처리하기 전에) 앱을 즉시 종료 → 재기동 | 재기동 후 컨슈머 그룹이 오프셋을 이어받아 밀린 10건 전부 처리. 유실 0 | 정자비 |
+| TC-77 | DLQ 목록 조회 | TC-73 직후 `GET /admin/coupon-issue/dlq` (`X-ADMIN-KEY` 필요) | 200, DLQ 적재 건이 조회됨. `messageId`·`requestId`·`retryCount`·`lastError` 포함 | 정자비 |
+| TC-78 | DLQ 수동 재발행 | 원인을 제거한 뒤 `POST /admin/coupon-issue/dlq/{messageId}/reprocess` | 200, Kafka로 재발행되어 Consumer가 처리. `coupon_issue` 1건 저장 | 정자비 |
+| TC-79 | DLQ 재발행 — 중복·잘못된 요청 방어 | ① 같은 `messageId`로 동시 5요청 ② DLQ 상태가 아닌 건 ③ 없는 `messageId` | ① 재발행 **1건만**, 나머지 409 `COUPON409-7`, 발급도 1건만 ② 409 `COUPON409-7` ③ 404 `COUPON404-3` | 정자비 |
+| TC-95 | 관리자 DLQ 포기(abandon) → 재고 보상 | TC-73 직후 `POST /admin/coupon-issue/dlq/{messageId}/abandon` | 200, Redis 재고 원복, `issue_message.status = ABANDONED`. 재고 누수 0 | 정자비 |
+
+> **TC-95의 번호가 구간을 벗어난 이유** — 원래 TC-73 하나가 "DLQ 적재 + 재고 원복"을 함께 다뤘는데, 실제 구현은 이 둘이 서로 다른 시점에 일어나는 별개 단계다(아래 참고). 그래서 둘로 나눴는데 E 구간(TC-70 ~ TC-79)에 빈 번호가 없다. TC-74 이후를 밀면 F·G 구간까지 전부 재번호해야 하고 담당표·상호참조가 같이 흔들리므로, 뒤쪽 빈 번호를 가져다 쓴다.
+>
+> **DLQ 적재와 재고 보상은 분리되어 있다.** DLQ로 갔다고 자동으로 재고를 되돌리지 않는다 — 관리자가 `reprocess`로 되살리면 성공할 여지가 남아 있는데 미리 재고를 복구해두면 나중에 재처리가 성공했을 때 초과 발급이 되기 때문이다. 재고 복구는 관리자가 `abandon`으로 **재처리 포기를 명시적으로 결정했을 때만** 실행된다. 그래서 TC-73은 "적재됐는가"까지만, **재고 보상 검증은 TC-95에서** 본다.
+>
+> 발행이 실패해도 즉시 재고를 되돌리지 않고 Outbox 재시도로 넘기는 구조라, TC-74는 "발행이 실패해도 응답과 재시도 적재가 정상인가"까지만 본다.
+>
+> TC-77 ~ TC-79는 **장애 복구 경로**다. 평소에는 쓰이지 않아 실제로 동작하는지 확인할 기회가 통합 테스트뿐이므로 반드시 한 번은 돌린다. 관리자 API라 `X-ADMIN-KEY`가 필요하다.
+>
+> TC-78은 **원인을 제거한 뒤에** 눌러야 의미가 있다. DLQ로 온 메시지는 Consumer 저장이 3번 실패한 건이라, 원인이 그대로면 같은 경로로 다시 DLQ에 쌓인다.
+>
+> TC-79는 `claimForReprocess`가 `retryCount`를 조건부로 올려 선점하는 방식이 실제로 중복을 막는지 보는 것이다. 상태를 `PENDING`으로 바꾸지 않고 `DLQ`로 두는 이유는 Outbox 발행 poller(`PENDING`·`FAILED`만 조회)가 같은 메시지를 동시에 또 발행하지 않게 하기 위함이다.
+>
+> **①이 보장되는 범위는 "동시 요청"까지다.** `UPDATE ... WHERE message_id = ? AND status = 'DLQ' AND retry_count = ?` 는 전형적인 CAS 라, 다섯 요청이 모두 같은 `retryCount` 를 읽고 들어와도 행 잠금이 직렬화해서 첫 건만 1행을 갱신하고 나머지는 0행이 된다(MySQL 에서 실측 확인).
+>
+> **순차 재요청은 막지 않는다.** 재발행에 성공해도 상태가 `DLQ` 로 남으므로, 관리자가 잠시 뒤 같은 건을 다시 누르면 그때의 `retryCount` 로 또 선점된다. 이건 "관리자가 다시 시도한 것"이라 의도된 동작에 가깝고, 이중 발급은 `coupon_issue.request_id` 유니크 제약이 막는다. 완전히 한 번으로 묶으려면 `DLQ → REPROCESSING` 전이를 선점하고 발행 실패 시 되돌리는 구조가 필요한데, 지금 범위 밖이다.
+>
+> ⚠️ **동시 재발행을 검증하는 테스트가 아직 없다.** 위 보장은 쿼리 형태로만 확인한 것이라, TC-79 ①을 실행할 때 실제로 확인해야 한다.
+
+### F. 대량 데이터 · 개인정보 — TC-80 ~ TC-85
+
+> 소규모에서는 드러나지 않고 실제 데이터 규모에서만 나타나는 문제를 잡는 구간이다.
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-80 | 회원 100만 건 상태에서 발급 | 더미 적재 후 TC-07 재실행 | 정상 동작, 응답 시간이 소규모 대비 유의미하게 악화되지 않음 | 함세연 |
+| TC-81 | 발급 이력 300만 건 상태에서 목록 조회 | `GET /users/{userId}/coupon-issue-requests` | 정상 응답. 인덱스 사용 확인(`EXPLAIN`) | 함세연 |
+| TC-82 | 발급 이력 300만 건 상태에서 만료 배치 | 배치 수동 실행 | 청크 단위로 완주, 락 대기로 발급 API가 막히지 않음 | 함세연 |
+| TC-83 | 대량 상태에서 초기화 API | `POST /internal/coupons/{id}/reset` | 정상 완료, 타임아웃 없음 | 함세연 |
+| TC-84 | 개인정보 마스킹 | 발급·조회 API 호출 후 로그·응답 확인 | 이메일·전화번호가 평문으로 남지 않음 | 함세연 |
+| TC-85 | 정합성 검증 배치 — 전체 쿠폰 대상 커버리지 | 300만 건 더미데이터의 전체 쿠폰에 대해 `reconcile()`을 순회 실행한 뒤, 대상 데이터를 변경하지 않고 다시 실행 | 누락 없이 전 쿠폰 처리됨(합산 `totalCount` = 300만), 변경되지 않은 동일 데이터에서 재실행했을 때 전체 결과 동일(재현성) | 박신형 |
+
+### G. 선착순 순서 보장 — TC-90 ~ TC-94
+
+> "몇 건 발급됐는가"와 별개로 **"먼저 온 사람이 먼저 받았는가"** 를 검증하는 구간이다.
+
+#### 어디까지 보장되는가
+
+| 구간 | 순서 보장 | 근거 |
+| --- | --- | --- |
+| 클라이언트 전송 → 서버 도착 | ❌ | 네트워크·스레드 스케줄링. 물리적으로 보장 불가 |
+| 서버 도착 → Lua 호출 | ⚠️ | 대체로 유지되나 보장은 아님 |
+| **Lua 내부 `INCR`** | ✅ **완전 보장** | Redis 단일 스레드 + 스크립트 원자 실행 |
+| Lua → Kafka 발행 | ❌ | 비동기 |
+| Kafka 파티션 간 | — | 키가 `couponId`라 **같은 쿠폰은 같은 파티션**으로 간다. 파티션이 갈리지 않으므로 이 구간이 순서를 흐트러뜨리지는 않는다 |
+| Consumer → DB 저장 | ❌ | 파티션 안에서는 전달 순서가 유지되지만, 저장은 건마다 별도 트랜잭션이라 커밋 순서가 `sequence_no` 순서와 달라질 수 있다 |
+
+**선착순 순위는 Lua의 `sequence_no`에서 확정되며, 그 이후 구간의 순서는 발급 결과에 영향을 주지 않는다.** DB 저장 순서(`created_at`)가 `sequence_no` 순서와 달라지는 것은 비동기 구조의 정상 동작이다.
+
+따라서 순서 검증은 `created_at`이 아니라 **`sequence_no` 기준**으로 수행한다.
+
+#### 시나리오
+
+| ID | 시나리오 | 실행 | 기대 결과 | 담당 |
+| --- | --- | --- | --- | --- |
+| TC-90 | 순차 요청의 순서 일치 | 재고 100, 요청 100건을 **순차로** 전송 | 도착 순서와 `sequence_no`가 **완전 일치** (1, 2, 3 … 100) | 박수빈 |
+| TC-91 | 동시 요청의 순서 역전율 | 재고 100, 동시 200건 | **멱등키 등록 순서**와 `sequence_no` 순서를 비교해 **역전 건수를 기록**. 완전 일치는 기대하지 않고 판정도 하지 않는다 | 박수빈 |
+| TC-92 | 단일 요청 전 구간 추적 | 요청 1건 후 `requestId`로 로그 검색 | 컨트롤러 → Lua → Kafka 발행 → Consumer 수신 → DB 저장까지 **모든 단계의 통과 시각이 조회됨** | 공통 |
+| TC-93 | 저장 순서 역전 확인 | TC-91 직후 SQL 조회 | `created_at` 순서와 `sequence_no` 순서가 다를 수 있음. **그럼에도 `sequence_no`는 1~N 빠짐·중복 없이 부여됨** | 박수빈 |
+| TC-94 | 재고 경계에서의 선착순 | 재고 100, 요청 150건 | `sequence_no` 1~100은 발급 성공, 101번째 이후 요청은 전건 `COUPON409-0` | 박수빈 |
+
+#### 검증 쿼리
+
+```sql
+-- TC-93: sequence_no 순서와 DB 저장 순서가 다른 건수
+SELECT COUNT(*) FROM (
+  SELECT sequence_no,
+         ROW_NUMBER() OVER (ORDER BY created_at) AS save_order
+    FROM coupon_issue
+   WHERE coupon_id = ?
+) t
+WHERE sequence_no <> save_order;
+-- 0이 아니어도 정상. 비동기 저장의 특성이다.
+```
+
+```sql
+-- TC-90 · TC-94: sequence_no가 1~N 빠짐·중복 없이 부여됐는지
+SELECT COUNT(*)                    AS total,
+       COUNT(DISTINCT sequence_no) AS distinct_no,
+       MIN(sequence_no)            AS min_no,
+       MAX(sequence_no)            AS max_no
+  FROM coupon_issue
+ WHERE coupon_id = ?;
+-- 재고 100인 경우 100, 100, 1, 100 이어야 정상
+```
+
+#### 전 구간 추적 로그 — 구현 완료
+
+TC-90 · TC-91 · TC-92는 각 단계의 통과 시각을 알아야 실행할 수 있다. **`requestId`를 공통 키로 전 구간 로그가 모두 들어와 있어, `requestId` 하나로 흐름을 끝까지 추적할 수 있다.**
+
+| 단계 | 위치 | 로그 |
+| --- | --- | --- |
+| 접수 | `CouponIssueServiceImpl` | `[ISSUE] 접수 requestId={} couponId={} userId={}` |
+| 판정 | `CouponIssueStreamConsumer` | `[ISSUE] Lua 처리 결과 requestId={} status={} sequenceNo={}` |
+| 선점 | `CouponIssueStreamConsumer` | `[ISSUE] 선점 requestId={} sequenceNo={}` |
+| 발행 | `CouponIssueEventProducer` | `[CouponIssueEvent] 발행 성공: requestId={}` |
+| 수신 | `CouponIssueEventConsumer` | `[CouponIssueEvent] 수신: couponId={}, userId={}, requestId={}, sequenceNo={}` |
+| 저장 완료 | `CouponIssuePersister` | `[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}` |
+
+> ⚠️ **접수 로그의 시각은 HTTP 도착 순서가 아니다.** 이 로그는 멱등키 등록(`begin()`)을 마친 뒤에 찍히므로, 그 앞의 톰캣 스레드 배정과 쿠폰·회원 존재 확인(MySQL 왕복 2회)에서 이미 순서가 뒤집힐 수 있다. TC-91의 역전율은 **"멱등키 등록 순서 ↔ `sequence_no`"** 를 재는 참고 지표이지, 요청 도착 순서에 대한 공정성 증명이 아니다.
+
+#### 로그 레벨
+
+건당 로그는 순서 검증(TC-90 ~ TC-92)에만 필요하다. 부하 테스트 규모에서는 요청 20,000건당 10만 줄이 쌓여 확인이 불가능하고, 로그 기록 시간이 응답 시간 측정에 섞인다.
+
+레벨을 환경변수로 분리해 상황에 따라 조절한다.
+
+```properties
+logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
+```
+
+| 상황 | 설정 | 결과 |
+| --- | --- | --- |
+| 통합 테스트 · 순서 검증 | `ISSUE_LOG_LEVEL=DEBUG` | 단계별 로그 전부 기록 |
+| 부하 테스트 | `ISSUE_LOG_LEVEL=WARN` | 정상 경로 로그 제외, **에러 로그는 유지** |
+
+대규모에서의 순서 검증은 로그가 아니라 SQL로 수행한다. `sequence_no`가 1~N 빠짐·중복 없이 부여됐는지만 확인하면 되기 때문이다.
+
+## 4. 판정 기준
+
+| 항목 | 합격 조건 |
+| --- | --- |
+| 기능 정확성 | 모든 시나리오의 HTTP 상태·응답 코드가 기대값과 일치 |
+| 데이터 정합성 | DB 상태가 기대값과 일치. 재고 음수·초과 발급 0건 |
+| 중복 방지 | 1인 1매, 동일 requestId 중복 처리 0건 |
+| **선착순 순서** | `sequence_no`가 1~N 빠짐·중복 없이 부여. 순차 요청 시 도착 순서와 완전 일치 |
+| 이력 기록 | 모든 상태 전이가 history 테이블에 누락 없이 기록 |
+| 재현성 | 초기화 후 동일 시나리오 재실행 시 같은 결과 |
+
+## 5. 실행 방법
+
+| 구간 | 도구 | 비고 |
+| --- | --- | --- |
+| A · B (단건) | k6 또는 각 담당자의 JUnit 테스트 | 순차 실행. TC-01 ~ 06은 `X-ADMIN-KEY` 필요 |
+| C (동시성) | k6 소규모 스크립트 | VU를 올리면 그대로 부하 테스트 스크립트가 됨 |
+| D (배치·정합성) | 수동 트리거 + SQL 조회 | 배치는 스케줄 대기 없이 직접 호출. TC-66은 `X-ADMIN-KEY` 필요 |
+| E (비동기) | 컨테이너 기동·중단 + Consumer Lag 조회 | Docker로 Kafka·Consumer를 직접 조작 |
+| F (대량 데이터) | 더미 SQL 적재 후 재실행 + `EXPLAIN` | 부하 테스트 직전에 수행 |
+| G (선착순 순서) | k6 + 애플리케이션 로그 + SQL 조회 | 도착 시각은 로그에서, 순위는 `sequence_no`에서 확인 |
+
+각 담당자의 JUnit 테스트 결과는 `./gradlew test` 실행 후 `build/reports/tests/test/index.html`에서 한 번에 확인한다. 따로 결과를 취합해 전달할 필요는 없다.
+
+**JUnit 테스트는 세션 발급이 필요 없다.** 컨트롤러 슬라이스 테스트는 인터셉터를 거치지 않거나 테스트 설정으로 우회한다. 토큰이 필요한 건 실제 서버에 HTTP로 요청을 보내는 경우(k6·`curl`·Postman)뿐이다.
+
+## 6. 결과 기록표
+
+| ID | 실행일 | 결과 | 실제 값 | 비고 |
+| --- | --- | --- | --- | --- |
+| TC-01 |  |  |  |  |
+| TC-02 |  |  |  |  |
+| … |  |  |  |  |
+
+## 7. 선행 조건
+
+현재 미완료 선행 조건은 없다.
+
+### 해소된 항목
+
+아래는 예전에 미완료로 잡혀 있었으나 지금은 모두 반영됐다. 해당 시나리오는 그대로 실행할 수 있다.
+
+| 항목 | 반영 |
+| --- | --- |
+| 발급 이력 300만 더미데이터 | #98 스크립트로 적재 완료. TC-80 ~ TC-85 재검증 완료 |
+| 발급 API와 큐 연결 | #58 — 신청 API가 Redis Stream에 적재한다 |
+| Kafka Producer / Consumer / Recoverer | 발급 확정 경로에 연결됨 |
+| 초기화 API의 Redis 키 삭제 | #88 — 신청자·순번 키 삭제 + 재고 키 재설정까지 한다 |
+| 요청 도착 로그 | #76 — 신청 API 진입 시점에 `requestId` 기준으로 남는다 |
+| 발급 요청 큐 배치 확정 | Redis Stream으로 결정. TC-07 응답은 `202` · `WAITING` 고정 |
+| 정합성 검증 배치 트리거 | #103 — `POST /admin/coupons/{couponId}/reconcile` |
+| DLQ Consumer · 수동 재발행 | #75 — TC-77 ~ TC-79 |
+| Redis 재고 보상(restore) | `CouponIssueLuaService.restoreStock()` 구현됨 |
+| DLQ 재처리 포기(abandon) | #132 — `POST /admin/coupon-issue/dlq/{messageId}/abandon`. TC-95 |
+| 개인정보 마스킹 | #142 — `PiiMasker`가 `notification_log.recipient_masked`에 마스킹해서 저장한다. TC-84 |
+| 쿠폰 SOLD_OUT 전이 | #145 — 재고 소진 시 `coupon.status`가 SOLD_OUT으로 전이된다 |
+| 정합성 검증 2단계 (STOCK_MISMATCH · SEQUENCE_GAP · STOCK_NOT_RESTORED) | #111 — 배치가 6종을 전부 탐지한다. TC-62 · TC-64 · TC-65 |
+| 관리자 인증 | #91 — `/admin/**`에 `X-ADMIN-KEY` 필요 |

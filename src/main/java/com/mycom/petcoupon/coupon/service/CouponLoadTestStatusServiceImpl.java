@@ -1,0 +1,117 @@
+package com.mycom.petcoupon.coupon.service;
+
+import java.util.Map;
+import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.mycom.petcoupon.coupon.dto.res.CouponLoadTestStatusResponse;
+import com.mycom.petcoupon.coupon.entity.CouponStock;
+import com.mycom.petcoupon.coupon.exception.CouponErrorCode;
+import com.mycom.petcoupon.coupon.issue.dto.CouponIssueRealtimeStock;
+import com.mycom.petcoupon.coupon.issue.service.CouponIssueLuaService;
+import com.mycom.petcoupon.coupon.repository.CouponIssueLoadTestSummary;
+import com.mycom.petcoupon.coupon.repository.CouponIssueRepository;
+import com.mycom.petcoupon.coupon.repository.CouponStockRepository;
+import com.mycom.petcoupon.global.common.exception.GeneralException;
+import com.mycom.petcoupon.idempotency.entity.enums.IdempotencyStatus;
+import com.mycom.petcoupon.idempotency.repository.IdempotencyKeyRepository;
+import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
+import com.mycom.petcoupon.messaging.repository.IssueMessageRepository;
+import com.mycom.petcoupon.messaging.repository.IssueStatusCount;
+
+import lombok.RequiredArgsConstructor;
+
+// 부하 테스트 현황 조회(#195) — load-test/sql/verify_issue_result.sql을 서비스로 옮긴 것.
+// 0번 블록(파이프라인 상태) -> pending/sent/consumed/failed/dlq, 1번(발급 건수=MIN(접수,총재고))
+// -> passed/overIssued, 2번(1인 2매) -> duplicateUsers, 4번(순번 연속) -> sequenceIntact,
+// 13번(IN_PROGRESS 멱등키) -> inProgressIdempotencyKeys, 확정 소요초 -> elapsedSeconds.
+//
+// 단, rejected는 accepted - passed(뺄셈)가 아니라 최종 FAILED 확정 건을 직접 센다 — 뺄셈은
+// "부하 종료 후"를 전제한 verify_issue_result.sql 원본 방식인데, 이 API는 부하 도중 5초마다
+// 폴링돼서 처리 중인 pending/SENT 요청까지 거절로 잡히고 초과발급 시 음수가 났다(PR #195 리뷰 반영).
+@Service
+@RequiredArgsConstructor
+public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusService {
+
+    private final CouponStockRepository couponStockRepository;
+    private final IssueMessageRepository issueMessageRepository;
+    private final IdempotencyKeyRepository idempotencyKeyRepository;
+    private final CouponIssueRepository couponIssueRepository;
+    private final CouponIssueLuaService couponIssueLuaService;
+
+    @Override
+    @Transactional(readOnly = true)
+    public CouponLoadTestStatusResponse getLoadTestStatus(Long couponId) {
+        CouponStock couponStock = couponStockRepository.findById(couponId)
+                .orElseThrow(() -> new GeneralException(CouponErrorCode.COUPON_NOT_FOUND));
+
+        Map<IssueMessageStatus, Long> pipelineCounts = issueMessageRepository.countGroupedByStatusForCoupon(couponId)
+                .stream()
+                .collect(Collectors.toMap(IssueStatusCount::getStatus, IssueStatusCount::getCount));
+
+        long accepted = idempotencyKeyRepository.countAcceptedByCouponId(couponId);
+        long rejected = idempotencyKeyRepository.countByCoupon_CouponIdAndStatusAndResponseStatusIsNotNull(
+                couponId, IdempotencyStatus.FAILED
+        );
+        long inProgress = idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(couponId, IdempotencyStatus.IN_PROGRESS);
+        long published = issueMessageRepository.countPublishedByCoupon(couponId);
+
+        CouponIssueLoadTestSummary summary = couponIssueRepository.summarizeForLoadTest(couponId);
+        long passed = summary.getPassedCount();
+        long expectedPassed = Math.min(accepted, couponStock.getTotalQuantity());
+
+        // 재고 키가 없으면(초기화 전/삭제) 통과 수를 알 수 없으므로 0으로 둔다 — totalQuantity를
+        // 그대로 빼면 "전량 통과"로 보인다. Redis 접근 자체가 실패하면 예외가 그대로 올라간다.
+        // 이 상황은 발급 파이프라인이 이미 멈춘 상태라, 화면만 살려두는 편이 더 오해를 부른다.
+        CouponIssueRealtimeStock realtimeStock = couponIssueLuaService.getRealtimeStock(couponId);
+        validateRealtimeStock(realtimeStock, couponStock.getTotalQuantity());
+
+        long stockPassed = realtimeStock.initialized()
+                ? couponStock.getTotalQuantity() - realtimeStock.remainingStock()
+                : 0L;
+
+        return CouponLoadTestStatusResponse.builder()
+                .accepted(accepted)
+                .passed(passed)
+                .stockPassed(stockPassed)
+                .rejected(rejected)
+                .pending(countOf(pipelineCounts, IssueMessageStatus.PENDING))
+                .sent(countOf(pipelineCounts, IssueMessageStatus.SENT))
+                .consumed(countOf(pipelineCounts, IssueMessageStatus.CONSUMED))
+                .failed(countOf(pipelineCounts, IssueMessageStatus.FAILED))
+                .dlq(countOf(pipelineCounts, IssueMessageStatus.DLQ))
+                .reprocessing(countOf(pipelineCounts, IssueMessageStatus.REPROCESSING))
+                .published(published)
+                .inProgressIdempotencyKeys(inProgress)
+                .overIssued(passed > expectedPassed)
+                .duplicateUsers(summary.getDuplicateUserCount())
+                // [#200 버그 수정] getSequenceIntact()가 이제 Long(BIGINT)을 그대로 받는다 —
+                // CouponIssueLoadTestSummary 주석 참고. 0이 아니면 정상(연속)이다.
+                .sequenceIntact(summary.getSequenceIntact() != 0)
+                .elapsedSeconds(summary.getElapsedSeconds() == null ? 0 : summary.getElapsedSeconds())
+                .build();
+    }
+
+    private long countOf(Map<IssueMessageStatus, Long> counts, IssueMessageStatus status) {
+        return counts.getOrDefault(status, 0L);
+    }
+
+    // CouponRealtimeStatusServiceImpl.validateRealtimeStock()과 같은 검증이다. 같은 Redis 값을
+    // 읽는 두 API가 유효 범위를 다르게 판단하면, 한쪽은 막고 한쪽은 통과시켜 나중에 걸려 넘어진다.
+    //
+    // 범위를 벗어난 값을 그대로 빼면 stockPassed가 음수이거나 총재고보다 커진 채 화면에 나간다.
+    // 이상을 드러내려고 만든 화면이 이상을 숨기는 셈이라, 예외로 올려 눈에 띄게 한다 —
+    // 재고가 이 지경이면 이 쿠폰의 파생 수치를 전부 믿을 수 없다.
+    private void validateRealtimeStock(CouponIssueRealtimeStock realtimeStock, int totalQuantity) {
+        if (!realtimeStock.initialized()) {
+            return;
+        }
+
+        int remainingStock = realtimeStock.remainingStock();
+        if (remainingStock < 0 || remainingStock > totalQuantity) {
+            throw new GeneralException(CouponErrorCode.REALTIME_STOCK_INCONSISTENT);
+        }
+    }
+}
