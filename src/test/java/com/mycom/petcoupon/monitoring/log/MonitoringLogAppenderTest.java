@@ -174,6 +174,15 @@ class MonitoringLogAppenderTest {
     }
 
     @Test
+    void forwardsAuthorizationLogsWithoutCredentials() {
+        appender.doAppend(event(Level.ERROR, "request failed Authorization: Bearer abc.def"));
+
+        assertThat(received).singleElement()
+                .extracting(MonitoringEventResponse::message)
+                .isEqualTo("request failed Authorization:[REDACTED]");
+    }
+
+    @Test
     void omitsInfrastructureConnectionInformation() {
         String message = "connection jdbc:mysql://db.internal:3306/petcoupon?password=very-secret "
                 + "x".repeat(600);
