@@ -304,6 +304,41 @@ class CouponUpdateServiceTest {
 		verifyNoInteractions(couponConverter);
 	}
 
+	// [#222] validateIssueNotStarted는 "기존" issueStartAt만 본다 — 요청이 실어보낸 새
+	// issueStartAt이 과거인 경우는 이 검증을 그대로 통과하므로, 뒤이은 validateIssuePeriod의
+	// 과거 시각 검증이 실제로 이 경로를 막는지 확인한다. 기존 issueStartAt은 미래로 둬서
+	// validateIssueNotStarted는 통과시키고, 요청값만 과거로 보낸다.
+	@Test
+	void updateCouponThrowsIssueStartAtInPastWhenRequestedIssueStartAtIsBeforeNow() {
+		Event event = alreadyOpenEvent();
+		Coupon coupon = Coupon.builder()
+				.event(event)
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(NOW.plusHours(1))
+				.issueEndAt(NOW.plusDays(3))
+				.validDays(7)
+				.build();
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponUpdateRequest request = CouponUpdateRequest.builder()
+				.issueStartAt(NOW.minusDays(1))
+				.build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+		verifyNoInteractions(couponConverter);
+	}
+
 	@Test
 	void updateCouponThrowsInvalidIssuePeriodWhenMergedEndIsBeforeStart() {
 		Event event = scheduledEvent();
@@ -415,6 +450,17 @@ class CouponUpdateServiceTest {
 		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
 		lenient().when(event.getOpenAt()).thenReturn(EVENT_OPEN_AT);
 		lenient().when(event.getCloseAt()).thenReturn(EVENT_CLOSE_AT);
+		return event;
+	}
+
+	// [#222] issueStartAt을 과거로 바꾸는 요청을 이벤트 기간 검증(openAt 이전 거부)이 아니라
+	// 과거 시각 검증에서 걸리게 하려면, 이벤트 자체가 이미 시작된 상태여야 한다.
+	private Event alreadyOpenEvent() {
+		Event event = mock(Event.class);
+		when(event.getEventId()).thenReturn(EVENT_ID);
+		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
+		lenient().when(event.getOpenAt()).thenReturn(NOW.minusDays(5));
+		lenient().when(event.getCloseAt()).thenReturn(NOW.plusDays(5));
 		return event;
 	}
 
