@@ -120,6 +120,13 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		@Param("processedAt") LocalDateTime processedAt
 	);
 
+	// [PR 리뷰 반영] 이 UPDATE에는 원래 status 조건이 없었다 — 같은 메시지의 발행이 겹친
+	// 상황(Outbox poller 자동 재시도 vs 관리자 DLQ 재처리)에서 한쪽이 먼저 성공해 SENT/CONSUMED로
+	// 확정된 뒤, 다른 쪽의 지연된 실패 콜백이 도착하면 조건 없이 FAILED/DLQ로 덮어써 성공 상태를
+	// 되돌릴 수 있었다(markSent가 이미 같은 이유로 종착 상태를 막는 것과 대칭되는 문제).
+	// 일반 발행 실패(Outbox 경로)는 PENDING/FAILED에서 시작했을 때만, 관리자 재처리 실패는
+	// REPROCESSING에서 시작했을 때만 상태를 바꾸도록 expectedStatuses로 좁힌다 —
+	// CouponIssueEventProducer.markFailed 참고.
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
@@ -129,13 +136,28 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	           im.lastError = :lastError,
 	           im.failureReason = :failureReason
 	     WHERE im.messageId = :messageId
+	       AND im.status IN :expectedStatuses
 	""")
 	int markPublishFailed(
 	    @Param("messageId") Long messageId,
 	    @Param("status") IssueMessageStatus status,
 	    @Param("lastError") String lastError,
-	    @Param("failureReason") IssueFailureReason failureReason
+	    @Param("failureReason") IssueFailureReason failureReason,
+	    @Param("expectedStatuses") Collection<IssueMessageStatus> expectedStatuses
 	);
+
+	// 위 조건부 UPDATE의 편의 오버로드 — 실제 발행 경로를 검증하지 않는 테스트 데이터 셋업
+	// (다른 쿼리를 위한 선행 상태 준비)에서 매번 expectedStatuses를 넘기지 않아도 되게, 발행
+	// 실패가 시작될 수 있는 모든 비종착 상태(PENDING/FAILED/REPROCESSING)를 기본으로 허용한다.
+	// 프로덕션 코드는 이 오버로드를 쓰지 않는다 — CouponIssueEventProducer.markFailed는 항상
+	// 위의 좁혀진 expectedStatuses를 명시해서 호출한다.
+	default int markPublishFailed(
+	    Long messageId, IssueMessageStatus status, String lastError, IssueFailureReason failureReason
+	) {
+	    return markPublishFailed(messageId, status, lastError, failureReason, List.of(
+	            IssueMessageStatus.PENDING, IssueMessageStatus.FAILED, IssueMessageStatus.REPROCESSING
+	    ));
+	}
 
 	// 목록 조회용 — 재고 조회(findByStatusInAndRetryCountLessThan)와 동일하게 Pageable로 크기 제한.
 	// coupon은 LAZY라 findAllByUserIdOrderByCreatedAtDesc와 같은 이유로 JOIN FETCH를 붙임.
@@ -264,11 +286,13 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 같이 묶어서, issuedCount+failedCount+inProgressCount = 그 버킷의 총 접수량이 항상
 	// 맞게 만든다. FAILED도 여기 포함한 이유는 위에서 이미 "확정 아님"으로 분류했기 때문 —
 	// failedCount에서 뺀 것과 짝을 맞춘다.
+	// [PR 리뷰 반영] REPROCESSING도 inProgressCount에 포함한다 — 이 상태 역시 성공·실패·진행 중
+	// 어디에도 안 잡히면 issuedCount+failedCount+inProgressCount 합계가 총 접수량과 어긋난다.
 	@Query(value = """
 			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
 			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
-			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED', 'REPROCESSING') THEN 1 ELSE 0 END) AS inProgressCount
 			  FROM issue_message
 			 WHERE created_at >= :from
 			   AND created_at < :to
@@ -334,7 +358,7 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 			       ) AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
 			       SUM(CASE WHEN status IN ('DLQ', 'ABANDONED') THEN 1 ELSE 0 END) AS failedCount,
-			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED') THEN 1 ELSE 0 END) AS inProgressCount
+			       SUM(CASE WHEN status IN ('PENDING', 'SENT', 'FAILED', 'REPROCESSING') THEN 1 ELSE 0 END) AS inProgressCount
 			  FROM issue_message
 			 WHERE coupon_id = :couponId
 			   AND created_at >= :from
