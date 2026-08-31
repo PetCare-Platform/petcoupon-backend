@@ -63,6 +63,55 @@ class MonitoringLogEventMapperTest {
     }
 
     @Test
+    @DisplayName("따옴표가 붙은 JSON 형태의 인증정보도 가린다")
+    void redactsQuotedJsonCredentials() {
+        /*
+         * 헤더가 `{Authorization=Bearer x}`(Spring이 MultiValueMap을 toString한 형태)로만
+         * 찍힌다는 보장이 없다. Jackson이 직렬화한 본문이나 구조화 로그는 키에 따옴표가 붙는데,
+         * 그러면 키워드 바로 뒤가 `"`라 `\s*[:=]` 조건이 깨져 패턴이 아예 안 걸린다 —
+         * 마스킹이 부분적으로 실패하는 게 아니라 통째로 통과한다.
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("{\"authorization\":\"Bearer abc.def\"}"))
+                .isEqualTo("{\"authorization\":\"[REDACTED]\"}");
+        assertThat(MonitoringLogEventMapper.sanitize("{\"token\": \"abc123\", \"userId\": 7}"))
+                .isEqualTo("{\"token\":\"[REDACTED]\", \"userId\": 7}");
+        assertThat(MonitoringLogEventMapper.sanitize("{\"x-admin-key\":\"session-token\"}"))
+                .isEqualTo("{\"x-admin-key\":\"[REDACTED]\"}");
+    }
+
+    @Test
+    @DisplayName("키워드 없이 스킴만 붙은 credential도 가린다")
+    void redactsBareSchemeCredentials() {
+        /*
+         * 인증 필터가 헤더값만 떼어 로그에 실으면 authorization 키가 없어서 위 두 패턴이
+         * 전부 비껴간다 — JWT가 그대로 관리자 화면에 뜬다(수정 전 실측).
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("인증 실패: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"))
+                .isEqualTo("인증 실패: Bearer [REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize("rejected Basic dXNlcjpwYXNzd29yZA=="))
+                .isEqualTo("rejected Basic [REDACTED]");
+    }
+
+    @Test
+    @DisplayName("키가 있는 형태는 기존대로 키만 남기고 값을 가린다")
+    void keepsKeyedFormatWhenSchemePatternAlsoApplies() {
+        // 스킴 단독 패턴을 키워드 패턴보다 먼저 돌리면 "Authorization: Bearer [REDACTED]"가
+        // 돼서 기존 출력 형식이 깨진다. 실행 순서를 이 단언으로 고정한다.
+        assertThat(MonitoringLogEventMapper.sanitize("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.p.s"))
+                .isEqualTo("Authorization:[REDACTED]");
+    }
+
+    @Test
+    @DisplayName("쿠키로 실려온 세션값도 가린다")
+    void redactsCookieCredentials() {
+        // 관리자 세션은 X-ADMIN-KEY 헤더뿐 아니라 쿠키로도 로그에 실릴 수 있다.
+        assertThat(MonitoringLogEventMapper.sanitize("Cookie: JSESSIONID=abc123"))
+                .isEqualTo("Cookie:[REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize("set-cookie=SESSION=abc123; Path=/"))
+                .isEqualTo("set-cookie=[REDACTED]; Path=/");
+    }
+
+    @Test
     @DisplayName("SQL과 인프라 연결 정보는 통째로 가린다")
     void blanksSqlAndInfrastructure() {
         assertThat(MonitoringLogEventMapper.sanitize("delete from coupon_issue where id = 3"))
