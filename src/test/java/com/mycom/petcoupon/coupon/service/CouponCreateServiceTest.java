@@ -372,6 +372,26 @@ class CouponCreateServiceTest {
 		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
+	// [PR 리뷰 반영] issueStartAt == now 경계 — validateIssueNotStarted(수정 가능 조건)가
+	// 이 경계를 "이미 시작됨"으로 막는 것과 기준을 맞춘다.
+	@Test
+	void createCouponThrowsIssueStartAtInPastWhenStartAtEqualsNow() {
+		Event alreadyOpenEvent = Event.builder()
+				.name("이미 시작된 이벤트")
+				.openAt(NOW.minusDays(5))
+				.closeAt(NOW.plusDays(5))
+				.build();
+		CouponCreateRequest request = rateRequest(NOW, NOW.plusDays(1), 20, 10_000);
+		when(eventRepository.findById(EVENT_ID)).thenReturn(Optional.of(alreadyOpenEvent));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.createCoupon(EVENT_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+	}
+
 	@Test
 	void createCouponAcceptsIssuePeriodEqualToEventPeriod() {
 		Event event = scheduledEvent();

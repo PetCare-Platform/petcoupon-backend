@@ -247,10 +247,13 @@ public class CouponServiceImpl implements CouponService {
 			throw new GeneralException(CouponErrorCode.ISSUE_PERIOD_OUT_OF_EVENT_PERIOD);
 		}
 
-		// [#222] 과거 시각이면 자동 오픈 스케줄러가 activateCoupons 조건(issueStartAt<=now<issueEndAt)에
-		// 걸릴 기회 없이 READY로 영구 고아 상태가 될 수 있다. validateIssueNotStarted와 시간 소스를
-		// 맞추기 위해 findDatabaseNow()를 쓴다.
-		if (issueStartAt.isBefore(nowSupplier.get())) {
+		// [#222 리뷰 반영] "과거 시각이면 스케줄러가 영영 못 잡아 영구 고아가 된다"는 원래 설명은
+		// 부정확했다 — activateCoupons는 issueStartAt<=now AND issueEndAt>now라, issueStartAt만
+		// 과거여도 issueEndAt이 아직 안 지났으면 다음 실행에서 정상 활성화된다. 진짜 영구 고아는
+		// issueEndAt까지 과거일 때뿐이다. 그래도 "과거 시작 시각 자체를 금지"하는 걸 운영 정책으로
+		// 유지하고, validateIssueNotStarted(수정 가능 조건)와 경계를 맞춘다 — 그쪽은 issueStartAt이
+		// now와 같아도 "이미 시작됨"으로 막으므로(!isAfter), 여기도 같은 기준(!isAfter)을 쓴다.
+		if (!issueStartAt.isAfter(nowSupplier.get())) {
 			throw new GeneralException(CouponErrorCode.ISSUE_START_AT_IN_PAST);
 		}
 	}

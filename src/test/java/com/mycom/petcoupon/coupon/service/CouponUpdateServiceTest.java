@@ -361,6 +361,38 @@ class CouponUpdateServiceTest {
 		verifyNoInteractions(couponConverter);
 	}
 
+	// [PR 리뷰 반영] issueStartAt == now 경계 — validateIssueNotStarted가 이 경계를
+	// "이미 시작됨"으로 막는 것과 기준을 맞춘다.
+	@Test
+	void updateCouponThrowsIssueStartAtInPastWhenRequestedIssueStartAtEqualsNow() {
+		Event event = alreadyOpenEvent();
+		Coupon coupon = Coupon.builder()
+				.event(event)
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(NOW.plusHours(1))
+				.issueEndAt(NOW.plusDays(3))
+				.validDays(7)
+				.build();
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponUpdateRequest request = CouponUpdateRequest.builder()
+				.issueStartAt(NOW)
+				.build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+	}
+
 	@Test
 	void updateCouponThrowsInvalidIssuePeriodWhenMergedEndIsBeforeStart() {
 		Event event = scheduledEvent();
