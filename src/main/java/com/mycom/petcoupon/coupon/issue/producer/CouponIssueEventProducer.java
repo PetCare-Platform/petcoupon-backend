@@ -1,6 +1,8 @@
 package com.mycom.petcoupon.coupon.issue.producer;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
@@ -101,17 +103,26 @@ public class CouponIssueEventProducer {
 	}
 
 	private void markFailed(IssueMessage issueMessage, Throwable ex) {
-		// claimForReprocess는 retryCount만 올리고 status는 DLQ로 그대로 둔 채 선점하므로,
-		// 이 메시지가 DLQ 수동 재처리 중이었다면 여기서도 issueMessage.getStatus()는 여전히 DLQ임.
+		// [#217] claimForReprocess가 이제 status를 DLQ -> REPROCESSING으로 전이시키며 선점하므로,
+		// 이 메시지가 DLQ 수동 재처리 중이었다면 여기서 issueMessage.getStatus()는 REPROCESSING임.
 		// retryCount 소진 여부와 무관하게 무조건 DLQ로 복귀시켜, 재처리 실패가 FAILED로 새서
 		// Outbox Poller의 자동 재시도 대상(PENDING/FAILED)에 다시 걸리는 걸 막음
-		boolean fromDlqReprocess = issueMessage.getStatus() == IssueMessageStatus.DLQ;
+		boolean fromDlqReprocess = issueMessage.getStatus() == IssueMessageStatus.REPROCESSING;
 		boolean retryExhausted = issueMessage.getRetryCount() + 1 >= maxRetryCount;
 		boolean shouldGoToDlq = fromDlqReprocess || retryExhausted;
 		IssueMessageStatus status = shouldGoToDlq ? IssueMessageStatus.DLQ : IssueMessageStatus.FAILED;
 
+		// [PR 리뷰 반영] 같은 메시지의 발행이 겹쳐(Outbox poller 자동 재시도 vs 관리자 DLQ 재처리)
+		// 한쪽이 먼저 성공해 SENT/CONSUMED로 확정된 뒤 다른 쪽의 지연된 실패 콜백이 이 메서드를
+		// 타면, 조건 없는 UPDATE는 그 성공 상태를 FAILED/DLQ로 되돌릴 수 있다. 이 실패 콜백이
+		// "어느 발행 시도"에서 온 것인지(fromDlqReprocess)에 맞는 시작 상태에서만 갱신되게 좁힌다 —
+		// 다른 시도가 먼저 끝냈다면 0건 갱신으로 조용히 무시된다(markSent와 동일한 패턴).
+		Collection<IssueMessageStatus> expectedStatuses = fromDlqReprocess
+			? List.of(IssueMessageStatus.REPROCESSING)
+			: List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED);
+
 		issueMessageRepository.markPublishFailed(
-			issueMessage.getMessageId(), status, errorMessage(ex), IssueFailureReason.KAFKA_PUBLISH_FAILED
+			issueMessage.getMessageId(), status, errorMessage(ex), IssueFailureReason.KAFKA_PUBLISH_FAILED, expectedStatuses
 		);
 
 		if (shouldGoToDlq) {

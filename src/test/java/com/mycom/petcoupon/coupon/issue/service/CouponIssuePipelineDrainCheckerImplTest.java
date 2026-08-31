@@ -116,6 +116,19 @@ class CouponIssuePipelineDrainCheckerImplTest {
         assertThat(status.isBlocked()).isTrue();
     }
 
+    // [PR 리뷰 반영] REPROCESSING은 관리자가 DLQ 재처리를 선점했지만 아직 재발행이
+    // CONSUMED로 확정되지 않은 진행 중 상태다 — 빠지면 재처리 도중에도 드레인 완료로
+    // 오판해 정합성 검증·초기화가 시작될 수 있다.
+    @Test
+    void Outbox에_REPROCESSING이_있으면_outboxUnconsumed로_잡힌다() {
+        insertIssueMessage("REPROCESSING");
+
+        PipelineDrainStatus status = checker.check(coupon.getCouponId());
+
+        assertThat(status.outboxUnconsumed()).isEqualTo(1);
+        assertThat(status.isBlocked()).isTrue();
+    }
+
     @Test
     void Outbox에_CONSUMED만_있으면_outboxUnconsumed는_0이다() {
         insertIssueMessage("CONSUMED");

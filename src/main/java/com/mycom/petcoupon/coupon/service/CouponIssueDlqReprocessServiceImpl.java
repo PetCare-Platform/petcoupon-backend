@@ -58,22 +58,34 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 		IssueMessage issueMessage = issueMessageRepository.findById(messageId)
 				.orElseThrow(() -> new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
 
-		// retryCount를 낙관적 락으로 써서 원자적으로 선점 — status는 DLQ 그대로 둬서
-		// Outbox 발행 poller(PENDING/FAILED만 봄) 대상이 되지 않게 함. 동시/중복 요청 중
-		// 하나만 retryCount 증가에 성공하고, 나머지는 0건이 되어 아래에서 걸러짐
+		// retryCount를 낙관적 락으로 써서 원자적으로 선점 — [#217] status도 DLQ에서
+		// REPROCESSING으로 같이 바뀐다. Outbox 발행 poller(PENDING/FAILED만 봄) 대상이 안
+		// 되는 건 여전하고, 추가로 markSent가 claim 없이 걸려온 호출을 걸러낼 수 있게 됨
+		// (IssueMessageRepository.markSent 주석 참고). 동시/중복 요청 중 하나만 retryCount
+		// 증가(및 REPROCESSING 전이)에 성공하고, 나머지는 0건이 되어 아래에서 걸러짐
 		int claimedRows = issueMessageRepository.claimForReprocess(
-				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount()
+				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount(), LocalDateTime.now()
 		);
 
 		if (claimedRows == 0) {
 			throw new GeneralException(CouponErrorCode.NOT_DLQ_STATUS);
 		}
 
+		// [#217 리뷰 반영] claimForReprocess는 clearAutomatically=true라 영속성 컨텍스트를
+		// 비우지만, 위에서 이미 로드해둔 issueMessage 참조 자체는 갱신되지 않는다 — status는
+		// 여전히 DLQ인 채로 남는다(방금 DB에서는 REPROCESSING으로 바뀌었는데도). 이 낡은
+		// 객체를 그대로 publish()에 넘기면, 발행 실패 시 markFailed()의
+		// fromDlqReprocess(status==REPROCESSING) 판정이 항상 false가 되어 DLQ 대신 FAILED로
+		// 빠지고, Outbox Poller가 관리자 개입 없이 자동으로 다시 집어가버린다. claim 성공 후
+		// 반드시 다시 조회해서 최신 상태를 producer에 넘긴다.
+		IssueMessage claimedMessage = issueMessageRepository.findById(messageId)
+				.orElseThrow(() -> new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
+
 		// Kafka 발행은 비동기(내부에서 성공/실패에 따라 issue_message 상태를 직접 갱신함) —
 		// 관리자 요청은 재발행을 트리거만 하고 완료까지 기다리지 않음
-		couponIssueEventProducer.publish(issueMessage);
+		couponIssueEventProducer.publish(claimedMessage);
 
-		return couponIssueDlqConverter.toReprocessResponse(issueMessage);
+		return couponIssueDlqConverter.toReprocessResponse(claimedMessage);
 	}
 
 	@Override

@@ -82,6 +82,7 @@ public class CouponLoadTestStatusServiceImpl implements CouponLoadTestStatusServ
                 .consumed(countOf(pipelineCounts, IssueMessageStatus.CONSUMED))
                 .failed(countOf(pipelineCounts, IssueMessageStatus.FAILED))
                 .dlq(countOf(pipelineCounts, IssueMessageStatus.DLQ))
+                .reprocessing(countOf(pipelineCounts, IssueMessageStatus.REPROCESSING))
                 .published(published)
                 .inProgressIdempotencyKeys(inProgress)
                 .overIssued(passed > expectedPassed)

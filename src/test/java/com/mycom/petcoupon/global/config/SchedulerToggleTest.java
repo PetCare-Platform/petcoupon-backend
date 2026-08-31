@@ -11,6 +11,7 @@ import org.springframework.context.ApplicationContext;
 import com.mycom.petcoupon.coupon.config.CouponStatusSchedulerRegistrar;
 import com.mycom.petcoupon.coupon.issue.config.CouponIssuePendingRecoveryScheduler;
 import com.mycom.petcoupon.event.config.EventSchedulingRunner;
+import com.mycom.petcoupon.messaging.scheduler.CouponIssueReprocessRecoveryScheduler;
 
 /**
  * 스케줄러 on/off 스위치가 실제로 빈 등록을 막는지 검증한다.
@@ -113,6 +114,45 @@ class SchedulerToggleTest {
 		@Test
 		void pendingRecoverySchedulerBeanIsRegistered() {
 			assertThat(context.getBeanNamesForType(CouponIssuePendingRecoveryScheduler.class)).hasSize(1);
+		}
+	}
+
+	@Nested
+	@SpringBootTest(properties = {
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.stream.enabled=false",
+		"coupon.issue.outbox.enabled=false",
+		"coupon.issue.dlq.reprocess-recovery.enabled=false"
+	})
+	class WhenReprocessRecoveryDisabled {
+
+		@Autowired
+		private ApplicationContext context;
+
+		@Test
+		void reprocessRecoverySchedulerBeanIsNotRegistered() {
+			assertThat(context.getBeanNamesForType(CouponIssueReprocessRecoveryScheduler.class)).isEmpty();
+		}
+	}
+
+	// matchIfMissing = true 검증 — 여기가 깨지면 REPROCESSING 정체 복구가 운영에서 조용히 멈춘다.
+	@Nested
+	@SpringBootTest(properties = {
+		"event.status.scheduler.enabled=false",
+		"coupon.status.enabled=false",
+		"coupon.issue.stream.enabled=false",
+		"coupon.issue.outbox.enabled=false",
+		"coupon.issue.dlq.reprocess-recovery.fixed-delay-ms=3600000"
+	})
+	class WhenReprocessRecoveryNotConfigured {
+
+		@Autowired
+		private ApplicationContext context;
+
+		@Test
+		void reprocessRecoverySchedulerIsEnabledByDefault() {
+			assertThat(context.getBeanNamesForType(CouponIssueReprocessRecoveryScheduler.class)).hasSize(1);
 		}
 	}
 }

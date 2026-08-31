@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -107,7 +108,7 @@ class CouponIssueDlqReprocessServiceImplTest {
 		CouponIssueDlqReprocessResponse response = CouponIssueDlqReprocessResponse.builder().messageId(1L).build();
 
 		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
-		when(issueMessageRepository.claimForReprocess(1L, IssueMessageStatus.DLQ, 1))
+		when(issueMessageRepository.claimForReprocess(eq(1L), eq(IssueMessageStatus.DLQ), eq(1), any(LocalDateTime.class)))
 				.thenReturn(1);
 		when(couponIssueDlqConverter.toReprocessResponse(issueMessage)).thenReturn(response);
 
@@ -135,7 +136,7 @@ class CouponIssueDlqReprocessServiceImplTest {
 		when(issueMessage.getRetryCount()).thenReturn(1);
 
 		when(issueMessageRepository.findById(1L)).thenReturn(Optional.of(issueMessage));
-		when(issueMessageRepository.claimForReprocess(1L, IssueMessageStatus.DLQ, 1))
+		when(issueMessageRepository.claimForReprocess(eq(1L), eq(IssueMessageStatus.DLQ), eq(1), any(LocalDateTime.class)))
 				.thenReturn(0);
 
 		assertThatThrownBy(() -> couponIssueDlqReprocessService.reprocess(1L))
