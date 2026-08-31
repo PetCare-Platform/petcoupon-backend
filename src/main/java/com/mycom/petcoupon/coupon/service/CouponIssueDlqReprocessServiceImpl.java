@@ -64,7 +64,7 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 		// (IssueMessageRepository.markSent 주석 참고). 동시/중복 요청 중 하나만 retryCount
 		// 증가(및 REPROCESSING 전이)에 성공하고, 나머지는 0건이 되어 아래에서 걸러짐
 		int claimedRows = issueMessageRepository.claimForReprocess(
-				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount()
+				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount(), LocalDateTime.now()
 		);
 
 		if (claimedRows == 0) {

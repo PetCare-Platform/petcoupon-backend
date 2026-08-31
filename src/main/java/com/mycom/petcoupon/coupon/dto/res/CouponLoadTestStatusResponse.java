@@ -20,6 +20,8 @@ public record CouponLoadTestStatusResponse(
         long consumed,
         long failed,
         long dlq,
+        // 관리자가 DLQ 재처리를 선점한 동안(REPROCESSING)의 건수.
+        long reprocessing,
         // [#200] Kafka 발행에 실제로 성공한 건수 — sent+consumed로만 계산하면 발행 후
         // 소비 실패(DLQ)로 빠진 건이 누락돼 "발행을 못 했다"처럼 보이는 문제가 있었다.
         // 정의는 IssueMessageRepository.countPublishedByCoupon() 참고.

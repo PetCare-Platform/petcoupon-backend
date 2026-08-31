@@ -65,7 +65,9 @@ import jakarta.persistence.EntityManagerFactory;
 		"event.status.scheduler.enabled=false",
 		"coupon.status.enabled=false",
 		"coupon.issue.outbox.enabled=false",
-		"coupon.reconciliation.scheduler.enabled=false"
+		"coupon.reconciliation.scheduler.enabled=false",
+		// CouponIssueReprocessRecoveryScheduler도 다른 스케줄러들과 같은 이유(위 클래스 주석)로 꺼야 한다.
+		"coupon.issue.dlq.reprocess-recovery.enabled=false"
 })
 class CouponIssueDlqReprocessServiceIntegrationTest {
 

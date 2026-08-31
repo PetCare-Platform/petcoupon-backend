@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import com.mycom.petcoupon.coupon.issue.config.CouponIssueStreamProperties;
+import com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -113,21 +114,17 @@ public class CouponIssuePipelineDrainCheckerImpl implements CouponIssuePipelineD
 
     /**
      * Outbox 에 아직 Kafka 로 안 나갔거나(PENDING·FAILED), 나갔지만 DB 저장은 안 끝난(SENT) 건.
-     * [PR 리뷰 반영] REPROCESSING도 포함한다 — 관리자가 DLQ 재처리를 선점했지만 아직 재발행이
-     * CONSUMED로 확정되지 않은 진행 중 상태라, 이걸 빼면 재처리 도중에도 파이프라인이 소진된
-     * 것으로 오판해 정합성 검증·초기화가 시작될 수 있다.
+     * REPROCESSING도 포함한다 — 안 그러면 재처리 도중에도 파이프라인이 소진된 것으로 오판해
+     * 정합성 검증·초기화가 시작될 수 있다.
      */
     private long countUnconsumedMessages(Long couponId) {
         return entityManager.createQuery("""
                         SELECT COUNT(m) FROM IssueMessage m
                          WHERE m.coupon.couponId = :couponId
-                           AND m.status IN (
-                               com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.PENDING,
-                               com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.SENT,
-                               com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.FAILED,
-                               com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING)
+                           AND m.status IN :inProgressStatuses
                         """, Long.class)
                 .setParameter("couponId", couponId)
+                .setParameter("inProgressStatuses", IssueMessageStatus.IN_PROGRESS_STATUSES)
                 .getSingleResult();
     }
 }

@@ -200,19 +200,37 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 무관하게 DLQ->SENT를 전부 허용해버리는 문제가 있었다. REPROCESSING으로 전이시켜야
 	// markSent가 "진짜 이 claim을 통해 재처리된 건"만 SENT로 올릴 수 있다(markSent 주석 참고).
 	// poller가 REPROCESSING 상태도 안 건드리는 건 여전히 유효하다 — PENDING/FAILED만 보므로.
+	// claimedAt은 CouponIssueReprocessRecoveryScheduler가 오래된 REPROCESSING을 회수할 때 쓴다.
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
 			UPDATE IssueMessage im
 			   SET im.retryCount = im.retryCount + 1,
-			       im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING
+			       im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING,
+			       im.reprocessingClaimedAt = :claimedAt
 			 WHERE im.messageId = :messageId AND im.status = :expectedStatus AND im.retryCount = :expectedRetryCount
 			""")
 	int claimForReprocess(
 			@Param("messageId") Long messageId,
 			@Param("expectedStatus") IssueMessageStatus expectedStatus,
-			@Param("expectedRetryCount") int expectedRetryCount
+			@Param("expectedRetryCount") int expectedRetryCount,
+			@Param("claimedAt") LocalDateTime claimedAt
 	);
+
+	// 발행 콜백이 영영 안 돌아오면 REPROCESSING에 영구히 갇혀 DLQ 목록·재처리·포기 어디에도
+	// 안 걸린다 — cutoff보다 오래된 것만 DLQ로 되돌려 다시 다룰 수 있게 한다. failureReason은
+	// 안 건드린다 — 원래 사유(예: CONSUME_PROCESSING_FAILED)를 지우면 countPublishedByCoupon()이
+	// 이미 발행된 건을 미발행으로 잘못 센다.
+	@Transactional
+	@Modifying(clearAutomatically = true)
+	@Query("""
+			UPDATE IssueMessage im
+			   SET im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ,
+			       im.lastError = :lastError
+			 WHERE im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING
+			   AND im.reprocessingClaimedAt < :cutoff
+			""")
+	int recoverStaleReprocessingMessages(@Param("cutoff") LocalDateTime cutoff, @Param("lastError") String lastError);
 
 	// 관리자가 DLQ 재처리를 포기하고 재고를 복구할 때 사용 — claimForReprocess와 동일하게
 	// retryCount를 낙관적 락으로 써서, 재처리 요청과 동시에 들어와도 둘 중 하나만 선점하게 한다.
@@ -286,8 +304,8 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 같이 묶어서, issuedCount+failedCount+inProgressCount = 그 버킷의 총 접수량이 항상
 	// 맞게 만든다. FAILED도 여기 포함한 이유는 위에서 이미 "확정 아님"으로 분류했기 때문 —
 	// failedCount에서 뺀 것과 짝을 맞춘다.
-	// [PR 리뷰 반영] REPROCESSING도 inProgressCount에 포함한다 — 이 상태 역시 성공·실패·진행 중
-	// 어디에도 안 잡히면 issuedCount+failedCount+inProgressCount 합계가 총 접수량과 어긋난다.
+	// REPROCESSING도 inProgressCount에 포함한다(네이티브 쿼리라 IssueMessageStatus.
+	// IN_PROGRESS_STATUSES를 직접 못 씀 — 상태 추가 시 이 리터럴도 같이 확인).
 	@Query(value = """
 			SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS bucket,
 			       SUM(CASE WHEN status = 'CONSUMED' THEN 1 ELSE 0 END) AS issuedCount,
@@ -332,13 +350,17 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// 재시도 없이 곧장 DLQ로 가서 FAILED를 거치지 않는다(CouponIssueEventRecoverer가 상태를
 	// 무조건 DLQ로 세팅). failureReason이 null인 옛 DLQ 행(컬럼 도입 전)은 발행 여부를 알 수
 	// 없어 제외한다.
+	//
+	// REPROCESSING도 DLQ/ABANDONED와 같은 failureReason 조건으로 포함한다 — 안 그러면
+	// CONSUME_PROCESSING_FAILED(발행은 이미 성공)였던 메시지가 재처리 중엔 이 카운트에서 빠진다.
 	@Query("""
 			SELECT COUNT(im) FROM IssueMessage im
 			 WHERE im.coupon.couponId = :couponId
 			   AND (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.SENT,
 			                       com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED)
 			        OR (im.status IN (com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ,
-			                           com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED)
+			                           com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED,
+			                           com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING)
 			            AND im.failureReason = com.mycom.petcoupon.messaging.entity.enums.IssueFailureReason.CONSUME_PROCESSING_FAILED))
 			""")
 	long countPublishedByCoupon(@Param("couponId") Long couponId);
