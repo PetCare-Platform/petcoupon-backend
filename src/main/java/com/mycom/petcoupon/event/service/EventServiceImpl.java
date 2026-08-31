@@ -135,7 +135,7 @@ public class EventServiceImpl implements EventService {
 	@Override
 	@Transactional
 	public EventUpdateResponse updateEvent(Long eventId, EventUpdateRequest request) {
-		Event event = eventRepository.findById(eventId)
+		Event event = eventRepository.findByIdForUpdate(eventId)
 				.orElseThrow(() -> new GeneralException(EventErrorCode.EVENT_NOT_FOUND));
 
 		// 기간은 한쪽만 보낼 수 있으므로 기존 값과 합쳐 검증한 뒤, 다른 필드보다 먼저 반영한다

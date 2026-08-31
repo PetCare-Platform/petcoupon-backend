@@ -51,7 +51,7 @@ class EventUpdateServiceTest {
 		Long eventId = 1L;
 		EventUpdateRequest request = EventUpdateRequest.builder().name("연장된 이벤트").build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).name("연장된 이벤트").build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -68,7 +68,7 @@ class EventUpdateServiceTest {
 		Long eventId = 1L;
 		EventUpdateRequest request = EventUpdateRequest.builder().description("연장된 설명").build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -83,7 +83,7 @@ class EventUpdateServiceTest {
 		Long eventId = 1L;
 		EventUpdateRequest request = EventUpdateRequest.builder().description("").build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -98,7 +98,7 @@ class EventUpdateServiceTest {
 		Long eventId = 1L;
 		EventUpdateRequest request = EventUpdateRequest.builder().name("연장된 이벤트").build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		when(eventConverter.toUpdateResponse(event))
 				.thenReturn(EventUpdateResponse.builder().eventId(eventId).build());
 
@@ -114,7 +114,7 @@ class EventUpdateServiceTest {
 		LocalDateTime closeAt = LocalDateTime.of(2026, 9, 30, 23, 59);
 		EventUpdateRequest request = EventUpdateRequest.builder().openAt(openAt).closeAt(closeAt).build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -132,7 +132,7 @@ class EventUpdateServiceTest {
 		EventUpdateRequest request = EventUpdateRequest.builder().openAt(openAt).build();
 		Event event = mock(Event.class);
 		when(event.getCloseAt()).thenReturn(storedCloseAt);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -150,7 +150,7 @@ class EventUpdateServiceTest {
 		EventUpdateRequest request = EventUpdateRequest.builder().closeAt(closeAt).build();
 		Event event = mock(Event.class);
 		when(event.getOpenAt()).thenReturn(storedOpenAt);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -172,7 +172,7 @@ class EventUpdateServiceTest {
 				.closeAt(closeAt)
 				.build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 		EventUpdateResponse expected = EventUpdateResponse.builder().eventId(eventId).build();
 		when(eventConverter.toUpdateResponse(event)).thenReturn(expected);
 
@@ -195,7 +195,7 @@ class EventUpdateServiceTest {
 				.closeAt(closeAt)
 				.build();
 		Event event = mock(Event.class);
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -215,7 +215,7 @@ class EventUpdateServiceTest {
 		EventUpdateRequest request = EventUpdateRequest.builder().openAt(openAt).build();
 		Event event = mock(Event.class);
 		when(event.getCloseAt()).thenReturn(LocalDateTime.of(2026, 9, 30, 23, 59));
-		when(eventRepository.findById(eventId)).thenReturn(Optional.of(event));
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.of(event));
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
@@ -230,7 +230,7 @@ class EventUpdateServiceTest {
 	void updateEventThrowsNotFoundWhenEventDoesNotExist() {
 		Long eventId = 99L;
 		EventUpdateRequest request = EventUpdateRequest.builder().name("연장된 이벤트").build();
-		when(eventRepository.findById(eventId)).thenReturn(Optional.empty());
+		when(eventRepository.findByIdForUpdate(eventId)).thenReturn(Optional.empty());
 
 		GeneralException exception = assertThrows(
 				GeneralException.class,
