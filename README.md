@@ -58,7 +58,8 @@ PetCoupon은 이벤트에 연결된 한정 수량 쿠폰을 선착순으로 발�
    - [의존 서비스 실행](#1-의존-서비스-실행)
    - [애플리케이션 실행](#2-애플리케이션-실행)
    - [Health Check](#3-health-check)
-   - [쿠폰 재고 초기화](#4-쿠폰-재고-초기화)
+   - [이벤트·쿠폰 생성](#4-이벤트쿠폰-생성)
+   - [회차 초기화](#5-회차-초기화)
    - [부하 테스트용 사용자 데이터](#부하-테스트용-사용자-데이터)
 6. [📂 프로젝트 구조](#-프로젝트-구조)
 7. [🔌 주요 API](#-주요-api)
@@ -235,15 +236,38 @@ docker compose --profile kafka up -d
 curl -s localhost:8080/actuator/health
 ```
 
-### 4. 쿠폰 재고 초기화
+### 4. 이벤트·쿠폰 생성
 
-발급을 걸기 전에 반드시 한 번 호출해야 합니다.
+**새로 띄운 환경에는 쿠폰이 하나도 없습니다.** 초기 데이터나 `data.sql`이 없어서, 이 단계를 건너뛰고 발급이나 초기화 API를 호출하면 `404` `COUPON404-0`이 떨어집니다.
 
 ```bash
-curl -X POST localhost:8080/internal/coupons/1/reset -H 'Content-Type: application/json' -d '{"totalQuantity": 10000}'
+./load-test/scripts/setup-demo-coupon.sh
 ```
 
-> ⚠️ Lua는 MySQL이 아니라 Redis의 `coupon:issue:stock` 키로 재고를 판정하는데, **이 키를 채우는 곳이 이 API뿐입니다.** 관리자 쿠폰 생성이나 `READY → ACTIVE` 스케줄러는 Redis를 건드리지 않습니다. 키가 없으면 신청은 `202`로 접수되지만 확정이 나지 않습니다.
+관리자 API로 이벤트 4개와 쿠폰 4개를 만들고, 마지막에 대상 `COUPON_ID`를 출력합니다. **이후 명령에는 출력된 ID를 쓰고, `1`을 그대로 쓰지 않습니다.**
+
+| 환경변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `BASE_URL` | `http://localhost:8080` | 애플리케이션 주소 |
+| `ADMIN_AUTH_CODE` | `local-dev-admin-auth-code` | 관리자 세션 발급 코드 |
+| `MAIN_TOTAL_QUANTITY` | `10000` | 대상 쿠폰의 총재고 |
+| `OPEN_DELAY_MIN` | `3` | 이벤트 오픈까지 남길 시간(분) |
+
+> ⚠️ **만든 직후에는 발급되지 않습니다.** 이벤트가 `SCHEDULED`로 생성되고 상태 스케줄러가 `OPEN`(쿠폰은 `ACTIVE`)으로 바꾼 뒤부터 유효하므로, 기본값 기준 **3분 뒤**에 시작합니다.
+
+쿠폰 생성 API가 `coupon` · `coupon_stock`과 함께 **발급에 쓰는 Redis 재고 키까지 한 트랜잭션에서 세웁니다.** 그래서 방금 만든 쿠폰은 따로 초기화하지 않아도 바로 발급할 수 있습니다.
+
+관리자 API로 직접 만들려면 `POST /admin/events`로 이벤트를 만든 뒤 `POST /admin/events/{eventId}/coupons`를 호출하고, 응답의 `couponId`를 씁니다.
+
+### 5. 회차 초기화
+
+같은 쿠폰으로 시나리오를 **다시 돌릴 때** 씁니다. 쿠폰을 새로 만들 필요는 없습니다.
+
+```bash
+curl -X POST localhost:8080/internal/coupons/<COUPON_ID>/reset -H 'Content-Type: application/json' -d '{"totalQuantity": 10000}'
+```
+
+> ⚠️ 존재하는 쿠폰에만 동작합니다. 없는 `couponId`로 호출하면 `404` `COUPON404-0`입니다. 또 앞 회차 메시지가 파이프라인에 남아 있으면 `409`로 거절됩니다 — 선행 조건은 [`load-test/README.md`](load-test/README.md)의 "초기화" 항목에 있습니다.
 
 ### 부하 테스트용 사용자 데이터
 
@@ -549,19 +573,38 @@ READY → ACTIVE → SOLD_OUT → ENDED
 
 ### 실행
 
-```bash
-docker compose --profile kafka up -d
-```
+**80개 시나리오 전체가 `./gradlew test` 하나로 재현되지는 않습니다.** 구간마다 도구가 다릅니다.
+
+| 구간 | 도구 |
+| --- | --- |
+| A · B (단건) | k6 또는 담당자의 JUnit 테스트 |
+| C (동시성) | k6 소규모 스크립트 |
+| D (배치·정합성) | 수동 트리거 + SQL 조회 |
+| E (비동기) | 컨테이너 기동·중단 + Consumer Lag 조회 |
+| F (대량 데이터) | 더미 SQL 적재 후 재실행 + `EXPLAIN` |
+| G (선착순 순서) | k6 + 애플리케이션 로그 + SQL 조회 |
+
+전체 재현 절차는 [`integration-test-scenario.md`](load-test/docs/integration-test-scenario.md)의 "5. 실행 방법"을 따릅니다.
+
+**자동화 테스트 (JUnit · Testcontainers)**
 
 ```bash
+docker compose --profile kafka up -d
 ./gradlew test
 ```
+
+결과는 `build/reports/tests/test/index.html`에서 한 번에 확인합니다.
+JUnit 테스트는 관리자 세션 토큰이 필요 없습니다. 토큰이 필요한 것은 k6 · `curl` · Postman으로 실제 서버에 요청을 보내는 시나리오뿐입니다.
+
+**수동 시나리오**
 
 > ⚠️ 동시 150~200건 구간(TC-41 · 91 · 94)은 기본 커넥션 풀(10)로 돌리면 **200건 중 191건이 500**으로 떨어집니다. 아래 설정으로 앱을 띄웁니다.
 
 ```bash
 DB_POOL_SIZE=100 TOMCAT_MAX_THREADS=400 ./gradlew bootRun
 ```
+
+C · G 구간의 TC별 실행 명령은 [`load-test/README.md`](load-test/README.md)의 "통합 테스트 C·G 구간 실행"에 있습니다.
 
 새로운 `@SpringBootTest`를 작성할 때는 백그라운드 스케줄러가 다른 테스트 데이터를 변경하지 않도록 필요한 경우 스케줄러를 비활성화합니다.
 
