@@ -17,6 +17,14 @@ function num(name, fallback) {
 	return parsed;
 }
 
+// 값이 없으면 fallback 으로 대충 굴러가면 안 되는 값에 쓴다. 미지정이면 즉시 멈춘다.
+function requireNum(name, hint) {
+	if (__ENV[name] === undefined || __ENV[name] === '') {
+		throw new Error(`${name} 를 반드시 지정해야 합니다. ${hint}`);
+	}
+	return num(name, null);
+}
+
 function bool(name, fallback) {
 	const raw = __ENV[name];
 	if (raw === undefined || raw === '') {
@@ -35,7 +43,12 @@ function bool(name, fallback) {
 // 끝의 슬래시를 떼지 않으면 요청 경로에 // 가 생겨 404 가 난다.
 export const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 
-export const COUPON_ID = num('COUPON_ID', 1);
+// setup-demo-coupon.sh 가 출력한 실제 쿠폰 ID. 기본값을 두면 값을 빠뜨렸을 때
+// 엉뚱한 쿠폰(예: 1)을 초기화·측정하게 되므로 기본값 없이 필수로 받는다.
+export const COUPON_ID = requireNum(
+	'COUPON_ID',
+	'setup-demo-coupon.sh 가 출력한 쿠폰 ID 를 -e COUPON_ID=1186 처럼 넘기세요.',
+);
 
 // 매 회차 초기화 API 로 되돌릴 총재고.
 // 쿠폰을 새로 만들지 않고 스모크(10) → 기본(100) → 중간(500) → 최대(1,000) → 최종(10,000) 을 모두 돌린다.

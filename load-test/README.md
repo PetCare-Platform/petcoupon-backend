@@ -129,7 +129,13 @@ MAIN_TOTAL_QUANTITY=1000 ./load-test/scripts/setup-demo-coupon.sh
 >
 > `docker-compose.yml`은 MySQL·Kafka에만 `TZ: Asia/Seoul`이 걸려 있고 **앱은 컨테이너가 아니라 호스트에서 뜨므로 JVM 시간대는 호스트를 따릅니다.** 같은 PC에서 앱과 스크립트를 돌리는 지금 구성에서는 어긋날 수 없습니다. 원격 앱을 쓰게 되면 그때 JVM 시간대를 고정해야 합니다(`-Duser.timezone=Asia/Seoul`). — AWS 환경 구축 이슈에서 다룹니다.
 
-**아래 실행 예시의 `COUPON_ID=1`은 자리표시자입니다.** 스크립트가 출력한 ID로 바꿔야 하고, 안 바꾸면 전부 404가 납니다. 만들어 둔 쿠폰이 뭔지 모르겠으면 이렇게 확인합니다.
+**아래 실행 예시는 `COUPON_ID`를 환경변수로 먼저 잡아 둡니다.** 스크립트가 출력한 ID를 넣으세요. `config.js`에 기본값이 없어서 지정하지 않으면 바로 에러로 멈춥니다.
+
+```bash
+export COUPON_ID=1186   # setup-demo-coupon.sh 가 출력한 값
+```
+
+만들어 둔 쿠폰이 뭔지 모르겠으면 이렇게 확인합니다.
 
 ```bash
 docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "SELECT c.coupon_id, c.name, c.status, s.total_quantity FROM coupon c JOIN coupon_stock s ON s.coupon_id = c.coupon_id"
@@ -142,13 +148,13 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "SELECT c.coupon_id
 ### 스모크 (10건, 스크립트가 도는지만 확인)
 
 ```bash
-k6 run -e SCENARIO=smoke -e COUPON_ID=1 -e TOTAL_QUANTITY=5 -e RUN_ID=smoke1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=smoke -e COUPON_ID="$COUPON_ID" -e TOTAL_QUANTITY=5 -e RUN_ID=smoke1 load-test/k6/issue-coupon.js
 ```
 
 ### 본 측정 (재고 10,000에 동시 사용자 20,000명)
 
 ```bash
-k6 run -e SCENARIO=burst -e VUS=20000 -e ITERATIONS_PER_VU=1 -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=burst -e VUS=20000 -e ITERATIONS_PER_VU=1 -e COUPON_ID="$COUPON_ID" -e TOTAL_QUANTITY=10000 -e RUN_ID=run1 load-test/k6/issue-coupon.js
 ```
 
 `2,000 VU × 10회`는 총 20,000건을 보내지만 동시 사용자는 최대 2,000명이다. 동시 사용자 20,000명을 검증하려면 `20,000 VU × 1회`로 실행한다. 한 대의 부하 발생기가 20,000 VU를 감당하지 못하면 아래처럼 두 대로 나눈다.
@@ -156,7 +162,7 @@ k6 run -e SCENARIO=burst -e VUS=20000 -e ITERATIONS_PER_VU=1 -e COUPON_ID=1 -e T
 ### 처리량 한계 (초당 요청 수 고정)
 
 ```bash
-k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 load-test/k6/issue-coupon.js
+k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID="$COUPON_ID" load-test/k6/issue-coupon.js
 ```
 
 ### 환경변수
@@ -164,7 +170,7 @@ k6 run -e SCENARIO=rate -e RATE=2000 -e DURATION=30s -e VUS=2000 -e COUPON_ID=1 
 | 이름 | 기본값 | 설명 |
 |---|---|---|
 | `BASE_URL` | `http://localhost:8080` | 대상 서버 |
-| `COUPON_ID` | `1` | 대상 쿠폰 |
+| `COUPON_ID` | **필수** | 대상 쿠폰 ID. `setup-demo-coupon.sh` 출력값. 미지정 시 에러 |
 | `TOTAL_QUANTITY` | `10000` | 초기화 때 되돌릴 총재고 |
 | `SCENARIO` | `smoke` | `smoke` / `burst` / `rate` |
 | `VUS` | `20000` | 동시 사용자 수 |
