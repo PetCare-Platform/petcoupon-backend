@@ -264,8 +264,13 @@ curl -s localhost:8080/actuator/health
 같은 쿠폰으로 시나리오를 **다시 돌릴 때** 씁니다. 쿠폰을 새로 만들 필요는 없습니다.
 
 ```bash
-curl -X POST localhost:8080/internal/coupons/<COUPON_ID>/reset -H 'Content-Type: application/json' -d '{"totalQuantity": 10000}'
+COUPON_ID="4단계 스크립트가 출력한 실제 쿠폰 ID"   # 예: 1186
+
+curl -X POST "localhost:8080/internal/coupons/$COUPON_ID/reset" \
+  -H 'Content-Type: application/json' -d '{"totalQuantity": 10000}'
 ```
+
+> `<COUPON_ID>` 처럼 꺾쇠를 그대로 두면 셸이 입출력 리다이렉션으로 해석해 명령이 실행되지 않습니다. 위처럼 변수에 담아 씁니다.
 
 > ⚠️ 존재하는 쿠폰에만 동작합니다. 없는 `couponId`로 호출하면 `404` `COUPON404-0`입니다. 또 앞 회차 메시지가 파이프라인에 남아 있으면 `409`로 거절됩니다 — 선행 조건은 [`load-test/README.md`](load-test/README.md)의 "초기화" 항목에 있습니다.
 
@@ -729,15 +734,20 @@ max_sequence_no 10,000 · redis_remaining 0 · stock_remaining 0
 ### 실행
 
 ```bash
-k6 run -e BASE_URL=http://<app>:8080 \
+APP_HOST="앱 주소"                              # 예: localhost 또는 10.0.1.5
+COUPON_ID="4단계 스크립트가 출력한 실제 쿠폰 ID"   # 예: 1186
+
+k6 run -e BASE_URL="http://$APP_HOST:8080" \
   -e SCENARIO=burst \
-  -e COUPON_ID=<COUPON_ID> \
+  -e COUPON_ID="$COUPON_ID" \
   -e TOTAL_QUANTITY=10000 \
   -e VUS=20000 \
   -e ITERATIONS_PER_VU=1 \
   -e MEMBER_IDS_FILE=./members.csv \
   load-test/k6/issue-coupon.js
 ```
+
+> `<app>` · `<COUPON_ID>` 처럼 꺾쇠를 명령에 그대로 두면 셸이 리다이렉션으로 해석해 k6가 실행되지 않습니다. 값을 변수에 담아 넘깁니다. `COUPON_ID`를 비워 두면 `config.js` 기본값 `1`로 붙어 새 환경에서는 `/internal/coupons/1/reset`이 `404`로 끝납니다.
 
 시나리오와 판정 기준은 [`load-test-scenario.md`](load-test/docs/load-test-scenario.md),
 실측값 전문은 [`load-test-result.md`](load-test/docs/load-test-result.md),
