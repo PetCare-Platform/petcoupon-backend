@@ -23,6 +23,10 @@ public enum CommonErrorCode implements BaseErrorCode {
     
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON405-0", "지원하지 않는 HTTP 메서드입니다."),
 
+    // 행 락 경합. 서버 결함이 아니라 "지금 다른 요청이 잡고 있다"는 상태라 500이 아니다.
+    // 재시도하면 대개 바로 성공하므로 안내 문구에 재시도를 명시한다.
+    LOCK_CONFLICT(HttpStatus.CONFLICT, "COMMON409-0", "다른 요청이 같은 데이터를 수정하고 있습니다. 잠시 후 다시 시도해 주세요."),
+
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500-0", "서버 내부 오류가 발생했습니다."),
 
     // 서버 결함이 아니라 "지금은 못 한다"는 상태다. 500으로 주면 프론트가 재시도를 포기한다.

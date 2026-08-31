@@ -10,6 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpMethod;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -131,6 +133,18 @@ class GlobalExceptionHandlerLogLevelTest {
 		handler.handleAsyncRequestTimeout(new AsyncRequestTimeoutException(), new MockHttpServletResponse());
 
 		assertThat(levels()).containsExactly(Level.WARN);
+	}
+
+	@Test
+	@DisplayName("행 락 경합은 DEBUG로 남긴다")
+	void logsLockConflictAtDebug() {
+		// 관리자 두 명이 같은 이벤트를 동시에 수정한 상황이다. 서버 결함이 아니라 설계대로
+		// 거절한 것이므로 4xx와 같은 취급이다. ERROR면 재시도하면 그만인 일이 관리자 실시간
+		// 화면에 장애로 올라간다 — 전용 핸들러 없이 catch-all이 잡던 시절의 동작이 그랬다.
+		handler.handleLockConflict(new CannotAcquireLockException("could not obtain lock"));
+		handler.handleLockConflict(new QueryTimeoutException("lock wait timeout exceeded"));
+
+		assertThat(levels()).containsExactly(Level.DEBUG, Level.DEBUG);
 	}
 
 	@Test

@@ -3,6 +3,9 @@ package com.mycom.petcoupon.global.common.exception;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -223,6 +226,23 @@ public class GlobalExceptionHandler {
         log.warn("[AsyncTimeout] 비동기 요청이 제한 시간을 넘겼다: {}", ex.getMessage());
 
         return jsonError(CommonErrorCode.SERVICE_UNAVAILABLE);
+    }
+
+    /*
+     * 행 락을 얻지 못한 경우(이벤트·쿠폰 수정의 findByIdForUpdate).
+     *
+     * 이 핸들러가 없으면 catch-all이 잡아 500 + ERROR가 된다. 관리자에게는 다시 누르면 되는
+     * 상황이 "서버 내부 오류"로 보이고, ERROR가 MonitoringLogAppender를 타고 실시간 화면에
+     * 장애로 올라간다 -- 위 로그 레벨 정책이 막으려던 오염이다. 그래서 409 + DEBUG다.
+     *
+     * QueryTimeoutException을 함께 잡는 건 락 대기 만료가 그쪽으로 번역되는 경로가 있어서다.
+     */
+    @ExceptionHandler({PessimisticLockingFailureException.class, QueryTimeoutException.class})
+    public ResponseEntity<CustomResponse<Void>> handleLockConflict(TransientDataAccessException ex) {
+
+        log.debug("[LockConflict] 행 락을 얻지 못했다: {}", ex.getMessage());
+
+        return jsonError(CommonErrorCode.LOCK_CONFLICT);
     }
 
     // 처리하지 않은 모든 예외 처리
