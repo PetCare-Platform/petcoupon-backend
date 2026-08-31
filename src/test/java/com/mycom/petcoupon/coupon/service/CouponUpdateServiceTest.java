@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -96,6 +97,27 @@ class CouponUpdateServiceTest {
 		assertSame(DiscountType.RATE, coupon.getDiscountType());
 		assertEquals(30_000, coupon.getMinOrderAmount());
 		assertEquals(100, couponStock.getTotalQuantity());
+	}
+
+	// [PR 리뷰 반영] validateIssueNotStarted와 validateIssuePeriod가 각자 findDatabaseNow()를
+	// 부르면, 같은 트랜잭션 안에서 now를 두 번 다른 시점에 읽게 되어 그 사이 issueStartAt을
+	// 지나가버리는 레이스가 생긴다(issueStartAt을 안 건드린 요청도 스푸리어스하게 실패할 수
+	// 있음). updateCoupon이 now를 한 번만 읽어서 두 검증에 공유하는지 호출 횟수로 확인한다.
+	@Test
+	void updateCoupon은_findDatabaseNow를_한_번만_호출한다() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyRateCoupon(event);
+		CouponStock couponStock = couponStock(coupon, 100);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponConverter.toUpdateResponse(coupon, couponStock))
+				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
+
+		couponService.updateCoupon(EVENT_ID, COUPON_ID, request);
+
+		verify(couponRepository, times(1)).findDatabaseNow();
 	}
 
 	@Test

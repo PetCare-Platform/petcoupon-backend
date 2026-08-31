@@ -1,6 +1,7 @@
 package com.mycom.petcoupon.coupon.service;
 
 import java.time.LocalDateTime;
+import java.util.function.Supplier;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -92,7 +93,13 @@ public class CouponServiceImpl implements CouponService {
 
 		validateEventStatusForUpdate(event);
 		validateCouponStatusForUpdate(coupon);
-		validateIssueNotStarted(coupon);
+
+		// [PR 리뷰 반영] now를 한 번만 읽어서 아래 두 검증에 그대로 넘긴다 — 각자 findDatabaseNow()를
+		// 따로 부르면(CURRENT_TIMESTAMP는 트랜잭션 스냅샷 대상이 아니라 호출마다 실제 시각을 반환)
+		// 두 호출 사이에 issueStartAt을 지나가버리는 좁은 레이스가 생겨, issueStartAt을 건드리지도
+		// 않은 요청이 임박한 타이밍에 스푸리어스하게 ISSUE_START_AT_IN_PAST로 튕길 수 있었다.
+		LocalDateTime now = couponRepository.findDatabaseNow();
+		validateIssueNotStarted(coupon, now);
 
 		String name = resolve(request.name(), coupon.getName());
 		DiscountType discountType = resolve(request.discountType(), coupon.getDiscountType());
@@ -113,7 +120,7 @@ public class CouponServiceImpl implements CouponService {
 		LocalDateTime issueEndAt = resolve(request.issueEndAt(), coupon.getIssueEndAt());
 		int validDays = resolve(request.validDays(), coupon.getValidDays());
 
-		validateIssuePeriod(event, issueStartAt, issueEndAt);
+		validateIssuePeriod(event, issueStartAt, issueEndAt, now);
 		validateDiscountPolicy(discountType, discountValue, maxDiscountAmount);
 
 		boolean totalQuantityUpdated = request.totalQuantity() != null;
@@ -207,13 +214,31 @@ public class CouponServiceImpl implements CouponService {
 	// issueStartAt이 지났는데도 아직 READY로 남아 있는 구간에서 이미 발급이 열린 쿠폰이 수정될 수 있다.
 	// 시간으로 한 번 더 막는다. 덤으로 activateCoupons(issueStartAt <= now)와 수정 가능 조건이
 	// 서로 배타적이 되어 스케줄러와 같은 쿠폰을 두고 경합할 일이 사실상 없어진다.
-	private void validateIssueNotStarted(Coupon coupon) {
-		if (!coupon.getIssueStartAt().isAfter(couponRepository.findDatabaseNow())) {
+	private void validateIssueNotStarted(Coupon coupon, LocalDateTime now) {
+		if (!coupon.getIssueStartAt().isAfter(now)) {
 			throw new GeneralException(CouponErrorCode.ISSUE_ALREADY_STARTED);
 		}
 	}
 
+	// createCoupon은 now를 갖고 있지 않으므로 DB에서 새로 읽되, 앞의 두 검증이 먼저 걸러지면
+	// findDatabaseNow() 자체를 호출하지 않는다(불필요한 DB 왕복 방지 — 테스트가 이 인터랙션
+	// 없음을 검증함). Supplier로 감싸 지연 평가한다.
 	private void validateIssuePeriod(Event event, LocalDateTime issueStartAt, LocalDateTime issueEndAt) {
+		validateIssuePeriod(event, issueStartAt, issueEndAt, couponRepository::findDatabaseNow);
+	}
+
+	// updateCoupon은 validateIssueNotStarted와 이미 같은 now를 하나 읽어뒀으므로 그 값을 그대로 쓴다.
+	// [PR 리뷰 반영] 여기서 다시 findDatabaseNow()를 부르면(CURRENT_TIMESTAMP는 트랜잭션 스냅샷
+	// 대상이 아니라 호출마다 실제 시각을 반환) 두 호출 사이에 issueStartAt을 지나가버리는 좁은
+	// 레이스가 생겨, issueStartAt을 건드리지도 않은 요청이 임박한 타이밍에 스푸리어스하게
+	// ISSUE_START_AT_IN_PAST로 튕길 수 있었다.
+	private void validateIssuePeriod(Event event, LocalDateTime issueStartAt, LocalDateTime issueEndAt, LocalDateTime now) {
+		validateIssuePeriod(event, issueStartAt, issueEndAt, () -> now);
+	}
+
+	private void validateIssuePeriod(
+			Event event, LocalDateTime issueStartAt, LocalDateTime issueEndAt, Supplier<LocalDateTime> nowSupplier
+	) {
 		if (!issueEndAt.isAfter(issueStartAt)) {
 			throw new GeneralException(CouponErrorCode.INVALID_ISSUE_PERIOD);
 		}
@@ -225,7 +250,7 @@ public class CouponServiceImpl implements CouponService {
 		// [#222] 과거 시각이면 자동 오픈 스케줄러가 activateCoupons 조건(issueStartAt<=now<issueEndAt)에
 		// 걸릴 기회 없이 READY로 영구 고아 상태가 될 수 있다. validateIssueNotStarted와 시간 소스를
 		// 맞추기 위해 findDatabaseNow()를 쓴다.
-		if (issueStartAt.isBefore(couponRepository.findDatabaseNow())) {
+		if (issueStartAt.isBefore(nowSupplier.get())) {
 			throw new GeneralException(CouponErrorCode.ISSUE_START_AT_IN_PAST);
 		}
 	}
