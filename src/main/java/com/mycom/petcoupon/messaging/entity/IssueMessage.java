@@ -146,6 +146,12 @@ public class IssueMessage {
 	@Column(name = "stock_restored_at")
 	private LocalDateTime stockRestoredAt;
 
+	// claimForReprocess가 DLQ -> REPROCESSING 선점 시각을 기록한다. 발행 콜백이 영영 안
+	// 돌아오면 이 상태에 갇히는데, CouponIssueReprocessRecoveryScheduler가 이 값 기준으로
+	// 오래된 REPROCESSING을 DLQ로 되돌린다(#217 후속 리뷰).
+	@Column(name = "reprocessing_claimed_at")
+	private LocalDateTime reprocessingClaimedAt;
+
 	public static IssueMessage pending(
 	        Coupon coupon,
 	        long userId,

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -96,7 +97,10 @@ class CouponIssueEventProducerTest {
 		
 		assertThat(thrown).isInstanceOf(CompletionException.class);
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
+		);
 	}
 
 	@Test
@@ -114,7 +118,10 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.FAILED), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
+		);
 	}
 
 	@Test
@@ -132,7 +139,10 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
+		);
 	}
 
 	@Test
@@ -155,7 +165,12 @@ class CouponIssueEventProducerTest {
 
 		catchThrowable(() -> producer.publish(issueMessage).join());
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		// [PR 리뷰 반영] REPROCESSING에서 온 실패만 DLQ로 되돌려야 한다 — expectedStatuses가
+		// REPROCESSING 하나로 좁혀졌는지까지 확인한다.
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.DLQ), eq("kafka down"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.REPROCESSING))
+		);
 	}
 
 	@Test
@@ -171,7 +186,10 @@ class CouponIssueEventProducerTest {
 
 		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
 
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("sync failure"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.FAILED), eq("sync failure"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
+		);
 	}
 
 	@Test
@@ -185,7 +203,10 @@ class CouponIssueEventProducerTest {
 
 		assertThat(thrown).isInstanceOf(RuntimeException.class).hasCauseInstanceOf(RuntimeException.class);
 		
-		verify(issueMessageRepository).markPublishFailed(eq(1L), eq(IssueMessageStatus.FAILED), eq("malformed json"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED));
+		verify(issueMessageRepository).markPublishFailed(
+			eq(1L), eq(IssueMessageStatus.FAILED), eq("malformed json"), eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
+		);
 		
 		verify(kafkaTemplate, never())
 			.send(any(String.class), any(), any());
@@ -232,7 +253,8 @@ class CouponIssueEventProducerTest {
 			eq(1L),
 			eq(IssueMessageStatus.FAILED),
 			eq("RuntimeException: Send failed (Caused by: IllegalStateException: Timeout waiting for broker response)"),
-			eq(IssueFailureReason.KAFKA_PUBLISH_FAILED)
+			eq(IssueFailureReason.KAFKA_PUBLISH_FAILED),
+			eq(List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED))
 		);
 	}
 }

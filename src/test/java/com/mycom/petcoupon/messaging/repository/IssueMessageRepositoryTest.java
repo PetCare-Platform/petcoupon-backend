@@ -1,9 +1,11 @@
 package com.mycom.petcoupon.messaging.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -296,9 +298,43 @@ class IssueMessageRepositoryTest {
 		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
 	}
 
+	// REPROCESSING이 issuedCount/failedCount로 안 새고 inProgressCount로만 잡히는지 확인한다.
+	@Test
+	void findThroughputByHour는_관리자_재처리_중인_REPROCESSING을_진행_중으로_센다() {
+		LocalDateTime bucketTime = LocalDateTime.now().withMinute(50).withSecond(0).withNano(0);
+		String bucketKey = bucketTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00:00"));
+		LocalDateTime since = bucketTime.minusHours(1);
+
+		long issuedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressBefore = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		IssueMessage reprocessing = IssueMessage.pending(coupon, 31L, 31L, "throughput-reprocessing-1", "{}");
+		entityManager.persist(reprocessing);
+		entityManager.flush();
+		issueMessageRepository.markPublishFailed(reprocessing.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.claimForReprocess(reprocessing.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now());
+
+		entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
+				.setParameter("bucketTime", bucketTime)
+				.setParameter("id", reprocessing.getMessageId())
+				.executeUpdate();
+
+		entityManager.flush();
+		entityManager.clear();
+
+		long issuedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getIssuedCount);
+		long failedAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount);
+		long inProgressAfter = findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
+
+		assertThat(issuedAfter - issuedBefore).isZero();
+		assertThat(failedAfter - failedBefore).isZero();
+		assertThat(inProgressAfter - inProgressBefore).isEqualTo(1L);
+	}
+
 	// PR 리뷰 반영 — issuedCount+failedCount+inProgressCount가 그 버킷의 총 접수량과 항상
-	// 일치해야 프론트가 누적 막대 그래프를 그려도 어긋나지 않는다. 6개 상태(PENDING/SENT/
-	// CONSUMED/FAILED/DLQ/ABANDONED)를 하나씩 넣어 세 카운트의 합이 6건과 같은지 확인한다.
+	// 일치해야 프론트가 누적 막대 그래프를 그려도 어긋나지 않는다. 7개 상태(PENDING/SENT/
+	// CONSUMED/FAILED/DLQ/ABANDONED/REPROCESSING)를 하나씩 넣어 세 카운트의 합이 7건과 같은지 확인한다.
 	@Test
 	void findThroughputByHour는_세_카운트의_합이_총_접수량과_같다() {
 		LocalDateTime bucketTime = LocalDateTime.now().withMinute(15).withSecond(0).withNano(0);
@@ -321,6 +357,8 @@ class IssueMessageRepositoryTest {
 		entityManager.persist(dlq);
 		IssueMessage abandoned = IssueMessage.pending(coupon, 45L, 45L, "total-abandoned", "{}");
 		entityManager.persist(abandoned);
+		IssueMessage reprocessing = IssueMessage.pending(coupon, 46L, 46L, "total-reprocessing", "{}");
+		entityManager.persist(reprocessing);
 		entityManager.flush();
 
 		issueMessageRepository.markSent(sent.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
@@ -328,8 +366,10 @@ class IssueMessageRepositoryTest {
 		issueMessageRepository.markPublishFailed(failed.getMessageId(), IssueMessageStatus.FAILED, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 		issueMessageRepository.markPublishFailed(dlq.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
 		issueMessageRepository.markPublishFailed(abandoned.getMessageId(), IssueMessageStatus.ABANDONED, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.markPublishFailed(reprocessing.getMessageId(), IssueMessageStatus.DLQ, "test", IssueFailureReason.KAFKA_PUBLISH_FAILED);
+		issueMessageRepository.claimForReprocess(reprocessing.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now());
 
-		for (IssueMessage message : List.of(pending, sent, consumed, failed, dlq, abandoned)) {
+		for (IssueMessage message : List.of(pending, sent, consumed, failed, dlq, abandoned, reprocessing)) {
 			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :bucketTime WHERE message_id = :id")
 					.setParameter("bucketTime", bucketTime)
 					.setParameter("id", message.getMessageId())
@@ -343,7 +383,7 @@ class IssueMessageRepositoryTest {
 				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getFailedCount)
 				+ findBucketCount(since, bucketKey, IssueThroughputBucket::getInProgressCount);
 
-		assertThat(totalAfter - totalBefore).isEqualTo(6L);
+		assertThat(totalAfter - totalBefore).isEqualTo(7L);
 	}
 
 	// PR 리뷰 반영 — from만 있고 to가 없던 구조가 맨 앞 버킷이 부분치만 담기는 문제의
@@ -466,6 +506,9 @@ class IssueMessageRepositoryTest {
 		entityManager.persist(dlq);
 		IssueMessage pending = IssueMessage.pending(coupon, 103L, 103L, "coupon-ts-pending", "{}");
 		entityManager.persist(pending);
+		// [PR 리뷰 반영] REPROCESSING도 진행 중이라 inProgressCount에 잡혀야 한다.
+		IssueMessage reprocessing = IssueMessage.pending(coupon, 105L, 105L, "coupon-ts-reprocessing", "{}");
+		entityManager.persist(reprocessing);
 
 		// 2. 다른 쿠폰 메시지 생성 (집계에서 제외되어야 함)
 		Coupon otherCoupon = Coupon.builder()
@@ -490,8 +533,12 @@ class IssueMessageRepositoryTest {
 				dlq.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED
 		);
 		issueMessageRepository.updateStatus(otherConsumed.getMessageId(), IssueMessageStatus.CONSUMED);
+		issueMessageRepository.markPublishFailed(
+				reprocessing.getMessageId(), IssueMessageStatus.DLQ, "test dlq", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		issueMessageRepository.claimForReprocess(reprocessing.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now());
 
-		for (IssueMessage msg : List.of(consumed, dlq, pending, otherConsumed)) {
+		for (IssueMessage msg : List.of(consumed, dlq, pending, reprocessing, otherConsumed)) {
 			entityManager.createNativeQuery("UPDATE issue_message SET created_at = :time WHERE message_id = :id")
 					.setParameter("time", bucketStart.plusSeconds(1))
 					.setParameter("id", msg.getMessageId())
@@ -512,7 +559,8 @@ class IssueMessageRepositoryTest {
 
 		assertThat(targetBucket.getIssuedCount()).isEqualTo(1L);
 		assertThat(targetBucket.getFailedCount()).isEqualTo(1L);
-		assertThat(targetBucket.getInProgressCount()).isEqualTo(1L);
+		// pending + reprocessing = 2
+		assertThat(targetBucket.getInProgressCount()).isEqualTo(2L);
 	}
 
 	@Test
@@ -616,6 +664,110 @@ class IssueMessageRepositoryTest {
 		assertThat(published).isEqualTo(4L);
 	}
 
+	// CONSUME_PROCESSING_FAILED로 REPROCESSING인 건(발행은 이미 성공)은 published에 잡히고,
+	// KAFKA_PUBLISH_FAILED로 REPROCESSING인 건(아직 발행 전)은 계속 제외돼야 한다.
+	@Test
+	void countPublishedByCoupon은_REPROCESSING이어도_이전_발행_성공_여부로_판단한다() {
+		IssueMessage reprocessingConsumeFailed =
+				IssueMessage.pending(coupon, 308L, 308L, "published-reprocessing-consume-failed", "{}");
+		IssueMessage reprocessingPublishFailed =
+				IssueMessage.pending(coupon, 309L, 309L, "published-reprocessing-publish-failed", "{}");
+		entityManager.persist(reprocessingConsumeFailed);
+		entityManager.persist(reprocessingPublishFailed);
+		entityManager.flush();
+
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "published-reprocessing-consume-failed", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		issueMessageRepository.markPublishFailed(
+				reprocessingPublishFailed.getMessageId(), IssueMessageStatus.DLQ, "publish failed",
+				IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		issueMessageRepository.claimForReprocess(
+				reprocessingConsumeFailed.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now()
+		);
+		issueMessageRepository.claimForReprocess(
+				reprocessingPublishFailed.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now()
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		long published = issueMessageRepository.countPublishedByCoupon(coupon.getCouponId());
+
+		// REPROCESSING(consume-failed)만 published로 잡혀야 한다 — REPROCESSING(publish-failed)은 제외
+		assertThat(published).isEqualTo(1L);
+	}
+
+	@Test
+	void claimForReprocess는_reprocessingClaimedAt을_기록한다() {
+		IssueMessage message = IssueMessage.pending(coupon, 96L, 96L, "reprocess-claimed-at", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.DLQ, "발행 실패", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		LocalDateTime beforeClaim = LocalDateTime.now();
+		int claimed = issueMessageRepository.claimForReprocess(
+				message.getMessageId(), IssueMessageStatus.DLQ, 1, beforeClaim
+		);
+		assertThat(claimed).isEqualTo(1);
+
+		// MySQL datetime(6) 왕복 시 마이크로초 단위 오차가 생길 수 있어 근접 비교로 확인한다.
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getReprocessingClaimedAt()).isCloseTo(beforeClaim, within(1, ChronoUnit.SECONDS));
+	}
+
+	// stale 쪽은 CONSUME_PROCESSING_FAILED(발행은 이미 성공했었다는 뜻)로 DLQ였던 메시지를
+	// 써서, 복구가 failureReason을 보존하는지도 같이 확인한다.
+	@Test
+	void recoverStaleReprocessingMessages는_cutoff보다_오래된_REPROCESSING만_DLQ로_되돌리고_원래_failureReason을_보존한다() {
+		IssueMessage stale = IssueMessage.pending(coupon, 97L, 97L, "reprocess-stale", "{}");
+		IssueMessage fresh = IssueMessage.pending(coupon, 98L, 98L, "reprocess-fresh", "{}");
+		entityManager.persist(stale);
+		entityManager.persist(fresh);
+		entityManager.flush();
+
+		issueMessageRepository.markDlq(
+				KafkaTopics.COUPON_ISSUE_EVENT, "reprocess-stale", IssueMessageStatus.DLQ,
+				"consume failed", IssueFailureReason.CONSUME_PROCESSING_FAILED
+		);
+		issueMessageRepository.markPublishFailed(
+				fresh.getMessageId(), IssueMessageStatus.DLQ, "발행 실패", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		LocalDateTime now = LocalDateTime.now();
+		issueMessageRepository.claimForReprocess(stale.getMessageId(), IssueMessageStatus.DLQ, 1, now.minusMinutes(10));
+		issueMessageRepository.claimForReprocess(fresh.getMessageId(), IssueMessageStatus.DLQ, 1, now);
+		entityManager.flush();
+		entityManager.clear();
+
+		int recovered = issueMessageRepository.recoverStaleReprocessingMessages(
+				now.minusMinutes(5), "관리자 재처리 선점 후 발행 결과가 도착하지 않아 자동으로 DLQ로 되돌림"
+		);
+
+		assertThat(recovered).isEqualTo(1);
+
+		IssueMessage staleAfter = issueMessageRepository.findById(stale.getMessageId()).orElseThrow();
+		assertThat(staleAfter.getStatus()).isEqualTo(IssueMessageStatus.DLQ);
+		// 복구가 새 사유로 덮어쓰지 않고 원래 사유(재처리 선점 전부터 있던 값)를 그대로 유지한다.
+		assertThat(staleAfter.getFailureReason()).isEqualTo(IssueFailureReason.CONSUME_PROCESSING_FAILED);
+		// 위 보존 덕분에 이미 발행됐던 건으로 계속 집계돼야 한다.
+		assertThat(issueMessageRepository.countPublishedByCoupon(coupon.getCouponId())).isEqualTo(1L);
+
+		IssueMessage freshAfter = issueMessageRepository.findById(fresh.getMessageId()).orElseThrow();
+		assertThat(freshAfter.getStatus()).isEqualTo(IssueMessageStatus.REPROCESSING);
+	}
+
 	// Kafka 가 같은 VPC 안이면 왕복이 1ms 미만이라, 발행 콜백이 markSent 를 커밋하기 전에 Consumer 가
 	// 소비를 끝내는 순서가 실제로 발생한다(부하 테스트에서 발급 68,000건 중 3건 실측).
 	// 여기서 검증하는 것은 타이밍이 아니라 "종착 상태를 되돌리지 않는가"이므로 순서를 강제해서 재현한다.
@@ -701,7 +853,7 @@ class IssueMessageRepositoryTest {
 		entityManager.clear();
 
 		// [#217] 관리자 재처리 선점 — status 는 DLQ 에서 REPROCESSING 으로 바뀐다
-		int claimed = issueMessageRepository.claimForReprocess(message.getMessageId(), IssueMessageStatus.DLQ, 1);
+		int claimed = issueMessageRepository.claimForReprocess(message.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now());
 		assertThat(claimed).isEqualTo(1);
 		entityManager.flush();
 		entityManager.clear();
@@ -719,6 +871,69 @@ class IssueMessageRepositoryTest {
 		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
 		assertThat(found.getLastError()).isNull();
 		assertThat(found.getFailureReason()).isNull();
+	}
+
+	// [PR 리뷰 반영] markSent와 대칭되는 문제 — markPublishFailed에는 원래 status 조건이 없어서,
+	// 같은 메시지의 발행이 겹친 상황(Outbox poller 자동 재시도가 먼저 성공)에서 다른 시도의
+	// 지연된 실패 콜백이 도착하면 조건 없이 FAILED/DLQ로 덮어써 성공 상태를 되돌릴 수 있었다.
+	// 일반 발행 실패(expectedStatuses={PENDING,FAILED})는 이미 SENT로 확정된 메시지를 건드리면
+	// 안 된다.
+	@Test
+	void markPublishFailed는_expectedStatuses에_없으면_이미_SENT로_확정된_메시지를_되돌리지_않는다() {
+		IssueMessage message = IssueMessage.pending(coupon, 96L, 96L, "race-publish-failed-after-sent", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		// 다른 발행 시도가 먼저 성공해 SENT로 확정된 상태
+		issueMessageRepository.markSent(message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		entityManager.flush();
+		entityManager.clear();
+
+		// 뒤늦게 도착한 실패 콜백 — 일반 발행 경로는 PENDING/FAILED에서 시작했을 때만 유효
+		int updated = issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.FAILED, "지연된 실패 콜백",
+				IssueFailureReason.KAFKA_PUBLISH_FAILED,
+				List.of(IssueMessageStatus.PENDING, IssueMessageStatus.FAILED)
+		);
+
+		assertThat(updated).isZero();
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
+	}
+
+	// 관리자 재처리 실패(expectedStatuses={REPROCESSING})도 대칭으로 확인한다 — claimForReprocess로
+	// REPROCESSING에 진입한 뒤 재발행이 먼저 성공해 SENT로 확정되면, 뒤늦은 재처리 실패 콜백이
+	// 그 SENT를 DLQ로 되돌리면 안 된다.
+	@Test
+	void markPublishFailed는_REPROCESSING이_아니면_재처리_실패로_이미_확정된_메시지를_되돌리지_않는다() {
+		IssueMessage message = IssueMessage.pending(coupon, 97L, 97L, "race-reprocess-failed-after-sent", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.DLQ, "최초 발행 실패", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		issueMessageRepository.claimForReprocess(message.getMessageId(), IssueMessageStatus.DLQ, 1, LocalDateTime.now());
+		entityManager.flush();
+		entityManager.clear();
+
+		// 재처리로 재발행에 먼저 성공해 SENT로 확정된 상태
+		issueMessageRepository.markSent(message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now());
+		entityManager.flush();
+		entityManager.clear();
+
+		// 뒤늦게 도착한 재처리 실패 콜백 — REPROCESSING에서 시작했을 때만 유효
+		int updated = issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.DLQ, "지연된 재처리 실패 콜백",
+				IssueFailureReason.KAFKA_PUBLISH_FAILED, List.of(IssueMessageStatus.REPROCESSING)
+		);
+
+		assertThat(updated).isZero();
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
 	}
 
 	// [#217 수정 완료] 예전엔 Outbox Poller(CouponIssueOutboxPublisher)가 메시지 행을 선점(claim)

@@ -2,11 +2,17 @@ package com.mycom.petcoupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -15,6 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import com.mycom.petcoupon.coupon.dto.req.CouponPageRequest;
 import com.mycom.petcoupon.coupon.dto.res.CouponIssueDlqAbandonResponse;
@@ -57,7 +65,9 @@ import jakarta.persistence.EntityManagerFactory;
 		"event.status.scheduler.enabled=false",
 		"coupon.status.enabled=false",
 		"coupon.issue.outbox.enabled=false",
-		"coupon.reconciliation.scheduler.enabled=false"
+		"coupon.reconciliation.scheduler.enabled=false",
+		// CouponIssueReprocessRecoveryScheduler도 다른 스케줄러들과 같은 이유(위 클래스 주석)로 꺼야 한다.
+		"coupon.issue.dlq.reprocess-recovery.enabled=false"
 })
 class CouponIssueDlqReprocessServiceIntegrationTest {
 
@@ -84,6 +94,12 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 
 	@Autowired
 	private StringRedisTemplate redisTemplate;
+
+	// [#217 리뷰 반영] reprocess()가 claim 후 producer에 낡은 IssueMessage를 넘기는 버그를
+	// 진짜로 잡으려면 Mockito 단위 테스트가 아니라 실제 서비스+DB로 끝까지 돌려봐야 한다.
+	// 실제 Kafka를 내려버리는 대신 KafkaTemplate만 mock으로 바꿔 발행 실패를 재현한다.
+	@MockitoBean
+	private KafkaTemplate<String, Object> kafkaTemplate;
 
 	private final List<Long> couponIds = new ArrayList<>();
 
@@ -241,6 +257,26 @@ class CouponIssueDlqReprocessServiceIntegrationTest {
 		);
 
 		return issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+	}
+
+	// [#217 리뷰 반영] Mockito 단위 테스트(CouponIssueDlqReprocessServiceImplTest)는
+	// claimForReprocess/publish를 전부 mock으로 대체해서, claim 이후 producer에 낡은
+	// IssueMessage가 넘어가는 상태 동기화 버그를 절대 못 잡는다. 진짜 서비스+DB로 끝까지
+	// 돌려서 발행 실패 시 최종 status가 DLQ로 남는지(FAILED로 새지 않는지) 확인한다.
+	@Test
+	void reprocess는_Kafka_발행이_실패하면_최종_상태를_DLQ로_되돌린다() {
+		IssueMessage issueMessage = saveDlqMessage("dlq-reprocess-kafka-fail");
+
+		when(kafkaTemplate.send(anyString(), any(), any()))
+				.thenReturn(CompletableFuture.failedFuture(new RuntimeException("test: Kafka down")));
+
+		couponIssueDlqReprocessService.reprocess(issueMessage.getMessageId());
+
+		// publish()는 비동기라 markFailed()가 콜백 스레드에서 나중에 커밋된다 — 폴링으로 기다린다.
+		await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+			IssueMessage found = issueMessageRepository.findById(issueMessage.getMessageId()).orElseThrow();
+			assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.DLQ);
+		});
 	}
 
 	@Test

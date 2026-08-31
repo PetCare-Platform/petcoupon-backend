@@ -106,7 +106,8 @@ class CouponLoadTestStatusServiceImplTest {
         when(couponStockRepository.findById(COUPON_ID)).thenReturn(Optional.of(couponStock));
         when(issueMessageRepository.countGroupedByStatusForCoupon(COUPON_ID)).thenReturn(List.of(
                 issueStatusCount(IssueMessageStatus.CONSUMED, 8),
-                issueStatusCount(IssueMessageStatus.DLQ, 1)
+                issueStatusCount(IssueMessageStatus.DLQ, 1),
+                issueStatusCount(IssueMessageStatus.REPROCESSING, 1)
         ));
         when(idempotencyKeyRepository.countAcceptedByCouponId(COUPON_ID)).thenReturn(10L);
         when(idempotencyKeyRepository.countByCoupon_CouponIdAndStatus(COUPON_ID, IdempotencyStatus.IN_PROGRESS)).thenReturn(0L);
@@ -126,6 +127,7 @@ class CouponLoadTestStatusServiceImplTest {
         assertThat(response.rejected()).isEqualTo(2);
         assertThat(response.consumed()).isEqualTo(8);
         assertThat(response.dlq()).isEqualTo(1);
+        assertThat(response.reprocessing()).isEqualTo(1);
         assertThat(response.published()).isEqualTo(9);
         assertThat(response.pending()).isZero();
         assertThat(response.overIssued()).isFalse();
