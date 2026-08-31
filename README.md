@@ -1,40 +1,15 @@
-# petcoupon-backend
+# 🎫 petcoupon-backend
 
 > **선착순 쿠폰 발급 시스템**
 > 대규모 동시 요청 상황에서도 **초과 발급 0건**과 **1인 1매**를 보장하는 쿠폰 발급 백엔드입니다.
 
-**Language · Framework**
-
-![Java](https://img.shields.io/badge/Java-21-007396?logo=openjdk&logoColor=white)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.0-6DB33F?logo=springboot&logoColor=white)
-![Spring Data JPA](https://img.shields.io/badge/Spring%20Data%20JPA-6DB33F?logo=spring&logoColor=white)
-![Spring Batch](https://img.shields.io/badge/Spring%20Batch-6DB33F?logo=spring&logoColor=white)
-![Lombok](https://img.shields.io/badge/Lombok-BC4521?logo=lombok&logoColor=white)
-
-**Data · Messaging**
-
-![MySQL](https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white)
-![Redis](https://img.shields.io/badge/Redis-7.2-DC382D?logo=redis&logoColor=white)
-![Redis Stream](https://img.shields.io/badge/Redis%20Stream-DC382D?logo=redis&logoColor=white)
-![Lua](https://img.shields.io/badge/Lua-2C2D72?logo=lua&logoColor=white)
-![Kafka](https://img.shields.io/badge/Kafka-3.7.0-231F20?logo=apachekafka&logoColor=white)
-
-**Build · Infrastructure**
-
-![Gradle](https://img.shields.io/badge/Gradle-02303A?logo=gradle&logoColor=white)
-![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)
-![Actuator](https://img.shields.io/badge/Actuator-6DB33F?logo=springboot&logoColor=white)
-
-**Test · Quality**
-
-![JUnit 5](https://img.shields.io/badge/JUnit%205-25A162?logo=junit5&logoColor=white)
-![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F?logo=testcontainers&logoColor=white)
-![Awaitility](https://img.shields.io/badge/Awaitility-4B8BBE)
-![k6](https://img.shields.io/badge/k6-7D64FF?logo=k6&logoColor=white)
+<a href="https://app.notion.com/p/06-3b40be1e2d6a8092a7d5c1f8b9008869">
+  <img src="https://img.shields.io/badge/Notion-프로젝트_문서-000000?style=for-the-badge&logo=notion&logoColor=white" alt="Notion 프로젝트 문서" />
+</a>
 
 ---
 
-## 프로젝트 소개
+## 📌 프로젝트 소개
 
 PetCoupon은 이벤트에 연결된 한정 수량 쿠폰을 선착순으로 발급하는 시스템입니다.
 단순히 DB 재고를 차감하는 방식이 아니라, 다음을 조합해 높은 동시성 환경에서도 발급 정합성을 유지하도록 설계했습니다.
@@ -63,23 +38,51 @@ PetCoupon은 이벤트에 연결된 한정 수량 쿠폰을 선착순으로 발�
 | 부하 테스트 정합성 | 동시 20,000명 × 5회차 **초과 발급·중복 발급·순번 충돌 0건** |
 | 부하 테스트 성능 | 접수 성공률 100% · 처리량 1,030 TPS · 전건 확정 220초 |
 
-상세는 [통합 테스트](#통합-테스트)와 [부하 테스트](#부하-테스트-최종-검증)에 있습니다.
+상세는 [통합 테스트](#-통합-테스트)와 [부하 테스트](#-부하-테스트-최종-검증)에 있습니다.
 
 ---
 
-## 목차
+## 📑 목차
 
-| 구분 | 항목 |
-| --- | --- |
-| 개요 | [핵심 요구사항](#핵심-요구사항) · [기술 스택](#기술-스택) |
-| 설계 | [시스템 아키텍처](#시스템-아키텍처) · [프로젝트 구조](#프로젝트-구조) · [동시성과 정합성](#동시성과-정합성) |
-| 사용 | [Quick Start](#quick-start) · [주요 API](#주요-api) · [주요 설정](#주요-설정) · [배치 및 스케줄러](#배치-및-스케줄러) |
-| 검증 | [통합 테스트](#통합-테스트) · [부하 테스트](#부하-테스트-최종-검증) · [알려진 한계와 후속 과제](#알려진-한계와-후속-과제) |
-| 팀 | [팀 구성과 역할](#팀-구성과-역할) · [개발 문서](#개발-문서) |
+1. [📌 프로젝트 소개](#-프로젝트-소개)
+2. [✅ 핵심 요구사항](#-핵심-요구사항)
+3. [🛠 기술 스택](#-기술-스택)
+4. [🏗 시스템 아키텍처](#-시스템-아키텍처)
+   - [발급 흐름](#발급-흐름)
+   - [왜 접수와 확정을 나눴는가](#왜-접수와-확정을-나눴는가)
+5. [🚀 Quick Start](#-quick-start)
+   - [의존 서비스 실행](#1-의존-서비스-실행)
+   - [애플리케이션 실행](#2-애플리케이션-실행)
+   - [Health Check](#3-health-check)
+   - [쿠폰 재고 초기화](#4-쿠폰-재고-초기화)
+   - [부하 테스트용 사용자 데이터](#부하-테스트용-사용자-데이터)
+6. [📂 프로젝트 구조](#-프로젝트-구조)
+7. [🔌 주요 API](#-주요-api)
+   - [사용자 API](#사용자-api)
+   - [관리자 API](#관리자-api)
+   - [내부 API](#내부-api)
+8. [🔒 동시성과 정합성](#-동시성과-정합성)
+   - [핵심 불변식](#핵심-불변식)
+   - [왜 여러 겹으로 막는가](#왜-여러-겹으로-막는가)
+9. [⏱ 배치 및 스케줄러](#-배치-및-스케줄러)
+   - [메시지 채널](#메시지-채널)
+10. [🧪 통합 테스트](#-통합-테스트)
+    - [결과 — 80개 시나리오 전건 통과](#결과--80개-시나리오-전건-통과)
+    - [특히 확인한 것](#특히-확인한-것)
+11. [📈 부하 테스트 (최종 검증)](#-부하-테스트-최종-검증)
+    - [측정 환경](#측정-환경)
+    - [결과 — 정합성 전 회차 통과](#결과--정합성-전-회차-통과)
+    - [성능은 목표에 미달했다](#성능은-목표에-미달했다)
+    - [실험으로 기각한 가설](#실험으로-기각한-가설)
+    - [측정 중 발견하고 고친 결함](#측정-중-발견하고-고친-결함)
+12. [⚙ 주요 설정](#-주요-설정)
+13. [🚧 알려진 한계와 후속 과제](#-알려진-한계와-후속-과제)
+14. [👥 팀 구성과 역할](#-팀-구성과-역할)
+15. [📚 개발 문서](#-개발-문서)
 
 ---
 
-## 핵심 요구사항
+## ✅ 핵심 요구사항
 
 시스템이 반드시 보장해야 하는 조건은 다음과 같습니다.
 
@@ -96,26 +99,39 @@ PetCoupon은 이벤트에 연결된 한정 수량 쿠폰을 선착순으로 발�
 
 ---
 
-## 기술 스택
+## 🛠 기술 스택
 
-| 영역             | 기술                   |
-| -------------- | -------------------- |
-| Language       | Java 21              |
-| Framework      | Spring Boot 4.1.0    |
-| Database       | MySQL 8.0            |
-| Cache / Queue  | Redis 7.2            |
-| Message Broker | Kafka 3.7            |
-| ORM            | Spring Data JPA      |
-| Batch          | Spring Batch         |
-| Build          | Gradle               |
-| Monitoring     | Spring Boot Actuator, SSE |
-| Test           | JUnit 5, Testcontainers, Awaitility |
-| Load Test      | k6                   |
-| Infrastructure | Docker Compose, AWS EC2 |
+### Application
+
+![Java](https://img.shields.io/badge/Java_21-007396?style=for-the-badge&logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot_4.1.0-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)
+![Spring Data JPA](https://img.shields.io/badge/Spring_Data_JPA-6DB33F?style=for-the-badge&logo=spring&logoColor=white)
+![Spring Batch](https://img.shields.io/badge/Spring_Batch-6DB33F?style=for-the-badge&logo=spring&logoColor=white)
+![Lombok](https://img.shields.io/badge/Lombok-BC4521?style=for-the-badge&logo=lombok&logoColor=white)
+
+### Data · Atomicity · Messaging
+
+![MySQL](https://img.shields.io/badge/MySQL_8.0-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis_7.2-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Redis Stream](https://img.shields.io/badge/Redis_Stream-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Lua](https://img.shields.io/badge/Lua_Script-2C2D72?style=for-the-badge&logo=lua&logoColor=white)
+![Apache Kafka](https://img.shields.io/badge/Apache_Kafka_3.7-231F20?style=for-the-badge&logo=apachekafka&logoColor=white)
+
+### Build · Test · Environment
+
+![Gradle](https://img.shields.io/badge/Gradle-02303A?style=for-the-badge&logo=gradle&logoColor=white)
+![JUnit5](https://img.shields.io/badge/JUnit_5-25A162?style=for-the-badge&logo=junit5&logoColor=white)
+![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F?style=for-the-badge&logo=testcontainers&logoColor=white)
+![Awaitility](https://img.shields.io/badge/Awaitility-4B8BBE?style=for-the-badge)
+![k6](https://img.shields.io/badge/k6-7D64FF?style=for-the-badge&logo=k6&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![AWS EC2](https://img.shields.io/badge/AWS_EC2-FF9900?style=for-the-badge&logo=amazonec2&logoColor=white)
+![Spring Boot Actuator](https://img.shields.io/badge/Actuator-6DB33F?style=for-the-badge&logo=springboot&logoColor=white)
+![SSE](https://img.shields.io/badge/SSE-FF6F00?style=for-the-badge)
 
 ---
 
-## 시스템 아키텍처
+## 🏗 시스템 아키텍처
 
 쿠폰 발급은 요청을 **접수하는 단계**와 실제 발급을 **확정하는 단계**로 분리되어 있습니다.
 
@@ -191,7 +207,7 @@ Redis는 실시간 요청 처리와 재고 선점을 담당하고, MySQL은 최�
 
 ---
 
-## Quick Start
+## 🚀 Quick Start
 
 ### 1. 의존 서비스 실행
 
@@ -236,7 +252,7 @@ docker exec petcoupon-mysql mysql -uroot -proot petcoupon -e "source /tmp/seed_u
 
 ---
 
-## 프로젝트 구조
+## 📂 프로젝트 구조
 
 ```text
 src/main/java/com/mycom/petcoupon/
@@ -296,7 +312,7 @@ Entity ↔ DTO 변환은 `converter`가 전담합니다.
 
 ---
 
-## 주요 API
+## 🔌 주요 API
 
 모든 API 응답은 공통 `CustomResponse` 형식을 사용합니다.
 
@@ -424,7 +440,7 @@ GET  /users/1/coupon-issue-requests/status?idempotencyKey=...
 
 ---
 
-## 동시성과 정합성
+## 🔒 동시성과 정합성
 
 쿠폰 발급 과정에서는 하나의 기술에만 의존하지 않고 여러 계층에서 중복으로 정합성을 방어합니다.
 
@@ -459,7 +475,7 @@ Redis Lua 하나로도 초과 발급은 막을 수 있지만, **Redis와 MySQL�
 
 ---
 
-## 배치 및 스케줄러
+## ⏱ 배치 및 스케줄러
 
 | 작업                        | 실행 주기    | 역할                            |
 | ------------------------- | -------- | ----------------------------- |
@@ -494,7 +510,7 @@ READY → ACTIVE → SOLD_OUT → ENDED
 
 ---
 
-## 통합 테스트
+## 🧪 통합 테스트
 
 기능이 **하나의 흐름으로 이어지는지** 실제 API를 호출해 확인합니다. 부하 테스트보다 먼저 실행합니다.
 
@@ -557,7 +573,7 @@ DB_POOL_SIZE=100 TOMCAT_MAX_THREADS=400 ./gradlew bootRun
 
 ---
 
-## 부하 테스트 (최종 검증)
+## 📈 부하 테스트 (최종 검증)
 
 **구현한 시스템이 대규모 동시 요청에서 정합성을 유지하는지 증명하는 것**이 목적입니다.
 측정일 2026-08-30 · AWS EC2 3대 분리 구성(`ap-northeast-2c`)
@@ -666,7 +682,7 @@ k6 run -e BASE_URL=http://<app>:8080 -e SCENARIO=burst -e COUPON_ID=1 -e TOTAL_Q
 
 ---
 
-## 주요 설정
+## ⚙ 주요 설정
 
 모든 설정은 환경변수로 덮어쓸 수 있으며, 기본값은 로컬에서 바로 실행되도록 구성되어 있습니다.
 
@@ -695,7 +711,7 @@ Redis Stream, Outbox 재시도, SSE 버퍼 등 세부 튜닝 값은
 
 ---
 
-## 알려진 한계와 후속 과제
+## 🚧 알려진 한계와 후속 과제
 
 측정으로 확인했으나 이번 범위에서 해결하지 않은 항목입니다.
 
@@ -711,7 +727,7 @@ Redis Stream, Outbox 재시도, SSE 버퍼 등 세부 튜닝 값은
 
 ---
 
-## 팀 구성과 역할
+## 👥 팀 구성과 역할
 
 6인이 도메인별로 나눠 개발했습니다. 각자 자기 영역의 구현·테스트·문서를 담당합니다.
 
@@ -729,7 +745,7 @@ Redis Stream, Outbox 재시도, SSE 버퍼 등 세부 튜닝 값은
 
 ---
 
-## 개발 문서
+## 📚 개발 문서
 
 README는 프로젝트 전체를 빠르게 파악하기 위한 입구 역할만 담당합니다.
 상세 내용은 목적에 따라 다음 문서를 참고합니다.
