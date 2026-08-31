@@ -41,6 +41,54 @@ class MonitoringLogEventMapperTest {
     }
 
     @Test
+    @DisplayName("값이 대괄호로 감싸인 리스트 형태 헤더도 가린다")
+    void redactsBracketWrappedHeaderValues() {
+        /*
+         * HttpHeaders/MultiValueMap의 toString은 값을 []로 감싼다: `Authorization=[Bearer x]`.
+         * '['가 끼면 스킴 패턴이 빗나가고, 범용 패턴은 '[Bearer'만 값으로 잡아 실제 토큰을
+         * 남겼다 — `Authorization=[REDACTED] abc.def]`(실측). 부분 마스킹이라 더 위험하다.
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("Authorization=[Bearer abc.def]"))
+                .isEqualTo("Authorization=[REDACTED]]");
+        assertThat(MonitoringLogEventMapper.sanitize(
+                "headers={Authorization=[Bearer abc.def], Accept=[application/json]}"))
+                .isEqualTo("headers={Authorization=[REDACTED]], Accept=[application/json]}");
+        assertThat(MonitoringLogEventMapper.sanitize("X-ADMIN-KEY=[session-token-value]"))
+                .isEqualTo("X-ADMIN-KEY=[REDACTED]]");
+    }
+
+    @Test
+    @DisplayName("Bearer·Basic이 아닌 인증 스킴의 credential도 가린다")
+    void redactsNonBearerSchemeCredentials() {
+        // 스킴 목록을 bearer|basic으로 고정해두면 Token/SSWS 등은 스킴 이름만 가려지고
+        // 정작 credential이 남는다 — `Authorization:[REDACTED] ghp_xxx`(실측).
+        assertThat(MonitoringLogEventMapper.sanitize("Authorization: Token ghp_xxxxxxxxxxxxxxxxxxxx"))
+                .isEqualTo("Authorization:[REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize("Authorization: SSWS 00abcdefghijklmnop"))
+                .isEqualTo("Authorization:[REDACTED]");
+    }
+
+    @Test
+    @DisplayName("스킴 이름과 같은 영어 낱말이 이어지는 산문은 가리지 않는다")
+    void keepsProseThatMerelyStartsWithASchemeWord() {
+        /*
+         * 스킴 단독 패턴이 길이 하한(8자)만 보면 영어 문장을 credential로 오인한다 —
+         * "Basic validation failed..."의 validation이 지워졌다(실측). 운영자용 모니터링에서
+         * 진단 문장이 조용히 사라지면 안 된다. 전부 소문자 알파벳인 낱말은 제외한다.
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("Basic validation failed for request 01983abc"))
+                .isEqualTo("Basic validation failed for request 01983abc");
+        assertThat(MonitoringLogEventMapper.sanitize("Basic authentication is disabled"))
+                .isEqualTo("Basic authentication is disabled");
+
+        // 반대로 진짜 credential은 그대로 걸려야 한다(대문자·숫자·기호가 섞여 있다).
+        assertThat(MonitoringLogEventMapper.sanitize("인증 실패: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"))
+                .isEqualTo("인증 실패: Bearer [REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize("rejected Basic dXNlcjpwYXNzd29yZA=="))
+                .isEqualTo("rejected Basic [REDACTED]");
+    }
+
+    @Test
     @DisplayName("관리자 세션 헤더값을 가린다")
     void redactsAdminSessionHeader() {
         assertThat(MonitoringLogEventMapper.sanitize("X-ADMIN-KEY: session-token"))
@@ -107,8 +155,42 @@ class MonitoringLogEventMapperTest {
         // 관리자 세션은 X-ADMIN-KEY 헤더뿐 아니라 쿠키로도 로그에 실릴 수 있다.
         assertThat(MonitoringLogEventMapper.sanitize("Cookie: JSESSIONID=abc123"))
                 .isEqualTo("Cookie:[REDACTED]");
+        // Set-Cookie는 값 뒤에 Path/HttpOnly 같은 속성이 붙는데, 그것까지 함께 가린다.
         assertThat(MonitoringLogEventMapper.sanitize("set-cookie=SESSION=abc123; Path=/"))
-                .isEqualTo("set-cookie=[REDACTED]; Path=/");
+                .isEqualTo("set-cookie=[REDACTED]");
+    }
+
+    @Test
+    @DisplayName("쿠키가 여러 개면 세미콜론 뒤의 세션값까지 전부 가린다")
+    void redactsEveryCookiePair() {
+        /*
+         * 일반 비밀값 규칙은 값 클래스가 ';'에서 끊긴다. 쿠키에 그 규칙을 그대로 쓰면 첫 쌍만
+         * 가려지고 뒤따르는 세션 쿠키가 그대로 남는다 — 세션이 첫 번째로 온다는 보장이 없다.
+         *   Cookie: theme=dark; JSESSIONID=abc  ->  Cookie:[REDACTED]; JSESSIONID=abc
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("Cookie: theme=dark; JSESSIONID=abc123"))
+                .isEqualTo("Cookie:[REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize(
+                "Cookie: locale=ko; JSESSIONID=sess-9f2a; theme=dark"))
+                .isEqualTo("Cookie:[REDACTED]");
+        // 헤더 Map 형태에서는 ','가 다음 헤더의 시작이므로 거기서 멈춰야 한다.
+        assertThat(MonitoringLogEventMapper.sanitize(
+                "headers={Cookie=theme=dark; JSESSIONID=abc123, Accept=application/json}"))
+                .isEqualTo("headers={Cookie=[REDACTED], Accept=application/json}");
+    }
+
+    @Test
+    @DisplayName("쿠키를 가리면서 뒤따르는 로그 문장은 지우지 않는다")
+    void redactsCookieWithoutSwallowingTrailingMessage() {
+        /*
+         * 쿠키 값을 ','·'}'까지 통째로 삼키는 방식도 세션은 막지만, 같은 줄의 진단 문장까지
+         * 지워버린다(실측). 운영자용 모니터링에서 조용히 사라지면 안 되는 정보다.
+         * 실제 쿠키 헤더는 ';' 뒤를 빼면 값에 공백이 없다는 성질을 이용해 경계를 좁혔다.
+         */
+        assertThat(MonitoringLogEventMapper.sanitize("Cookie: a=1; b=2 request failed"))
+                .isEqualTo("Cookie:[REDACTED] request failed");
+        assertThat(MonitoringLogEventMapper.sanitize("쿠키 파싱 실패 cookie=broken-value 이후 처리 중단"))
+                .isEqualTo("쿠키 파싱 실패 cookie=[REDACTED] 이후 처리 중단");
     }
 
     @Test
