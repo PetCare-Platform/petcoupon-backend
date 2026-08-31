@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -96,6 +97,27 @@ class CouponUpdateServiceTest {
 		assertSame(DiscountType.RATE, coupon.getDiscountType());
 		assertEquals(30_000, coupon.getMinOrderAmount());
 		assertEquals(100, couponStock.getTotalQuantity());
+	}
+
+	// [PR 리뷰 반영] validateIssueNotStarted와 validateIssuePeriod가 각자 findDatabaseNow()를
+	// 부르면, 같은 트랜잭션 안에서 now를 두 번 다른 시점에 읽게 되어 그 사이 issueStartAt을
+	// 지나가버리는 레이스가 생긴다(issueStartAt을 안 건드린 요청도 스푸리어스하게 실패할 수
+	// 있음). updateCoupon이 now를 한 번만 읽어서 두 검증에 공유하는지 호출 횟수로 확인한다.
+	@Test
+	void updateCoupon은_findDatabaseNow를_한_번만_호출한다() {
+		Event event = scheduledEvent();
+		Coupon coupon = readyRateCoupon(event);
+		CouponStock couponStock = couponStock(coupon, 100);
+		CouponUpdateRequest request = CouponUpdateRequest.builder().name("가을 정률 쿠폰").build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+		when(couponConverter.toUpdateResponse(coupon, couponStock))
+				.thenReturn(CouponUpdateResponse.builder().couponId(COUPON_ID).build());
+
+		couponService.updateCoupon(EVENT_ID, COUPON_ID, request);
+
+		verify(couponRepository, times(1)).findDatabaseNow();
 	}
 
 	@Test
@@ -304,6 +326,73 @@ class CouponUpdateServiceTest {
 		verifyNoInteractions(couponConverter);
 	}
 
+	// [#222] validateIssueNotStarted는 "기존" issueStartAt만 본다 — 요청이 실어보낸 새
+	// issueStartAt이 과거인 경우는 이 검증을 그대로 통과하므로, 뒤이은 validateIssuePeriod의
+	// 과거 시각 검증이 실제로 이 경로를 막는지 확인한다. 기존 issueStartAt은 미래로 둬서
+	// validateIssueNotStarted는 통과시키고, 요청값만 과거로 보낸다.
+	@Test
+	void updateCouponThrowsIssueStartAtInPastWhenRequestedIssueStartAtIsBeforeNow() {
+		Event event = alreadyOpenEvent();
+		Coupon coupon = Coupon.builder()
+				.event(event)
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(NOW.plusHours(1))
+				.issueEndAt(NOW.plusDays(3))
+				.validDays(7)
+				.build();
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponUpdateRequest request = CouponUpdateRequest.builder()
+				.issueStartAt(NOW.minusDays(1))
+				.build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+		verifyNoInteractions(couponConverter);
+	}
+
+	// [PR 리뷰 반영] issueStartAt == now 경계 — validateIssueNotStarted가 이 경계를
+	// "이미 시작됨"으로 막는 것과 기준을 맞춘다.
+	@Test
+	void updateCouponThrowsIssueStartAtInPastWhenRequestedIssueStartAtEqualsNow() {
+		Event event = alreadyOpenEvent();
+		Coupon coupon = Coupon.builder()
+				.event(event)
+				.name("여름 정률 쿠폰")
+				.discountType(DiscountType.RATE)
+				.discountValue(20)
+				.minOrderAmount(30_000)
+				.maxDiscountAmount(10_000)
+				.issueStartAt(NOW.plusHours(1))
+				.issueEndAt(NOW.plusDays(3))
+				.validDays(7)
+				.build();
+		CouponStock couponStock = mock(CouponStock.class);
+		CouponUpdateRequest request = CouponUpdateRequest.builder()
+				.issueStartAt(NOW)
+				.build();
+
+		when(couponRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(coupon));
+		when(couponStockRepository.findByIdForUpdate(COUPON_ID)).thenReturn(Optional.of(couponStock));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.updateCoupon(EVENT_ID, COUPON_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+	}
+
 	@Test
 	void updateCouponThrowsInvalidIssuePeriodWhenMergedEndIsBeforeStart() {
 		Event event = scheduledEvent();
@@ -415,6 +504,17 @@ class CouponUpdateServiceTest {
 		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
 		lenient().when(event.getOpenAt()).thenReturn(EVENT_OPEN_AT);
 		lenient().when(event.getCloseAt()).thenReturn(EVENT_CLOSE_AT);
+		return event;
+	}
+
+	// [#222] issueStartAt을 과거로 바꾸는 요청을 이벤트 기간 검증(openAt 이전 거부)이 아니라
+	// 과거 시각 검증에서 걸리게 하려면, 이벤트 자체가 이미 시작된 상태여야 한다.
+	private Event alreadyOpenEvent() {
+		Event event = mock(Event.class);
+		when(event.getEventId()).thenReturn(EVENT_ID);
+		when(event.getStatus()).thenReturn(EventStatus.SCHEDULED);
+		lenient().when(event.getOpenAt()).thenReturn(NOW.minusDays(5));
+		lenient().when(event.getCloseAt()).thenReturn(NOW.plusDays(5));
 		return event;
 	}
 
