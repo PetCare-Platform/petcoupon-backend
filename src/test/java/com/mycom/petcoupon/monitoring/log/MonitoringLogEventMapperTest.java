@@ -32,15 +32,34 @@ class MonitoringLogEventMapperTest {
     }
 
     @Test
-    @DisplayName("[알려진 한계] 값 앞에 스킴이 붙으면 뒷부분이 그대로 남는다")
-    void knownGapSchemePrefixedValueIsNotFullyRedacted() {
-        /*
-         * SECRET_VALUE의 값 부분이 [^,;\s]+ 라 첫 공백에서 멈춘다. 그래서 "Bearer <token>"
-         * 처럼 스킴이 앞에 붙는 흔한 형태는 스킴만 가려지고 정작 토큰이 화면에 나간다.
-         * 고치지 않고 현재 동작을 고정해 둔다 — 패턴을 손대면 이 테스트가 깨지면서 드러난다.
-         */
+    @DisplayName("스킴이 붙은 Authorization credential 전체를 가린다")
+    void redactsSchemePrefixedAuthorizationCredentials() {
         assertThat(MonitoringLogEventMapper.sanitize("Authorization: Bearer abc.def"))
-                .isEqualTo("Authorization:[REDACTED] abc.def");
+                .isEqualTo("Authorization:[REDACTED]");
+        assertThat(MonitoringLogEventMapper.sanitize("Authorization=Basic dXNlcjpwYXNz"))
+                .isEqualTo("Authorization=[REDACTED]");
+    }
+
+    @Test
+    @DisplayName("관리자 세션 헤더값을 가린다")
+    void redactsAdminSessionHeader() {
+        assertThat(MonitoringLogEventMapper.sanitize("X-ADMIN-KEY: session-token"))
+                .isEqualTo("X-ADMIN-KEY:[REDACTED]");
+    }
+
+    @Test
+    @DisplayName("인증정보 뒤의 일반 로그 내용은 보존한다")
+    void preservesContextAfterRedactingCredentials() {
+        assertThat(MonitoringLogEventMapper.sanitize(
+                "headers={Authorization=Bearer abc.def, Accept=application/json} request failed"))
+                .isEqualTo("headers={Authorization=[REDACTED], Accept=application/json} request failed");
+        assertThat(MonitoringLogEventMapper.sanitize(
+                "Authorization: Bearer abc.def request failed"))
+                .isEqualTo("Authorization:[REDACTED] request failed");
+        assertThat(MonitoringLogEventMapper.sanitize("headers={Authorization=Bearer abc.def}"))
+                .isEqualTo("headers={Authorization=[REDACTED]}");
+        assertThat(MonitoringLogEventMapper.sanitize("headers={X-ADMIN-KEY=session-token}"))
+                .isEqualTo("headers={X-ADMIN-KEY=[REDACTED]}");
     }
 
     @Test

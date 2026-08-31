@@ -33,8 +33,12 @@ public final class MonitoringLogEventMapper {
      */
     private static final int MAX_SCAN_LENGTH = 2_048;
 
+    private static final Pattern SCHEME_AUTHORIZATION_VALUE = Pattern.compile(
+            "(?i)(authorization)\\s*([:=])\\s*(?:bearer|basic)\\s+[^,;\\s}\\]]+"
+    );
     private static final Pattern SECRET_VALUE = Pattern.compile(
-            "(?i)(password|passwd|pwd|token|secret|authorization|api[-_]?key|access[-_]?key)\\s*([:=])\\s*([^,;\\s]+)"
+            "(?i)(password|passwd|pwd|token|secret|authorization|api[-_]?key|access[-_]?key|"
+                    + "x[-_]?admin[-_]?key)\\s*([:=])\\s*((?!\\[REDACTED\\])[^,;\\s}\\]]+)"
     );
 
     /*
@@ -85,7 +89,9 @@ public final class MonitoringLogEventMapper {
             return "인프라 연결 정보는 보안상 생략되었습니다.";
         }
 
-        String sanitized = SECRET_VALUE.matcher(scanned).replaceAll("$1$2[REDACTED]");
+        // 스킴을 먼저 지우지 않으면 범용 패턴이 Bearer/Basic만 값으로 보고 실제 credential을 남긴다.
+        String sanitized = SCHEME_AUTHORIZATION_VALUE.matcher(scanned).replaceAll("$1$2[REDACTED]");
+        sanitized = SECRET_VALUE.matcher(sanitized).replaceAll("$1$2[REDACTED]");
         sanitized = CONTROL_WHITESPACE.matcher(sanitized).replaceAll(" ").trim();
 
         return sanitized.length() <= MAX_MESSAGE_LENGTH
