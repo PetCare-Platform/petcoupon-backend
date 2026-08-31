@@ -19,7 +19,7 @@
 | --- | --- | --- | --- |
 | 인프라 (MySQL · Redis · Kafka) | `petcoupon-performance-test` | m5.xlarge (4 vCPU / 16GB) | `172.31.40.51` |
 | 앱 (Spring Boot) | `petcoupon-k6-generator` | c5.xlarge (4 vCPU / 8GB) | `172.31.43.201` |
-| k6 (부하 발생기) | `petcoupon-k6` | r5.xlarge (4 vCPU / 32GB) | `172.31.47.74` |
+| k6 (부하 발생기) | `petcoupon-k6` | r5.2xlarge (8 vCPU / 64GB) | `172.31.47.74` |
 
 셋 다 기본 VPC · **같은 AZ(`ap-northeast-2c`)** 에 둔다. AZ 가 다르면 그만큼 네트워크 지연이
 붙어서 응답 시간에 섞인다(시나리오 §2).
