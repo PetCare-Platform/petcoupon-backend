@@ -14,25 +14,25 @@ class CouponRealtimeStockValidatorTest {
     private final CouponRealtimeStockValidator validator = new CouponRealtimeStockValidator();
 
     @Test
-    void validate_skipsValidation_whenStockIsNotInitialized() {
+    void validateSkipsValidationWhenStockIsNotInitialized() {
         CouponIssueRealtimeStock stock = stock(false, -1);
 
         assertThatCode(() -> validator.validate(stock, 100)).doesNotThrowAnyException();
     }
 
     @Test
-    void validate_acceptsBoundaryValues() {
+    void validateAcceptsBoundaryValues() {
         assertThatCode(() -> validator.validate(stock(true, 0), 100)).doesNotThrowAnyException();
         assertThatCode(() -> validator.validate(stock(true, 100), 100)).doesNotThrowAnyException();
     }
 
     @Test
-    void validate_throwsException_whenRemainingStockIsNegative() {
+    void validateThrowsExceptionWhenRemainingStockIsNegative() {
         assertInconsistentStock(stock(true, -1), 100);
     }
 
     @Test
-    void validate_throwsException_whenRemainingStockExceedsTotalQuantity() {
+    void validateThrowsExceptionWhenRemainingStockExceedsTotalQuantity() {
         assertInconsistentStock(stock(true, 101), 100);
     }
 
