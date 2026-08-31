@@ -33,6 +33,8 @@ public enum CouponErrorCode implements BaseErrorCode {
 			"쿠폰 조회 필터가 올바르지 않습니다. status는 READY, ACTIVE, SOLD_OUT, ENDED 중 하나여야 합니다."),
 	COUPON_NOT_OPEN_YET(HttpStatus.BAD_REQUEST, "COUPON400-13", "쿠폰 발급 기간이 아닙니다. (오픈 전)"),
 	COUPON_ISSUE_EXPIRED(HttpStatus.BAD_REQUEST, "COUPON400-14", "쿠폰 발급 기간이 종료되었습니다."),
+	// #222 — issueStartAt이 과거 시각이면 자동 오픈 스케줄러가 영영 못 잡아 READY로 영구 고아 상태가 된다.
+	ISSUE_START_AT_IN_PAST(HttpStatus.BAD_REQUEST, "COUPON400-15", "쿠폰 발급 시작 시각은 현재 시각 이후여야 합니다."),
 
     SOLD_OUT(HttpStatus.CONFLICT, "COUPON409-0", "쿠폰 재고가 모두 소진되었습니다."),
     DUPLICATE_USER(HttpStatus.CONFLICT, "COUPON409-1", "이미 발급받은 쿠폰입니다."),

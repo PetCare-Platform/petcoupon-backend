@@ -221,6 +221,13 @@ public class CouponServiceImpl implements CouponService {
 		if (issueStartAt.isBefore(event.getOpenAt()) || issueEndAt.isAfter(event.getCloseAt())) {
 			throw new GeneralException(CouponErrorCode.ISSUE_PERIOD_OUT_OF_EVENT_PERIOD);
 		}
+
+		// [#222] 과거 시각이면 자동 오픈 스케줄러가 activateCoupons 조건(issueStartAt<=now<issueEndAt)에
+		// 걸릴 기회 없이 READY로 영구 고아 상태가 될 수 있다. validateIssueNotStarted와 시간 소스를
+		// 맞추기 위해 findDatabaseNow()를 쓴다.
+		if (issueStartAt.isBefore(couponRepository.findDatabaseNow())) {
+			throw new GeneralException(CouponErrorCode.ISSUE_START_AT_IN_PAST);
+		}
 	}
 
 	private void validateDiscountPolicy(DiscountType discountType, int discountValue, Integer maxDiscountAmount) {

@@ -3,6 +3,7 @@ package com.mycom.petcoupon.coupon.service;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,6 +13,7 @@ import static org.mockito.Mockito.when;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
@@ -39,8 +41,11 @@ import com.mycom.petcoupon.global.common.exception.GeneralException;
 class CouponCreateServiceTest {
 
 	private static final Long EVENT_ID = 1L;
-	private static final LocalDateTime EVENT_OPEN_AT = LocalDateTime.of(2026, 8, 20, 9, 0);
-	private static final LocalDateTime EVENT_CLOSE_AT = LocalDateTime.of(2026, 8, 31, 23, 59);
+	// [#222] issueStartAt이 과거면 거부하는 검증이 생겨서, 고정 날짜 대신 NOW 기준 상대
+	// 시각을 쓴다(CouponUpdateServiceTest와 동일 패턴). NOW는 findDatabaseNow() 스텁 값이기도 하다.
+	private static final LocalDateTime NOW = LocalDateTime.now();
+	private static final LocalDateTime EVENT_OPEN_AT = NOW.plusDays(1);
+	private static final LocalDateTime EVENT_CLOSE_AT = NOW.plusDays(12);
 
 	@Mock
 	private EventRepository eventRepository;
@@ -59,6 +64,12 @@ class CouponCreateServiceTest {
 
 	@InjectMocks
 	private CouponServiceImpl couponService;
+
+	// 상태 검증에서 먼저 걸러지는 테스트는 여기까지 오지 않으므로 lenient로 둔다.
+	@BeforeEach
+	void stubDatabaseNow() {
+		lenient().when(couponRepository.findDatabaseNow()).thenReturn(NOW);
+	}
 
 	@Test
 	void createCouponSavesCouponAndStock() {
@@ -334,6 +345,33 @@ class CouponCreateServiceTest {
 		verifyNoInteractions(couponRepository, couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
+	// [#222] issueStartAt이 과거면 거부한다. 이벤트 기간 검증이 먼저 걸리지 않도록, 공용
+	// EVENT_OPEN_AT(미래)이 아니라 이미 시작된 이벤트를 별도로 써서 "기간 안이면서 과거"인
+	// issueStartAt을 만든다.
+	@Test
+	void createCouponThrowsIssueStartAtInPastWhenStartAtIsBeforeNow() {
+		Event alreadyOpenEvent = Event.builder()
+				.name("이미 시작된 이벤트")
+				.openAt(NOW.minusDays(5))
+				.closeAt(NOW.plusDays(5))
+				.build();
+		CouponCreateRequest request = rateRequest(
+				NOW.minusDays(1),
+				NOW.plusDays(1),
+				20,
+				10_000
+		);
+		when(eventRepository.findById(EVENT_ID)).thenReturn(Optional.of(alreadyOpenEvent));
+
+		GeneralException exception = assertThrows(
+				GeneralException.class,
+				() -> couponService.createCoupon(EVENT_ID, request)
+		);
+
+		assertSame(CouponErrorCode.ISSUE_START_AT_IN_PAST, exception.getErrorCode());
+		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
+	}
+
 	@Test
 	void createCouponAcceptsIssuePeriodEqualToEventPeriod() {
 		Event event = scheduledEvent();
@@ -362,7 +400,8 @@ class CouponCreateServiceTest {
 		);
 
 		assertSame(CouponErrorCode.INVALID_RATE_DISCOUNT_POLICY, exception.getErrorCode());
-		verifyNoInteractions(couponRepository, couponStockRepository, couponConverter, couponIssueLuaService);
+		// [#222] validateIssuePeriod가 findDatabaseNow()를 먼저 호출하므로 couponRepository는 제외
+		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
 	@Test
@@ -382,7 +421,7 @@ class CouponCreateServiceTest {
 		);
 
 		assertSame(CouponErrorCode.INVALID_RATE_DISCOUNT_POLICY, exception.getErrorCode());
-		verifyNoInteractions(couponRepository, couponStockRepository, couponConverter, couponIssueLuaService);
+		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
 	@Test
@@ -402,7 +441,7 @@ class CouponCreateServiceTest {
 		);
 
 		assertSame(CouponErrorCode.INVALID_RATE_DISCOUNT_POLICY, exception.getErrorCode());
-		verifyNoInteractions(couponRepository, couponStockRepository, couponConverter, couponIssueLuaService);
+		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
 	@Test
@@ -417,7 +456,7 @@ class CouponCreateServiceTest {
 		);
 
 		assertSame(CouponErrorCode.INVALID_FIXED_AMOUNT_DISCOUNT_POLICY, exception.getErrorCode());
-		verifyNoInteractions(couponRepository, couponStockRepository, couponConverter, couponIssueLuaService);
+		verifyNoInteractions(couponStockRepository, couponConverter, couponIssueLuaService);
 	}
 
 	@Test
