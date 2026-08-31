@@ -50,7 +50,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				Long.valueOf(values.get("userId"))
 			);
 
-			log.info(
+			log.debug(
 				"쿠폰 신청 메시지 수신. messageId={}, requestId={}, couponId={}, userId={}",
 				message.getId(),
 				issueMessage.requestId(),
@@ -64,7 +64,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				issueMessage.requestId()
 			);
 			
-			log.info(
+			log.debug(
 				    "[ISSUE] Lua 처리 결과 requestId={} status={} sequenceNo={}",
 				    issueMessage.requestId(),
 				    luaResult.status(),
@@ -73,7 +73,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 			
 			switch (luaResult.status()) {
 				case SUCCESS, SAME_REQUEST_RETRY -> {
-					log.info(
+					log.debug(
 						"[ISSUE] 선점 requestId={} sequenceNo={}", issueMessage.requestId(), luaResult.sequenceNo()
 				    );
 					
@@ -99,7 +99,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 				
 			}
 			
-			log.info("쿠폰 신청 메시지 처리 및 ACK 완료. messageId={}", message.getId());
+			log.debug("쿠폰 신청 메시지 처리 및 ACK 완료. messageId={}", message.getId());
 
 		} catch (Exception e) {
 			log.error(
@@ -143,7 +143,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 		);
 		
 		if (pendingMessages.isEmpty()) {
-			log.info("Redis Stream 메시지가 이미 ACK되었습니다. messageId={}", message.getId());
+			log.debug("Redis Stream 메시지가 이미 ACK되었습니다. messageId={}", message.getId());
 			return;
 		}
 
@@ -172,7 +172,7 @@ public class CouponIssueStreamConsumer implements StreamListener<String, MapReco
 					requestId, idempotencyRecordId, errorCode
 				);
 			},
-			() -> log.info(
+			() -> log.debug(
 				"[ISSUE] idempotency_key 확정 스킵(requestId가 issue: 형식이 아님). requestId={}, errorCode={}",
 				requestId, errorCode
 			)

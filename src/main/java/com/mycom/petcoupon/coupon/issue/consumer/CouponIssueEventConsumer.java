@@ -27,7 +27,7 @@ public class CouponIssueEventConsumer {
 		containerFactory = "couponIssueKafkaListenerContainerFactory"
 	)
 	public void consume(CouponIssueEvent event) {
-		log.info(
+		log.debug(
 			"[CouponIssueEvent] 수신: couponId={}, userId={}, requestId={}, sequenceNo={}",
 			event.couponId(), event.userId(), event.requestId(), event.sequenceNo()
 		);
@@ -44,7 +44,7 @@ public class CouponIssueEventConsumer {
 
 		try {
 			CouponIssue couponIssue = couponIssuePersister.persist(event);
-			log.info(
+			log.debug(
 				"[CouponIssueEvent] 저장완료 requestId={} sequenceNo={}",
 				event.requestId(), event.sequenceNo()
 			);

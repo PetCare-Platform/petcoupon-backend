@@ -88,7 +88,7 @@ public class CouponIssuePendingDlqHandler {
 			
 		// 원본 Consumer가 먼저 ACK한 경우 Lua에서 방금 생성한 DLQ 메시지를 삭제했으므로 정상적인 경쟁 결과로 처리한다.
 		if (ALREADY_ACKNOWLEDGED.equals(result)) {
-			log.info("원본 메시지가 이미 ACK되어 DLQ 기록을 남기지 않습니다. " + "originalMessageId={}", message.getId());
+			log.debug("원본 메시지가 이미 ACK되어 DLQ 기록을 남기지 않습니다. " + "originalMessageId={}", message.getId());
 			return;
 		}
 
