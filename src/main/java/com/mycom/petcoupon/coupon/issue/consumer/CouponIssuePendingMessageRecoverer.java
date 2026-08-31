@@ -115,7 +115,7 @@ public class CouponIssuePendingMessageRecoverer {
 				continue;
 			}
 			
-			log.info("Redis Stream Pending 메시지 회수. " + "messageId={}, consumer={}, " + "deliveryCount={}/{}",
+			log.debug("Redis Stream Pending 메시지 회수. " + "messageId={}, consumer={}, " + "deliveryCount={}/{}",
 				message.getId(),
 				recoveryConsumer,
 				deliveryCount,

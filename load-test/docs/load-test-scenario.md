@@ -330,10 +330,10 @@ curl -s -H "X-ADMIN-KEY: <토큰>" http://localhost:8080/admin/system/health
 | 회차 | 설정 | 용도 |
 | --- | --- | --- |
 | 성능 측정 | `ISSUE_LOG_LEVEL=WARN`, `LOG_FILE` 없음 | §8 성능 표에 기록 |
-| 시각화 | `ISSUE_LOG_LEVEL=INFO`, `LOG_FILE=logs/petcoupon.log` | **성능 수치로 쓰지 않는다** |
+| 시각화 | `ISSUE_LOG_LEVEL=DEBUG`, `LOG_FILE=logs/petcoupon.log` | **성능 수치로 쓰지 않는다** |
 
 ```bash
-ISSUE_LOG_LEVEL=INFO LOG_FILE=logs/petcoupon.log ... ./gradlew bootRun
+ISSUE_LOG_LEVEL=DEBUG LOG_FILE=logs/petcoupon.log ... ./gradlew bootRun
 ```
 
 ## 8. 결과 기록표

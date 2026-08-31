@@ -28,7 +28,7 @@ public class CouponIssueServiceImpl implements CouponIssueService {
     @Override
     public CouponIssueCreateResponse issue(Long couponId, CouponIssueCreateRequest request, String requestId) {
         // 선착순 순서 검증용: 도착 순서를 알 수 있는 유일한 지점이라 다른 검증보다 먼저 남긴다.
-        log.info("[ISSUE] 접수 requestId={} couponId={} userId={}", requestId, couponId, request.userId());
+        log.debug("[ISSUE] 접수 requestId={} couponId={} userId={}", requestId, couponId, request.userId());
 
         couponIssueStreamProducer.publish(couponId, request.userId(), requestId);
 

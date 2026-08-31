@@ -65,7 +65,7 @@ public class CouponIssueEventProducer {
 							throw new CompletionException(ex);
 						}
 						
-						log.info("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
+						log.debug("[CouponIssueEvent] 발행 성공: requestId={}", parsedEvent.requestId());
 						markSent(issueMessage);
 						return null;
 						
