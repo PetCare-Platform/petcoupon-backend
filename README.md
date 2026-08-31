@@ -98,7 +98,7 @@ PetCoupon은 이벤트에 연결된 한정 수량 쿠폰을 선착순으로 발�
 | 3 | 같은 요청이 재전송되더라도 한 번만 처리한다 | `Idempotency-Key` |
 | 4 | Kafka 메시지가 중복 전달되더라도 DB에는 한 번만 반영한다 | `request_id` Unique |
 | 5 | 일시적인 장애가 발생하더라도 발급 요청이 유실되지 않는다 | Outbox + Stream Pending Recovery |
-| 6 | 자동 복구가 불가능한 메시지는 수동 재처리할 수 있다 | Kafka DLQ · Stream DLQ + 관리자 API |
+| 6 | 자동 복구가 불가능한 메시지는 수동 재처리할 수 있다 | Kafka DLQ + 관리자 재처리 API · Redis Stream Pending Recovery와 DLQ 격리 |
 
 **정합성이 성능보다 우선입니다.** 초과 발급이 1건이라도 발생하면 성능 수치와 무관하게 실패로 판정합니다.
 
@@ -255,7 +255,7 @@ curl -s localhost:8080/actuator/health
 
 > ⚠️ **만든 직후에는 발급되지 않습니다.** 이벤트가 `SCHEDULED`로 생성되고 상태 스케줄러가 `OPEN`(쿠폰은 `ACTIVE`)으로 바꾼 뒤부터 유효하므로, 기본값 기준 **3분 뒤**에 시작합니다.
 
-쿠폰 생성 API가 `coupon` · `coupon_stock`과 함께 **발급에 쓰는 Redis 재고 키까지 한 트랜잭션에서 세웁니다.** 그래서 방금 만든 쿠폰은 따로 초기화하지 않아도 바로 발급할 수 있습니다.
+쿠폰 생성 API가 `coupon` · `coupon_stock`을 저장하면서 **발급에 쓰는 Redis 재고 키도 함께 초기화합니다.** 그래서 방금 만든 쿠폰은 따로 초기화하지 않아도 바로 발급할 수 있습니다. Redis 초기화가 실패하면 DB 트랜잭션이 롤백되므로 같은 요청을 다시 보내면 됩니다. 다만 Redis는 DB 트랜잭션에 참여하지 않으므로 둘이 하나의 원자적 트랜잭션으로 묶인 것은 아닙니다.
 
 관리자 API로 직접 만들려면 `POST /admin/events`로 이벤트를 만든 뒤 `POST /admin/events/{eventId}/coupons`를 호출하고, 응답의 `couponId`를 씁니다.
 
@@ -382,12 +382,19 @@ Entity ↔ DTO 변환은 `converter`가 전담합니다.
 쿠폰 발급 요청에는 `Idempotency-Key` 헤더가 필요합니다.
 
 발급 신청은 `202 WAITING`으로 접수되고, 최종 결과는 폴링 API로 확인합니다.
+폴링 API는 판정을 다시 하지 않습니다 — `idempotency_key`에 저장해 둔 응답을 **HTTP 상태까지 그대로 재현**합니다.
 
 ```text
-POST /coupons/1/issues          → 202 · status=WAITING
-GET  /users/1/coupon-issue-requests/status?idempotencyKey=...
-                                → 202 · WAITING   (확정 전)
-                                → 200 · ISSUED    (확정 후, sequenceNo·couponIssueId 포함)
+POST /coupons/<COUPON_ID>/issues
+    → 202 · status=WAITING
+
+GET  /users/<USER_ID>/coupon-issue-requests/status?idempotencyKey=...
+    → 저장된 최종 응답을 재현
+        확정 전     202 · WAITING    (접수 응답이 아직 그대로)
+        발급 성공   200              (sequenceNo · couponIssueId 포함)
+        발급 실패   409              (품절 · 중복 등)
+    → 200 · IN_PROGRESS              (접수 처리 중이거나, 응답을 남기지 못하고 끊긴 시도)
+    → 404 · COUPON404-2              (해당 키로 신청된 요청 없음)
 ```
 
 ### 관리자 API
@@ -426,12 +433,14 @@ GET  /users/1/coupon-issue-requests/status?idempotencyKey=...
 
 | Method | Endpoint                                        | 설명                       |
 | ------ | ----------------------------------------------- | ------------------------ |
-| `GET`  | `/admin/coupon-issue/dlq`                       | DLQ 메시지 목록 (`page`, `size`) |
-| `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | DLQ 메시지 재처리              |
-| `POST` | `/admin/coupon-issue/dlq/{messageId}/abandon`   | DLQ 메시지 폐기               |
+| `GET`  | `/admin/coupon-issue/dlq`                       | Kafka DLQ 메시지 목록 (`page`, `size`) |
+| `POST` | `/admin/coupon-issue/dlq/{messageId}/reprocess` | Kafka DLQ 메시지 재처리        |
+| `POST` | `/admin/coupon-issue/dlq/{messageId}/abandon`   | Kafka DLQ 메시지 폐기         |
 | `POST` | `/admin/coupons/{couponId}/reconcile`           | 쿠폰 정합성 검증 배치 실행          |
 | `GET`  | `/admin/coupons/{couponId}/reconciliation-reports` | 정합성 검증 이력 (`limit`, 1~100) |
 | `GET`  | `/admin/coupons/{couponId}/pipeline-drain-status` | 파이프라인 소진 상태 — 정합성 검증·초기화 사전 조건 확인 |
+
+`/admin/coupon-issue/dlq`가 다루는 것은 **`issue_message`의 `DLQ` 상태 행, 즉 Kafka 소비 실패분뿐입니다.** Redis Stream DLQ(`coupon:issue:stream:dlq`)에는 대응하는 관리자 API가 없습니다 — Stream 미처리 메시지는 Pending Recovery가 회수·재처리하고, 재시도가 소진된 건은 DLQ 키로 격리됩니다.
 
 `pipeline-drain-status`의 `streamUndelivered`는 건수가 아니라 **미배달 존재 여부**(`0` 또는 `1`)입니다. `XINFO GROUPS` 특성상 건수를 집계할 수 없기 때문입니다. `checkFailed`가 `true`면 잔여 0건이 아니라 **"확인 불가"**를 뜻합니다.
 
@@ -685,7 +694,7 @@ max_sequence_no 10,000 · redis_remaining 0 · stock_remaining 0
 
 ### 성능은 목표에 미달했다
 
-접수 응답 p95는 목표(500ms)와 실패 판정선(3초)을 넘겼습니다. **처리가 느린 것이 아니라 한 대에 동시 요청이 몰린 큐 대기**입니다. 20,000건을 1,030 TPS로 소화하면 19,000번째 요청은 산술적으로 18.4초를 기다립니다.
+접수 응답 p95는 목표(500ms)와 실패 판정선(3초)을 넘겼습니다. **개별 요청 처리가 느린 것이 아니라, 단일 인스턴스의 처리 용량을 넘긴 요청이 큐에서 기다린 시간**이 주요 원인이었습니다. 20,000건을 1,030 TPS로 소화하면 19,000번째 요청은 산술적으로 18.4초를 기다립니다.
 
 병목의 위치는 구간마다 다릅니다.
 
@@ -720,7 +729,14 @@ max_sequence_no 10,000 · redis_remaining 0 · stock_remaining 0
 ### 실행
 
 ```bash
-k6 run -e BASE_URL=http://<app>:8080 -e SCENARIO=burst -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 -e VUS=20000 -e ITERATIONS_PER_VU=1 -e MEMBER_IDS_FILE=./members.csv load-test/k6/issue-coupon.js
+k6 run -e BASE_URL=http://<app>:8080 \
+  -e SCENARIO=burst \
+  -e COUPON_ID=<COUPON_ID> \
+  -e TOTAL_QUANTITY=10000 \
+  -e VUS=20000 \
+  -e ITERATIONS_PER_VU=1 \
+  -e MEMBER_IDS_FILE=./members.csv \
+  load-test/k6/issue-coupon.js
 ```
 
 시나리오와 판정 기준은 [`load-test-scenario.md`](load-test/docs/load-test-scenario.md),
