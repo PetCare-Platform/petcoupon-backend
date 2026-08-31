@@ -344,7 +344,7 @@ logging.level.com.mycom.petcoupon.coupon=${ISSUE_LOG_LEVEL:INFO}
 
 | 상황 | 설정 | 결과 |
 | --- | --- | --- |
-| 통합 테스트 · 순서 검증 | 기본값 (`INFO`) | 단계별 로그 전부 기록 |
+| 통합 테스트 · 순서 검증 | `ISSUE_LOG_LEVEL=DEBUG` | 단계별 로그 전부 기록 |
 | 부하 테스트 | `ISSUE_LOG_LEVEL=WARN` | 정상 경로 로그 제외, **에러 로그는 유지** |
 
 대규모에서의 순서 검증은 로그가 아니라 SQL로 수행한다. `sequence_no`가 1~N 빠짐·중복 없이 부여됐는지만 확인하면 되기 때문이다.

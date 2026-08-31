@@ -84,7 +84,7 @@ public class AdminSessionServiceImpl implements AdminSessionService {
 		LocalDateTime expiresAt = issuedAt.plus(ttl);
 
 		// 토큰은 남기지 않는다. 로그에 찍히는 순간 그걸 본 사람이 관리자가 된다.
-		log.debug("관리자 세션을 발급했습니다. expiresAt={}", expiresAt);
+		log.info("관리자 세션을 발급했습니다. expiresAt={}", expiresAt);
 
 		return adminAuthConverter.toCreateResponse(token, expiresAt);
 	}
@@ -107,7 +107,7 @@ public class AdminSessionServiceImpl implements AdminSessionService {
 		Boolean deleted = redisTemplate.delete(toSessionKey(token));
 
 		// 유출된 토큰을 끊었는지 사후에 확인할 수 있어야 한다.
-		log.debug("관리자 세션 폐기 요청을 처리했습니다. 삭제됨={}", Boolean.TRUE.equals(deleted));
+		log.info("관리자 세션 폐기 요청을 처리했습니다. 삭제됨={}", Boolean.TRUE.equals(deleted));
 	}
 
 	// 설정이 비어 있으면 어떤 코드도 통과시키지 않는다. ADMIN_AUTH_CODE를 빠뜨린 채 뜬
