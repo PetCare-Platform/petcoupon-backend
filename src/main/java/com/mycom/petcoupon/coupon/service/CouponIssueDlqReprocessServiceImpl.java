@@ -58,9 +58,11 @@ public class CouponIssueDlqReprocessServiceImpl implements CouponIssueDlqReproce
 		IssueMessage issueMessage = issueMessageRepository.findById(messageId)
 				.orElseThrow(() -> new GeneralException(CouponErrorCode.DLQ_MESSAGE_NOT_FOUND));
 
-		// retryCount를 낙관적 락으로 써서 원자적으로 선점 — status는 DLQ 그대로 둬서
-		// Outbox 발행 poller(PENDING/FAILED만 봄) 대상이 되지 않게 함. 동시/중복 요청 중
-		// 하나만 retryCount 증가에 성공하고, 나머지는 0건이 되어 아래에서 걸러짐
+		// retryCount를 낙관적 락으로 써서 원자적으로 선점 — [#217] status도 DLQ에서
+		// REPROCESSING으로 같이 바뀐다. Outbox 발행 poller(PENDING/FAILED만 봄) 대상이 안
+		// 되는 건 여전하고, 추가로 markSent가 claim 없이 걸려온 호출을 걸러낼 수 있게 됨
+		// (IssueMessageRepository.markSent 주석 참고). 동시/중복 요청 중 하나만 retryCount
+		// 증가(및 REPROCESSING 전이)에 성공하고, 나머지는 0건이 되어 아래에서 걸러짐
 		int claimedRows = issueMessageRepository.claimForReprocess(
 				messageId, IssueMessageStatus.DLQ, issueMessage.getRetryCount()
 		);

@@ -101,11 +101,11 @@ public class CouponIssueEventProducer {
 	}
 
 	private void markFailed(IssueMessage issueMessage, Throwable ex) {
-		// claimForReprocess는 retryCount만 올리고 status는 DLQ로 그대로 둔 채 선점하므로,
-		// 이 메시지가 DLQ 수동 재처리 중이었다면 여기서도 issueMessage.getStatus()는 여전히 DLQ임.
+		// [#217] claimForReprocess가 이제 status를 DLQ -> REPROCESSING으로 전이시키며 선점하므로,
+		// 이 메시지가 DLQ 수동 재처리 중이었다면 여기서 issueMessage.getStatus()는 REPROCESSING임.
 		// retryCount 소진 여부와 무관하게 무조건 DLQ로 복귀시켜, 재처리 실패가 FAILED로 새서
 		// Outbox Poller의 자동 재시도 대상(PENDING/FAILED)에 다시 걸리는 걸 막음
-		boolean fromDlqReprocess = issueMessage.getStatus() == IssueMessageStatus.DLQ;
+		boolean fromDlqReprocess = issueMessage.getStatus() == IssueMessageStatus.REPROCESSING;
 		boolean retryExhausted = issueMessage.getRetryCount() + 1 >= maxRetryCount;
 		boolean shouldGoToDlq = fromDlqReprocess || retryExhausted;
 		IssueMessageStatus status = shouldGoToDlq ? IssueMessageStatus.DLQ : IssueMessageStatus.FAILED;

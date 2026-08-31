@@ -685,9 +685,9 @@ class IssueMessageRepositoryTest {
 		assertThat(found.getFailureReason()).isEqualTo(IssueFailureReason.CONSUME_PROCESSING_FAILED);
 	}
 
-	// DLQ 는 일부러 막지 않는다. claimForReprocess 가 status 를 DLQ 로 둔 채 재처리를 선점하므로,
-	// 관리자 재처리로 재발행에 성공한 건은 markSent 로 DLQ -> SENT 가 되어야 한다.
-	// 여기를 막으면 재발행에 성공해도 실패 목록에서 사라지지 않는다.
+	// [#217] claimForReprocess가 status를 DLQ -> REPROCESSING으로 전이시키며 선점하므로,
+	// 관리자 재처리로 재발행에 성공한 건은 markSent로 REPROCESSING -> SENT가 되어야 한다.
+	// REPROCESSING은 markSent의 NOT IN 목록에 없으므로 정상적으로 통과된다.
 	@Test
 	void markSent는_DLQ_재처리로_재발행에_성공하면_SENT로_올린다() {
 		IssueMessage message = IssueMessage.pending(coupon, 93L, 93L, "dlq-reprocess", "{}");
@@ -700,11 +700,14 @@ class IssueMessageRepositoryTest {
 		entityManager.flush();
 		entityManager.clear();
 
-		// 관리자 재처리 선점 — status 는 DLQ 로 유지된다
+		// [#217] 관리자 재처리 선점 — status 는 DLQ 에서 REPROCESSING 으로 바뀐다
 		int claimed = issueMessageRepository.claimForReprocess(message.getMessageId(), IssueMessageStatus.DLQ, 1);
 		assertThat(claimed).isEqualTo(1);
 		entityManager.flush();
 		entityManager.clear();
+
+		IssueMessage claimedMessage = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(claimedMessage.getStatus()).isEqualTo(IssueMessageStatus.REPROCESSING);
 
 		int updated = issueMessageRepository.markSent(
 				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
@@ -716,5 +719,40 @@ class IssueMessageRepositoryTest {
 		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.SENT);
 		assertThat(found.getLastError()).isNull();
 		assertThat(found.getFailureReason()).isNull();
+	}
+
+	// [#217 수정 완료] 예전엔 Outbox Poller(CouponIssueOutboxPublisher)가 메시지 행을 선점(claim)
+	// 하지 않고 바로 publish()를 호출해서, 한 번의 발행이 poller 주기보다 오래 걸리면 같은 메시지가
+	// 두 번 발행되고, 그중 하나가 실패해 DLQ로 전이된 직후 다른 하나의 지연된 성공 콜백이 markSent를
+	// 호출하면 "관리자가 손댄 적 없는" DLQ가 조용히 SENT로 되돌아가는 문제가 있었다(실제 DB 테스트로
+	// 재현 확인함, git 이력 참고).
+	//
+	// 지금은 claimForReprocess를 거쳐 REPROCESSING으로 전이된 건만 markSent가 DLQ 계열을 SENT로
+	// 올린다. claimForReprocess 없이 곧바로 걸려온 호출(예: 위에서 말한 poller의 지연된 두 번째
+	// 발행 시도)은 status가 여전히 DLQ라 markSent의 NOT IN 조건에 걸려 무시된다 — 이 테스트가 그걸
+	// 확인한다. 위 markSent는_DLQ_재처리로_재발행에_성공하면_SENT로_올린다()와 대비된다 — 그 테스트는
+	// claimForReprocess를 먼저 호출하지만, 이 테스트는 호출하지 않는다.
+	@Test
+	void markSent는_claimForReprocess_없이는_DLQ를_SENT로_바꾸지_못한다() {
+		IssueMessage message = IssueMessage.pending(coupon, 94L, 94L, "dlq-no-claim", "{}");
+		entityManager.persist(message);
+		entityManager.flush();
+
+		issueMessageRepository.markPublishFailed(
+				message.getMessageId(), IssueMessageStatus.DLQ, "발행 실패", IssueFailureReason.KAFKA_PUBLISH_FAILED
+		);
+		entityManager.flush();
+		entityManager.clear();
+
+		// claimForReprocess를 호출하지 않은 채로 바로 markSent를 부른다 —
+		// 관리자 재처리가 아니라 "poller의 지연된 두 번째 발행 시도"를 흉내낸다.
+		int updated = issueMessageRepository.markSent(
+				message.getMessageId(), IssueMessageStatus.SENT, LocalDateTime.now()
+		);
+
+		// [#217 수정 완료] claim 없이는 0건 갱신 — DLQ가 그대로 유지되어 관리자 목록에 남는다
+		assertThat(updated).isZero();
+		IssueMessage found = issueMessageRepository.findById(message.getMessageId()).orElseThrow();
+		assertThat(found.getStatus()).isEqualTo(IssueMessageStatus.DLQ);
 	}
 }

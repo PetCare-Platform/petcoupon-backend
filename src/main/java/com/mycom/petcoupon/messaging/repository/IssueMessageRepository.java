@@ -86,10 +86,14 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	// ABANDONED 도 같은 이유로 막는다. 재고까지 복구하고 포기한 종착 상태인데 SENT 로
 	// 되돌아가면 failureReason 과 stockRestoredAt 의 맥락이 사라진다.
 	//
-	// DLQ 는 일부러 막지 않는다 — claimForReprocess 가 status 를 DLQ 로 둔 채 재처리를
-	// 선점하므로(Outbox 폴러가 다시 집어가지 않게 하려는 의도), 관리자 재처리로 재발행에
-	// 성공한 건은 이 메서드를 통해 DLQ -> SENT 로 올라가야 한다. 막으면 재발행에 성공해도
-	// 상태가 DLQ 로 남아 실패 목록에서 사라지지 않는다.
+	// [#217] DLQ 도 이제 막는다 — 예전엔 "claimForReprocess 가 status 를 DLQ 로 둔 채
+	// 재처리를 선점하므로 여기서 막으면 안 된다"고 일부러 열어뒀는데, 그러면 claim 을
+	// 거치지 않은 호출(Outbox Poller 가 같은 메시지를 실수로 두 번 발행했을 때의 지연된
+	// 콜백 등)도 그대로 DLQ -> SENT 로 통과시켜버리는 구멍이 있었다(실제 DB 테스트로 재현
+	// 확인함). 지금은 claimForReprocess 가 DLQ -> REPROCESSING 으로 먼저 전이시키므로,
+	// 진짜 관리자 재처리로 발행에 성공한 건은 REPROCESSING 상태에서 이 메서드를 타고
+	// SENT 로 올라간다 — REPROCESSING 은 이 NOT IN 목록에 없으므로 그대로 통과된다.
+	// claim 없이 걸려온 호출은 status 가 여전히 DLQ 라 이 조건에 걸려 무시된다(반환값 0).
 	//
 	// IdempotencyKeyRepository 의 provisional 분기와 같은 패턴이다 — "아직 확정 아님"인 쓰기가
 	// 종착 상태를 덮어쓰지 못하게 조건으로 막는다.
@@ -106,7 +110,8 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 		WHERE im.messageId = :messageId
 		  AND im.status NOT IN (
 		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.CONSUMED,
-		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED
+		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.ABANDONED,
+		          com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.DLQ
 		      )
 	""")
 	int markSent(
@@ -164,14 +169,21 @@ public interface IssueMessageRepository extends JpaRepository<IssueMessage, Long
 	Page<IssueMessage> findByStatus(@Param("status") IssueMessageStatus status, Pageable pageable);
 
 	// 관리자가 동시에(또는 중복 클릭으로) 같은 메시지를 재처리 요청해도 한 번만 Kafka로 재발행되도록,
-	// retryCount를 낙관적 락처럼 사용해 선점함 — status는 DLQ로 그대로 둬서 Outbox 발행 poller
-	// (findByStatusInAndRetryCountLessThan이 PENDING/FAILED만 봄)가 이 행을 건드리지 않게 함.
-	// 영향받은 행이 0이면 DLQ가 아니거나, 그 사이 다른 요청이 먼저 선점한 것으로 판단
+	// retryCount를 낙관적 락처럼 사용해 선점함. 영향받은 행이 0이면 DLQ가 아니거나, 그 사이
+	// 다른 요청이 먼저 선점한 것으로 판단.
+	//
+	// [#217] status를 DLQ -> REPROCESSING으로 같이 바꾼다 — 예전엔 status를 DLQ로 그대로
+	// 둬서 Outbox 발행 poller(findByStatusInAndRetryCountLessThan이 PENDING/FAILED만 봄)가
+	// 이 행을 건드리지 않게 하는 목적만 있었는데, 그것만으로는 markSent가 claim 여부와
+	// 무관하게 DLQ->SENT를 전부 허용해버리는 문제가 있었다. REPROCESSING으로 전이시켜야
+	// markSent가 "진짜 이 claim을 통해 재처리된 건"만 SENT로 올릴 수 있다(markSent 주석 참고).
+	// poller가 REPROCESSING 상태도 안 건드리는 건 여전히 유효하다 — PENDING/FAILED만 보므로.
 	@Transactional
 	@Modifying(clearAutomatically = true)
 	@Query("""
 			UPDATE IssueMessage im
-			   SET im.retryCount = im.retryCount + 1
+			   SET im.retryCount = im.retryCount + 1,
+			       im.status = com.mycom.petcoupon.messaging.entity.enums.IssueMessageStatus.REPROCESSING
 			 WHERE im.messageId = :messageId AND im.status = :expectedStatus AND im.retryCount = :expectedRetryCount
 			""")
 	int claimForReprocess(

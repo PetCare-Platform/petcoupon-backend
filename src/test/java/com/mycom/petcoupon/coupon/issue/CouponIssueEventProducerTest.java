@@ -137,13 +137,13 @@ class CouponIssueEventProducerTest {
 
 	@Test
 	void DLQ_수동_재처리가_실패하면_재시도_횟수와_무관하게_DLQ로_복귀한다() {
-		// claimForReprocess는 retryCount만 올리고 status는 DLQ 그대로 두고 선점하므로,
-		// 재처리 대상 issueMessage는 getStatus()가 여전히 DLQ임 — 이때는 아직 재시도가
+		// [#217] claimForReprocess가 status를 DLQ -> REPROCESSING으로 전이시키고 선점하므로,
+		// 재처리 대상 issueMessage는 getStatus()가 REPROCESSING임 — 이때는 아직 재시도가
 		// 소진되지 않은 낮은 retryCount라도 FAILED로 새면 안 되고 DLQ로 복귀해야
 		// Outbox Poller(PENDING/FAILED만 조회)의 자동 재시도 대상에 다시 걸리지 않는다
 		when(issueMessage.getMessageId()).thenReturn(1L);
 		when(issueMessage.getPayload()).thenReturn("{}");
-		when(issueMessage.getStatus()).thenReturn(IssueMessageStatus.DLQ);
+		when(issueMessage.getStatus()).thenReturn(IssueMessageStatus.REPROCESSING);
 		when(issueMessage.getRetryCount()).thenReturn(0);
 		when(jsonMapper.readValue("{}", CouponIssueEvent.class)).thenReturn(EVENT);
 
