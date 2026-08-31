@@ -134,14 +134,19 @@ curl -s http://localhost:8080/actuator/metrics/hikaricp.connections.pending
 ### 3단계 실행 예
 
 ```bash
+APP_HOST="앱 사설 IP"                      # 예: 10.0.1.5
+COUPON_ID="setup-demo-coupon.sh 가 출력한 쿠폰 ID"
+
 k6 run \
-  -e BASE_URL=http://<앱 사설 IP>:8080 \
+  -e BASE_URL="http://$APP_HOST:8080" \
   -e SCENARIO=burst \
-  -e COUPON_ID=1 -e TOTAL_QUANTITY=10000 \
+  -e COUPON_ID="$COUPON_ID" -e TOTAL_QUANTITY=10000 \
   -e VUS=20000 -e ITERATIONS_PER_VU=1 \
   -e MAX_DURATION=5m \
   load-test/k6/issue-coupon.js
 ```
+
+> `<앱 사설 IP>` 처럼 꺾쇠를 명령에 그대로 두면 셸이 리다이렉션으로 해석해 실행되지 않는다. 값은 변수에 담아 넘긴다. `COUPON_ID` 는 `config.js` 에 기본값이 없어 미지정 시 에러로 멈춘다.
 
 `MAX_DURATION` 의 스크립트 기본값은 `10m` 이지만 **`5m` 으로 줄여서 준다.** §5.2 의 실패 판정이 "전체 실행 시간 5분 초과"라, 기본값으로 두면 6분에 끝난 회차를 k6 가 통과로 처리하고 사람이 따로 대조해야 한다. 5분으로 주면 k6 가 그 자리에서 강제 종료해 실패로 남긴다.
 

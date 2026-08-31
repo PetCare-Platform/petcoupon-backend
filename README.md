@@ -244,7 +244,7 @@ curl -s localhost:8080/actuator/health
 ./load-test/scripts/setup-demo-coupon.sh
 ```
 
-관리자 API로 이벤트 4개와 쿠폰 4개를 만들고, 마지막에 대상 `COUPON_ID`를 출력합니다. **이후 명령에는 출력된 ID를 쓰고, `1`을 그대로 쓰지 않습니다.**
+관리자 API로 이벤트 4개와 쿠폰 4개를 만들고, 마지막에 대상 `COUPON_ID`를 출력합니다. **이후 명령에는 출력된 ID를 씁니다.**
 
 | 환경변수 | 기본값 | 설명 |
 | --- | --- | --- |
@@ -747,7 +747,7 @@ k6 run -e BASE_URL="http://$APP_HOST:8080" \
   load-test/k6/issue-coupon.js
 ```
 
-> `<app>` · `<COUPON_ID>` 처럼 꺾쇠를 명령에 그대로 두면 셸이 리다이렉션으로 해석해 k6가 실행되지 않습니다. 값을 변수에 담아 넘깁니다. `COUPON_ID`를 비워 두면 `config.js` 기본값 `1`로 붙어 새 환경에서는 `/internal/coupons/1/reset`이 `404`로 끝납니다.
+> `<app>` · `<COUPON_ID>` 처럼 꺾쇠를 명령에 그대로 두면 셸이 리다이렉션으로 해석해 k6가 실행되지 않습니다. 값을 변수에 담아 넘깁니다. `COUPON_ID`는 `config.js`에 기본값이 없어 비워 두면 바로 에러로 멈춥니다.
 
 시나리오와 판정 기준은 [`load-test-scenario.md`](load-test/docs/load-test-scenario.md),
 실측값 전문은 [`load-test-result.md`](load-test/docs/load-test-result.md),
