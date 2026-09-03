@@ -107,6 +107,7 @@ class CouponIssueApiIntegrationTest {
 	}
 
 	private void setUpData() {
+		LocalDateTime now = LocalDateTime.now();
 		admin = AppUser.builder()
 				.name("관리자")
 				.email("issue-api-admin@test.com")
@@ -116,24 +117,24 @@ class CouponIssueApiIntegrationTest {
 		entityManager.persist(admin);
 
 		event = Event.builder()
-				.createdBy(admin)
-				.name("발급 API 통합 테스트 이벤트")
-				.description("coupon issue api integration test")
-				.openAt(LocalDateTime.of(2026, 8, 1, 9, 0))
-				.closeAt(LocalDateTime.of(2026, 8, 31, 23, 59))
-				.build();
+        .createdBy(admin)
+        .name("발급 API 통합 테스트 이벤트")
+        .description("coupon issue api integration test")
+        .openAt(now.minusDays(1))
+        .closeAt(now.plusDays(7))
+        .build();
 		entityManager.persist(event);
 
 		coupon = Coupon.builder()
-				.event(event)
-				.name("발급 API 통합 테스트 쿠폰")
-				.discountType(DiscountType.FIXED_AMOUNT)
-				.discountValue(1_000)
-				.minOrderAmount(5_000)
-				.issueStartAt(LocalDateTime.of(2026, 8, 1, 9, 0))
-				.issueEndAt(LocalDateTime.of(2026, 8, 31, 23, 59))
-				.validDays(7)
-				.build();
+        .event(event)
+        .name("발급 API 통합 테스트 쿠폰")
+        .discountType(DiscountType.FIXED_AMOUNT)
+        .discountValue(1_000)
+        .minOrderAmount(5_000)
+        .issueStartAt(now.minusDays(1))
+        .issueEndAt(now.plusDays(7))
+        .validDays(7)
+        .build();
 		entityManager.persist(coupon);
 
 		CouponStock stock = CouponStock.builder()
@@ -151,8 +152,8 @@ class CouponIssueApiIntegrationTest {
 				.discountType(DiscountType.FIXED_AMOUNT)
 				.discountValue(1_000)
 				.minOrderAmount(5_000)
-				.issueStartAt(LocalDateTime.of(2026, 8, 1, 9, 0))
-				.issueEndAt(LocalDateTime.of(2026, 8, 31, 23, 59))
+				.issueStartAt(now.minusDays(1))
+				.issueEndAt(now.plusDays(7))
 				.validDays(7)
 				.build();
 		entityManager.persist(secondCoupon);
