@@ -1,6 +1,10 @@
 name: CI/CD to EC2
 
 on:
+  push:
+    branches:
+      - feat/cicd-deploy
+
   workflow_dispatch:
 
 permissions:
