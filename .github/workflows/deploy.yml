@@ -124,16 +124,23 @@ jobs:
 
             echo "Waiting for application..."
 
+            SUCCESS=false
+
             for i in {1..12}; do
               if curl -fsS http://localhost:8080/actuator/health; then
                 echo
                 echo "Deployment successful"
-                exit 0
+                SUCCESS=true
+                break
               fi
 
               echo "Retry $i/12"
               sleep 5
             done
+
+            if [ "$SUCCESS" = "true" ]; then
+              exit 0
+            fi
 
             sudo -n systemctl status petcoupon --no-pager || true
             exit 1
