@@ -1,0 +1,141 @@
+name: CI/CD to EC2
+
+on:
+  push:
+    branches:
+      - feat/cicd-deploy
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'liberica'
+          cache: gradle
+
+      - name: Grant Gradle permission
+        run: chmod +x ./gradlew
+      
+      - name: Start test infrastructure
+        run: |
+          docker compose --profile kafka up -d
+
+      - name: Wait for infrastructure
+        run: |
+          echo "Waiting for MySQL..."
+          until docker exec petcoupon-mysql mysqladmin ping -h localhost -proot --silent; do
+            sleep 2
+          done
+
+          echo "Waiting for Redis..."
+          until docker exec petcoupon-redis redis-cli ping | grep PONG; do
+            sleep 2
+          done
+
+          echo "Waiting for Kafka..."
+          until docker exec petcoupon-kafka \
+            /opt/kafka/bin/kafka-broker-api-versions.sh \
+            --bootstrap-server localhost:9092 > /dev/null 2>&1; do
+            sleep 2
+          done
+
+          echo "All infrastructure is ready."
+
+      - name: Build and Test
+        run: ./gradlew clean build --no-daemon
+
+      - name: Prepare JAR
+        run: |
+          JAR_PATH="$(find build/libs \
+            -maxdepth 1 \
+            -type f \
+            -name '*.jar' \
+            ! -name '*-plain.jar' \
+            | head -n 1)"
+
+          if [ -z "$JAR_PATH" ]; then
+            echo "JAR not found"
+            exit 1
+          fi
+
+          cp "$JAR_PATH" petcoupon.jar
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: petcoupon-jar
+          path: petcoupon.jar
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: petcoupon-jar
+
+      - name: Save SSH key
+        run: |
+          printf '%s\n' "${{ secrets.EC2_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Test SSH
+        run: |
+          ssh \
+            -o StrictHostKeyChecking=no \
+            -i key.pem \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "echo 'SSH OK'"
+
+      - name: Upload JAR
+        run: |
+          scp \
+            -o StrictHostKeyChecking=no \
+            -i key.pem \
+            petcoupon.jar \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/app/petcoupon.jar.tmp"
+
+      - name: Restart application
+        run: |
+          ssh \
+            -T \
+            -o StrictHostKeyChecking=no \
+            -i key.pem \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            'bash -s' << 'EOF'
+
+            set -e
+
+            mv /opt/app/petcoupon.jar.tmp /opt/app/petcoupon.jar
+            sudo -n systemctl restart petcoupon
+
+            echo "Waiting for application..."
+
+            for i in $(seq 1 12); do
+              if curl -fsS http://localhost:8080/actuator/health; then
+                echo
+                echo "Deployment successful"
+                exit 0
+              fi
+
+              echo "Retry $i/12"
+              sleep 5
+            done
+
+            sudo -n systemctl status petcoupon --no-pager || true
+            exit 1
+          EOF
