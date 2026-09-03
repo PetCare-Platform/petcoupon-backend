@@ -27,6 +27,31 @@ jobs:
 
       - name: Grant Gradle permission
         run: chmod +x ./gradlew
+      
+      - name: Start test infrastructure
+        run: |
+          docker compose --profile kafka up -d
+
+      - name: Wait for infrastructure
+        run: |
+          echo "Waiting for MySQL..."
+          until docker exec petcoupon-mysql mysqladmin ping -h localhost -proot --silent; do
+            sleep 2
+          done
+
+          echo "Waiting for Redis..."
+          until docker exec petcoupon-redis redis-cli ping | grep PONG; do
+            sleep 2
+          done
+
+          echo "Waiting for Kafka..."
+          until docker exec petcoupon-kafka \
+            /opt/kafka/bin/kafka-broker-api-versions.sh \
+            --bootstrap-server localhost:9092 > /dev/null 2>&1; do
+            sleep 2
+          done
+
+          echo "All infrastructure is ready."
 
       - name: Build and Test
         run: ./gradlew clean build --no-daemon
