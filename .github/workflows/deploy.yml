@@ -112,35 +112,29 @@ jobs:
       - name: Restart application
         run: |
           ssh \
+            -T \
             -o StrictHostKeyChecking=no \
             -i key.pem \
-            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" << 'EOF'
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            'bash -s' << 'EOF'
 
             set -e
 
             mv /opt/app/petcoupon.jar.tmp /opt/app/petcoupon.jar
-
             sudo -n systemctl restart petcoupon
 
             echo "Waiting for application..."
 
-            SUCCESS=false
-
-            for i in {1..12}; do
+            for i in $(seq 1 12); do
               if curl -fsS http://localhost:8080/actuator/health; then
                 echo
                 echo "Deployment successful"
-                SUCCESS=true
-                break
+                exit 0
               fi
 
               echo "Retry $i/12"
               sleep 5
             done
-
-            if [ "$SUCCESS" = "true" ]; then
-              exit 0
-            fi
 
             sudo -n systemctl status petcoupon --no-pager || true
             exit 1
